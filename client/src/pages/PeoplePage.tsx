@@ -150,13 +150,10 @@ export function familyAuthorityPermissions(
 }
 
 type AuthorityPersonCardProps = Omit<React.ComponentProps<typeof PersonCard>, 'planningCenterSyncIndicator'> & {
-  authorityProvider: AuthorityProvider;
   key?: React.Key;
 };
 
-function AuthorityPersonCard({ person, authorityProvider, needsWideLayout, ...props }: AuthorityPersonCardProps) {
-  const locked = isAuthorityLocked((person as Person).externalLinks, authorityProvider);
-  const managedLabel = locked ? authorityLabel(authorityProvider) : null;
+function AuthorityPersonCard({ person, needsWideLayout, ...props }: AuthorityPersonCardProps) {
   return (
     <div className={`relative ${needsWideLayout ? 'col-span-2' : ''}`}>
       <PersonCard
@@ -165,11 +162,6 @@ function AuthorityPersonCard({ person, authorityProvider, needsWideLayout, ...pr
         needsWideLayout={false}
         planningCenterSyncIndicator={false}
       />
-      {managedLabel && (
-        <span className="absolute right-2 top-2 inline-flex rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800 dark:bg-green-900/40 dark:text-green-300">
-          {managedLabel}
-        </span>
-      )}
     </div>
   );
 }
@@ -1656,7 +1648,7 @@ const PeoplePage: React.FC = () => {
             {authorityProvider !== 'none' && (
               <div>
                 <label htmlFor="externalSourceFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  External source
+                  {authorityLabel(authorityProvider)} Link Status
                 </label>
                 <select
                   id="externalSourceFilter"
@@ -1768,9 +1760,6 @@ const PeoplePage: React.FC = () => {
                             return group.familyName;
                           })()}
                         </h4>
-                        {familyIsAuthorityLocked(group.familyId) && (
-                          <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
-                        )}
                        {(() => {
                          const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
                          const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
@@ -1893,8 +1882,6 @@ const PeoplePage: React.FC = () => {
 
                                                        variant="grouped"
 
-                                                       authorityProvider={authorityProvider}
-
                                                        showBackgroundCheckStatus={showBackgroundCheckStatus}
 
                                                      />
@@ -1938,8 +1925,6 @@ const PeoplePage: React.FC = () => {
                                            getBadgeInfo={getBadgeInfo}
 
                                            variant="individual"
-
-                                           authorityProvider={authorityProvider}
 
                                            showBackgroundCheckStatus={showBackgroundCheckStatus}
 
@@ -1985,9 +1970,6 @@ const PeoplePage: React.FC = () => {
                                     return group.familyName;
                                   })()}
                                 </h4>
-                                {familyIsAuthorityLocked(group.familyId) && (
-                                  <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
-                                )}
                                 {(() => {
                                   const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
                                   const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
@@ -2085,8 +2067,6 @@ const PeoplePage: React.FC = () => {
 
                                   variant="grouped"
 
-                                  authorityProvider={authorityProvider}
-
                                   showBackgroundCheckStatus={showBackgroundCheckStatus}
 
                                 />
@@ -2126,11 +2106,6 @@ const PeoplePage: React.FC = () => {
                                 />
                                 <div className="flex items-center space-x-2">
                                   <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
-                                  {isAuthorityLocked(person.externalLinks, authorityProvider) && (
-                                    <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
-                                      {authorityLabel(authorityProvider)}
-                                    </span>
-                                  )}
                                   {showBackgroundCheckStatus && !person.isChild && (
                                     <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
                                   )}
@@ -2190,9 +2165,6 @@ const PeoplePage: React.FC = () => {
                                       return group.familyName;
                                     })()}
                                   </h4>
-                                  {familyIsAuthorityLocked(group.familyId) && (
-                                    <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
-                                  )}
                                   <button
                                     onClick={() => handleOpenNotes(group)}
                                     className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -2272,8 +2244,6 @@ const PeoplePage: React.FC = () => {
 
                                     variant="grouped"
 
-                                    authorityProvider={authorityProvider}
-
                                     showBackgroundCheckStatus={showBackgroundCheckStatus}
 
                                   />
@@ -2313,11 +2283,6 @@ const PeoplePage: React.FC = () => {
                                   />
                                   <div className="flex items-center space-x-2">
                                     <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
-                                    {isAuthorityLocked(person.externalLinks, authorityProvider) && (
-                                      <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
-                                        {authorityLabel(authorityProvider)}
-                                      </span>
-                                    )}
                                     {showBackgroundCheckStatus && !person.isChild && (
                                       <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
                                     )}
@@ -2380,7 +2345,6 @@ const PeoplePage: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                         {displayName}
-                        {locked && <span className="ml-2 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] text-green-800">{authorityLabel(authorityProvider)}</span>}
                       </div>
                       <div className="text-xs text-gray-500">
                         {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}

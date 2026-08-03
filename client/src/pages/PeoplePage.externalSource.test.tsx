@@ -104,6 +104,19 @@ afterEach(() => {
 });
 
 describe('PeoplePage external source filter', () => {
+  it.each([
+    ['planning_center', { planning_center: 'pco-1' }, 'PCO'],
+    ['elvanto', { elvanto: 'elv-1' }, 'ELV'],
+  ] as const)('does not show a %s badge on managed person tiles', async (authorityProvider, externalLinks, label) => {
+    renderPeoplePage({
+      authorityProvider,
+      people: [person(1, { externalLinks })],
+    });
+
+    expect(await screen.findByText('Person 1')).toBeInTheDocument();
+    expect(screen.queryByText(label)).not.toBeInTheDocument();
+  });
+
   it('matches a link only for the active provider', async () => {
     const peoplePageModule = await import('./PeoplePage') as Record<string, unknown>;
     const matchesExternalSourceFilter = peoplePageModule.matchesExternalSourceFilter as
@@ -138,7 +151,7 @@ describe('PeoplePage external source filter', () => {
       ],
     });
 
-    await user.selectOptions(await screen.findByLabelText('External source'), 'linked');
+    await user.selectOptions(await screen.findByLabelText('Planning Center Link Status'), 'linked');
 
     expect(screen.getByText('Person 1')).toBeInTheDocument();
     expect(screen.queryByText('Person 2')).not.toBeInTheDocument();
@@ -154,7 +167,7 @@ describe('PeoplePage external source filter', () => {
       ],
     });
 
-    await user.selectOptions(await screen.findByLabelText('External source'), 'unlinked');
+    await user.selectOptions(await screen.findByLabelText('Planning Center Link Status'), 'unlinked');
 
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
     expect(screen.getByText('Person 2')).toBeInTheDocument();
@@ -170,7 +183,7 @@ describe('PeoplePage external source filter', () => {
       ],
     });
 
-    expect(await screen.findByLabelText('External source')).toHaveValue('unlinked');
+    expect(await screen.findByLabelText('Planning Center Link Status')).toHaveValue('unlinked');
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
     expect(screen.getByText('Person 2')).toBeInTheDocument();
   });
@@ -185,7 +198,7 @@ describe('PeoplePage external source filter', () => {
       ],
     });
 
-    await user.selectOptions(await screen.findByLabelText('External source'), 'linked');
+    await user.selectOptions(await screen.findByLabelText('Elvanto Link Status'), 'linked');
 
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
     expect(screen.getByText('Person 2')).toBeInTheDocument();
@@ -202,7 +215,7 @@ describe('PeoplePage external source filter', () => {
 
     await screen.findByText('Person 1');
 
-    expect(screen.queryByLabelText('External source')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Link Status/)).not.toBeInTheDocument();
     expect(screen.getByText('Person 2')).toBeInTheDocument();
   });
 
@@ -221,7 +234,7 @@ describe('PeoplePage external source filter', () => {
       ],
     });
 
-    await user.selectOptions(await screen.findByLabelText('External source'), 'linked');
+    await user.selectOptions(await screen.findByLabelText('Planning Center Link Status'), 'linked');
 
     expect(screen.getByText('Alpha Household')).toBeInTheDocument();
     expect(screen.getByText('Person 1')).toBeInTheDocument();
@@ -240,7 +253,7 @@ describe('PeoplePage external source filter', () => {
       ],
     });
 
-    await user.selectOptions(await screen.findByLabelText('External source'), 'unlinked');
+    await user.selectOptions(await screen.findByLabelText('Planning Center Link Status'), 'unlinked');
     await user.click(screen.getByLabelText('Group people by families'));
 
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
@@ -261,7 +274,7 @@ describe('PeoplePage external source filter', () => {
     await user.click(await screen.findByText('Person 1'));
     expect(screen.getByText('1 selected')).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText('External source'), 'unlinked');
+    await user.selectOptions(screen.getByLabelText('Planning Center Link Status'), 'unlinked');
 
     await waitFor(() => expect(screen.queryByText('1 selected')).not.toBeInTheDocument());
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
