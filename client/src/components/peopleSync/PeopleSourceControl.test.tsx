@@ -641,8 +641,7 @@ describe('PeopleSourceControl', () => {
         id: 'archive:missing:8',
         externalPersonId: 'missing-person',
         individualId: 8,
-        reason: 'confirmed_missing_full_sync',
-        missingFullSyncCount: 2,
+        reason: 'provider_state_archived',
       }],
     };
     const planningCenterReview: PeopleSyncReview = {

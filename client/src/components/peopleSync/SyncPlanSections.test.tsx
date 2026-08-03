@@ -116,29 +116,47 @@ describe('SyncPlanSections', () => {
     expect(screen.queryByText('Skipped or unchanged')).not.toBeInTheDocument();
   });
 
+  it('shows local-only people in lifecycle review without archive controls', () => {
+    const review = reviewFixture();
+    review.coverage = {
+      unlinkedActiveLocalRegulars: 2,
+    } as PeopleSyncReview['coverage'];
+
+    render(<SectionsHarness review={review} />);
+
+    expect(screen.getByText('Lifecycle review').closest('details')).toHaveAttribute('open');
+    expect(screen.getByText('Local-only people')).toBeInTheDocument();
+    expect(screen.getByText(/2 active LMPG regular people are not linked/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review Not linked people' })).toHaveAttribute(
+      'href',
+      '/app/people?externalSource=unlinked',
+    );
+    expect(screen.queryByRole('button', { name: 'Accept all proposed archives' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Archive/ })).not.toBeInTheDocument();
+  });
+
   it('renders terminal archive proposals in lifecycle review and accepts all without selecting a local-only person', async () => {
     const user = userEvent.setup();
     const review = reviewFixture({
       archive: [
         {
           id: 'archive:8', externalPersonId: 'ext-archived', individualId: 8,
-          reason: 'provider_state_archived', missingFullSyncCount: null,
+          reason: 'provider_state_archived',
         },
         {
           id: 'archive:9', externalPersonId: 'ext-deceased', individualId: 9,
-          reason: 'provider_state_deceased', missingFullSyncCount: null,
+          reason: 'provider_state_deceased',
         },
       ],
-      unmatchedLocalRegulars: [{
-        id: 'unmatchedLocalRegular:7', individualId: 7,
-        reason: 'no_authority_link', reviewRequired: true,
-      }],
       renameFamily: [{ id: 'renameFamily:20', familyId: 20, familyName: 'Renamed household', reason: 'provider_household_changed' }],
       removeFromGathering: [{
         id: 'remove:8', batchId: 1, gatheringTypeId: 2, individualId: 8,
         reason: 'no_longer_eligible',
       }],
     });
+    review.coverage = {
+      unlinkedActiveLocalRegulars: 1,
+    } as PeopleSyncReview['coverage'];
 
     render(<SectionsHarness review={review} />);
 
@@ -171,6 +189,22 @@ describe('SyncPlanSections', () => {
 
     expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Accept all proposed archives' })).not.toBeInTheDocument();
+  });
+
+  it('does not surface legacy absence archive actions as lifecycle proposals', () => {
+    const review = reviewFixture({
+      archive: [{
+        id: 'archive:legacy:8',
+        externalPersonId: 'legacy-missing',
+        individualId: 8,
+        reason: 'confirmed_missing_full_sync',
+      }],
+    });
+
+    render(<SectionsHarness review={review} />);
+
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Archive Local Archive' })).not.toBeInTheDocument();
   });
 
   it('derives downstream disclosures from the current identity decisions', async () => {

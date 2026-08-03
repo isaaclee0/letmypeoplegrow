@@ -3,12 +3,17 @@ import type { SyncSelectionState } from './syncSelections';
 import type { ArchiveAction, IdentityDecision, PeopleSyncReview } from './types';
 
 const ARCHIVE_REASON_COPY: Record<string, string> = {
-  confirmed_missing_full_sync: 'Missing from two complete provider syncs',
   provider_state_archived: 'Archived in the provider',
   provider_state_deceased: 'Marked deceased in the provider',
-  contact_excluded: 'No longer included because provider contacts are excluded',
-  no_longer_eligible: 'No longer eligible for the configured source',
 };
+
+function isTerminalArchive(action: ArchiveAction): boolean {
+  return action.reason === 'provider_state_archived' || action.reason === 'provider_state_deceased';
+}
+
+function providerLabel(provider: PeopleSyncReview['plan']['provider']): string {
+  return provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
+}
 
 function archiveReasonLabel(reason: string): string {
   if (ARCHIVE_REASON_COPY[reason]) return ARCHIVE_REASON_COPY[reason];
@@ -73,7 +78,7 @@ export function deriveSyncPlanView(review: PeopleSyncReview, state: SyncSelectio
     renameFamily: plan.renameFamily,
     addToGathering: isV2 ? plan.addToGathering.filter(gatheringAdditionStillSelected) : plan.addToGathering,
     removeFromGathering: isV2 ? plan.removeFromGathering.filter(suggestionStillAccepted) : plan.removeFromGathering,
-    archive: isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive,
+    archive: (isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive).filter(isTerminalArchive),
     reactivate: isV2 ? plan.reactivate.filter(suggestionStillAccepted) : plan.reactivate,
     skipped: plan.skipped,
     unmatchedLocalRegulars: plan.unmatchedLocalRegulars,
@@ -133,6 +138,8 @@ export default function SyncPlanSections({
 }: SyncPlanSectionsProps) {
   const view = deriveSyncPlanView(review, state);
   const directory = review.plan.people || { external: {}, local: {} };
+  const terminalArchiveActions = archiveActions.filter(isTerminalArchive);
+  const localOnlyCount = review.coverage?.unlinkedActiveLocalRegulars ?? 0;
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
 
@@ -157,6 +164,7 @@ export default function SyncPlanSections({
     + view.moveFamily.length
     + view.renameFamily.length;
   const gatheringCount = view.addToGathering.length + view.removeFromGathering.length;
+  const lifecycleCount = terminalArchiveActions.length + localOnlyCount;
   const skippedCount = view.skipped.length
     + view.unmatchedLocalRegulars.length
     + view.deferredExternalIds.length;
@@ -210,36 +218,56 @@ export default function SyncPlanSections({
 
       <CompactSection
         title="Lifecycle review"
-        count={archiveActions.length}
+        count={lifecycleCount}
         open
-        tone="amber"
+        tone={terminalArchiveActions.length > 0 ? 'amber' : 'neutral'}
       >
-        <button
-          type="button"
-          onClick={onAcceptAllArchives}
-          className="mb-3 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 dark:border-amber-600 dark:bg-gray-800 dark:text-amber-100 dark:hover:bg-amber-950/50"
-        >
-          Accept all proposed archives
-        </button>
-        <DenseChangeList>
-          {archiveActions.map((action) => (
-            <li key={action.id}>
-              <label className="flex items-start gap-2">
-                <input
-                  type="checkbox"
-                  aria-label={`Archive ${localPerson(action.individualId)}`}
-                  checked={state.acceptedArchiveIds.has(action.individualId)}
-                  onChange={() => toggleArchive(action.individualId)}
-                  className="mt-0.5"
-                />
-                <span>
-                  <span className="block font-medium">Archive {localPerson(action.individualId)}</span>
-                  <span className="text-xs text-amber-800 dark:text-amber-200">{archiveReasonLabel(action.reason)}</span>
-                </span>
-              </label>
-            </li>
-          ))}
-        </DenseChangeList>
+        {terminalArchiveActions.length > 0 && (
+          <div>
+            <h4 className="mb-2 text-sm font-semibold text-gray-950 dark:text-white">Proposed archives</h4>
+            <button
+              type="button"
+              onClick={onAcceptAllArchives}
+              className="mb-3 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 dark:border-amber-600 dark:bg-gray-800 dark:text-amber-100 dark:hover:bg-amber-950/50"
+            >
+              Accept all proposed archives
+            </button>
+            <DenseChangeList>
+              {terminalArchiveActions.map((action) => (
+                <li key={action.id}>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      aria-label={`Archive ${localPerson(action.individualId)}`}
+                      checked={state.acceptedArchiveIds.has(action.individualId)}
+                      onChange={() => toggleArchive(action.individualId)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block font-medium">Archive {localPerson(action.individualId)}</span>
+                      <span className="text-xs text-amber-800 dark:text-amber-200">{archiveReasonLabel(action.reason)}</span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </DenseChangeList>
+          </div>
+        )}
+
+        {localOnlyCount > 0 && (
+          <div className={terminalArchiveActions.length > 0 ? 'mt-4 border-t border-gray-200 pt-4 dark:border-gray-700' : ''}>
+            <h4 className="text-sm font-semibold text-gray-950 dark:text-white">Local-only people</h4>
+            <p className="mt-1 text-sm text-gray-700 dark:text-gray-200">
+              {localOnlyCount} active LMPG regular {localOnlyCount === 1 ? 'person is' : 'people are'} not linked to {providerLabel(review.plan.provider)}. They are retained in LMPG until you decide otherwise.
+            </p>
+            <a
+              href="/app/people?externalSource=unlinked"
+              className="mt-2 inline-flex text-sm font-semibold text-primary-700 hover:underline dark:text-primary-300"
+            >
+              Review Not linked people
+            </a>
+          </div>
+        )}
       </CompactSection>
 
       <CompactSection title="Reactivations" count={view.reactivate.length}>

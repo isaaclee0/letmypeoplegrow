@@ -70,9 +70,11 @@ function person(id: number, overrides: Partial<TestPerson> = {}): TestPerson {
 function renderPeoplePage({
   authorityProvider,
   people,
+  initialEntry = '/app/people',
 }: {
   authorityProvider: AuthorityProvider;
   people: TestPerson[];
+  initialEntry?: string;
 }) {
   vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people } } as never);
   vi.spyOn(individualsAPI, 'getArchived').mockResolvedValue({ data: { people: [] } } as never);
@@ -89,7 +91,7 @@ function renderPeoplePage({
   vi.spyOn(settingsAPI, 'getBadgeDefaults').mockResolvedValue({ data: { settings: {} } } as never);
 
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <ToastContainer>
         <PeoplePage />
       </ToastContainer>
@@ -154,6 +156,21 @@ describe('PeoplePage external source filter', () => {
 
     await user.selectOptions(await screen.findByLabelText('External source'), 'unlinked');
 
+    expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
+    expect(screen.getByText('Person 2')).toBeInTheDocument();
+  });
+
+  it('opens the Not linked view from the lifecycle review query link', async () => {
+    renderPeoplePage({
+      authorityProvider: 'planning_center',
+      initialEntry: '/app/people?externalSource=unlinked',
+      people: [
+        person(1, { externalLinks: { planning_center: 'pco-1' } }),
+        person(2),
+      ],
+    });
+
+    expect(await screen.findByLabelText('External source')).toHaveValue('unlinked');
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
     expect(screen.getByText('Person 2')).toBeInTheDocument();
   });

@@ -385,6 +385,13 @@ const PeoplePage: React.FC = () => {
     });
   }, [authorityProvider, externalSourceFilter, people]);
 
+  useEffect(() => {
+    const requestedFilter = searchParams.get('externalSource');
+    setExternalSourceFilter(
+      requestedFilter === 'linked' || requestedFilter === 'unlinked' ? requestedFilter : 'all',
+    );
+  }, [searchParams]);
+
   // Handle URL parameters for navigation from AttendancePage
   useEffect(() => {
     const familyIdParam = searchParams.get('familyId');

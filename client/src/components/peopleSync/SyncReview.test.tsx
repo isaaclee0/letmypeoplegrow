@@ -206,7 +206,7 @@ function legacyReview(): PeopleSyncReview {
     },
     archive: [{
       id: 'archive:11', externalPersonId: 'ext-legacy', individualId: 11,
-      reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+      reason: 'provider_state_archived',
     }],
     ambiguousPeople: [{
       id: 'ambiguous:legacy', externalPersonId: 'ext-legacy',
@@ -256,7 +256,7 @@ describe('SyncReview compact V2 workflow', () => {
       planOverrides: {
         archive: [{
           id: 'archive:8', externalPersonId: 'missing', individualId: 8,
-          reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+          reason: 'provider_state_archived',
         }],
         renameFamily: [{ id: 'renameFamily:20', familyId: 20, familyName: 'Renamed family' }],
       },
@@ -448,12 +448,14 @@ describe('SyncReview compact V2 workflow', () => {
     expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeDisabled();
   });
 
-  it('shows source coverage only when positive', () => {
-    const review = { ...v2Review({ attention: false }), coverage: { unmatchedActiveLocalRegulars: 208 } };
-    const { rerender } = render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
-    expect(screen.getByText(/208 active LMPG regulars/)).toBeInTheDocument();
-    rerender(<SyncReview provider="planning_center" review={{ ...review, runId: 7, reviewToken: 'fresh', coverage: { unmatchedActiveLocalRegulars: 0 } }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+  it('does not treat matcher source coverage as local-only lifecycle state', () => {
+    const review = {
+      ...v2Review({ attention: false }),
+      coverage: { unmatchedActiveLocalRegulars: 208 },
+    } as unknown as PeopleSyncReview;
+    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
     expect(screen.queryByText(/208 active LMPG regulars/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
   });
 
   it('keeps archive acceptance and the destructive acknowledgement immediately before apply', async () => {
@@ -463,7 +465,7 @@ describe('SyncReview compact V2 workflow', () => {
       planOverrides: {
         archive: [{
           id: 'archive:8', externalPersonId: 'missing', individualId: 8,
-          reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+          reason: 'provider_state_archived',
         }],
       },
     });
@@ -472,7 +474,7 @@ describe('SyncReview compact V2 workflow', () => {
 
     const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
     expect(apply).toBeDisabled();
-    expect(screen.getByText('Missing from two complete provider syncs')).toBeInTheDocument();
+    expect(screen.getByText('Archived in the provider')).toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' }));
     await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
     await user.click(screen.getByRole('button', { name: 'Apply 2 selected changes' }));
@@ -487,19 +489,18 @@ describe('SyncReview compact V2 workflow', () => {
         archive: [
           {
             id: 'archive:8', externalPersonId: 'ext-archived', individualId: 8,
-            reason: 'provider_state_archived', missingFullSyncCount: null,
+            reason: 'provider_state_archived',
           },
           {
             id: 'archive:9', externalPersonId: 'ext-deceased', individualId: 9,
-            reason: 'provider_state_deceased', missingFullSyncCount: null,
+            reason: 'provider_state_deceased',
           },
         ],
-        unmatchedLocalRegulars: [{
-          id: 'unmatchedLocalRegular:30', individualId: 30,
-          reason: 'no_authority_link', reviewRequired: true,
-        }],
       },
     });
+    review.coverage = {
+      unlinkedActiveLocalRegulars: 1,
+    } as PeopleSyncReview['coverage'];
     const onApply = vi.fn().mockResolvedValue(undefined);
     render(<SyncReview
       provider="planning_center"

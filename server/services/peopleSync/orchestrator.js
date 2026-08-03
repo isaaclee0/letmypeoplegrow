@@ -57,7 +57,7 @@ const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRet
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
 const UNATTENDED_TRIGGERS = new Set(['scheduled']);
-const HELD_REVIEW_BUCKETS = ['ambiguousPeople', 'familyConflicts', 'renameFamily', 'unmatchedLocalRegulars'];
+const HELD_REVIEW_BUCKETS = ['archive', 'ambiguousPeople', 'familyConflicts', 'renameFamily', 'unmatchedLocalRegulars'];
 const REVIEW_TOKEN_TTL_SECONDS = 30 * 60;
 const RAW_FIELD_DENYLIST = new Set(['attributes', 'customFields', 'custom_fields', 'raw', 'rawPayload', 'demographics']);
 
@@ -279,6 +279,7 @@ function mergeAppliedCounts(applyResult, plan) {
 
 function heldCountsFromPlan(plan) {
   return {
+    archive: plan.archive.length,
     ambiguousPeople: plan.ambiguousPeople.length,
     familyConflicts: plan.familyConflicts.length,
     renameFamily: plan.renameFamily.length,
@@ -318,23 +319,26 @@ function sanitizePlanForReview(plan, externalPeople = [], localPeople = [], exte
   return sanitized;
 }
 
-function reviewCoverage(matcherResult, localPeople) {
-  const unmatchedIds = new Set((matcherResult?.unmatchedLocalIds || [])
-    .map((value) => Number(value))
-    .filter((value) => Number.isSafeInteger(value) && value > 0));
-
-  const localById = new Map((localPeople || [])
-    .map((person) => [Number(person?.id), person])
-    .filter(([id]) => Number.isSafeInteger(id) && id > 0));
-  let unmatchedActiveLocalRegulars = 0;
-  for (const individualId of unmatchedIds) {
-    const person = localById.get(individualId);
-    if (person?.isActive !== false && person?.isActive !== 0 && person?.peopleType === 'regular') {
-      unmatchedActiveLocalRegulars += 1;
-    }
+function unlinkedActiveLocalRegularCount({ provider, authoritative, individuals, personLinks }) {
+  if (authoritative !== true) return 0;
+  const linkedIndividualIds = new Set((personLinks || []).map((link) => Number(link.individualId)));
+  let count = 0;
+  for (const person of individuals || []) {
+    const individualId = Number(person?.id);
+    if (!Number.isSafeInteger(individualId) || individualId <= 0) continue;
+    if (person?.isActive === false || person?.isActive === 0 || person?.peopleType !== 'regular') continue;
+    const hasPlanningCenterCompatibilityLink = provider === 'planning_center'
+      && typeof person?.planningCenterId === 'string'
+      && person.planningCenterId.trim().length > 0;
+    if (!linkedIndividualIds.has(individualId) && !hasPlanningCenterCompatibilityLink) count += 1;
   }
+  return count;
+}
 
-  return { unmatchedActiveLocalRegulars };
+function reviewCoverage(body) {
+  return {
+    unlinkedActiveLocalRegulars: unlinkedActiveLocalRegularCount(body),
+  };
 }
 
 function safeErrorCode(error) {
@@ -952,7 +956,7 @@ async function buildReview({
       reviewToken,
       decisionContractVersion: DECISION_CONTRACT_VERSION,
       summary: summarizePlan(body.plan),
-      coverage: reviewCoverage(body.matcherResult, body.individuals),
+      coverage: reviewCoverage(body),
       plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
     };
@@ -1026,7 +1030,7 @@ async function previewLinkCorrections({
     reviewToken,
     decisionContractVersion: DECISION_CONTRACT_VERSION,
     summary: summarizePlan(corrected.plan),
-    coverage: reviewCoverage(corrected.matcherResult, corrected.individuals),
+    coverage: reviewCoverage(corrected),
     plan: sanitizePlanForReview(
       corrected.plan, corrected.externalPeople, corrected.individuals,
       corrected.snapshot.families, corrected.families
@@ -1119,7 +1123,7 @@ async function previewAuthoritySwitch({
       reviewToken,
       decisionContractVersion: DECISION_CONTRACT_VERSION,
       summary: summarizePlan(body.plan),
-      coverage: reviewCoverage(body.matcherResult, body.individuals),
+      coverage: reviewCoverage(body),
       plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
       authority: authorityState,
@@ -1312,14 +1316,13 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 // ─── runUnattended ───────────────────────────────────────────────────────────
 //
 // Permitted only when `provider` is the church's current active authority.
-// Applies deterministic links, additions, managed updates, explicit
-// upstream archive/reactivate and provenance-safe gathering changes, by
-// calling applyPeopleSyncPlan with
-// NO selections. ambiguousPeople/familyConflicts/renameFamily/
-// unmatchedLocalRegulars are never mutated by apply.js regardless of
+// Applies deterministic links, additions, managed updates, reactivations,
+// and provenance-safe gathering changes by calling applyPeopleSyncPlan with
+// NO selections. Archive proposals, ambiguousPeople/familyConflicts/
+// renameFamily/unmatchedLocalRegulars are never mutated by apply.js regardless of
 // selections, so "stripping" them is a matter of how this run's outcome is
 // CLASSIFIED and reported, not of altering what apply.js does: whenever any
-// of those four buckets is non-empty, the run is marked review_required
+// of those five buckets is non-empty, the run is marked review_required
 // (with its pending counts) instead of applied, and notifyReviewRequired is
 // called so admins learn about it later (a scheduled run has nobody
 // watching in real time — unlike buildReview/applyReviewed, which are
@@ -1383,8 +1386,8 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
       provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
     );
 
-    // 8. apply safe unattended actions (no selections — ambiguous/conflict/
-    // rename/unmatched-local buckets are never mutated by apply.js off an
+    // 8. apply safe unattended actions (no selections — archive/ambiguous/
+    // conflict/rename/unmatched-local buckets are never mutated by apply.js off an
     // empty selection set regardless).
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections: {}, userId: null,
@@ -1407,7 +1410,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
 
   if (status === 'review_required') {
     try {
-      // Held-bucket counts only (see HELD_REVIEW_BUCKETS) — note all four
+      // Held-bucket counts only (see HELD_REVIEW_BUCKETS) — note all five
       // are currently church-wide/batch-invariant in practice (matching/
       // unmatched-local review does not vary per batch today), which is
       // what makes per-provider (not per-batch) notification dedup safe;

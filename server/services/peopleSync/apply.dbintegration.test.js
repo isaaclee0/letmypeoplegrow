@@ -888,6 +888,7 @@ test('type alignment and archive/reactivate transitions apply as instructed', as
         archive: [{ id: 'a', externalPersonId: 'e3', individualId: toArchive, reason: 'provider_state_archived' }],
         reactivate: [{ id: 'r', externalPersonId: 'e4', individualId: toReactivate }],
       }),
+      selections: { acceptArchiveIndividualIds: [toArchive] },
     });
 
     assert.equal(result.promoteToRegular, 1);

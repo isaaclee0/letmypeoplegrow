@@ -169,6 +169,34 @@ test('Archived and Deceased linked people propose archive with explicit reasons'
   ]);
 });
 
+test('a terminal linked person keeps its sync-owned gathering assignment for lifecycle review', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [person({ id: 'archived-1', state: 'archived' })],
+    localPeople: [local({ id: 7 })],
+    batches: [batch({
+      id: 10,
+      gatheringTypeId: 100,
+      gatheringAutoRemoveEnabled: true,
+      eligibleExternalPersonIds: ['archived-1'],
+    })],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'archived-1', individualId: 7, reason: 'existing_link' }],
+    }),
+    gatheringMemberships: [
+      { gatheringTypeId: 100, individualId: 7, addedBySyncBatchId: 10 },
+    ],
+  }));
+
+  assert.deepEqual(plan.archive, [{
+    id: 'archive:archived-1:7',
+    externalPersonId: 'archived-1',
+    individualId: 7,
+    reason: 'provider_state_archived',
+  }]);
+  assert.deepEqual(plan.addToGathering, []);
+  assert.deepEqual(plan.removeFromGathering, []);
+});
+
 test('a linked eligible person reappearing active proposes reactivation', () => {
   const plan = computePeopleSyncPlan(input({ localPeople: [local({ isActive: false })] }));
 

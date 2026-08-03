@@ -471,7 +471,6 @@ export default function SyncReview({
       },
     }
     : effectiveReview;
-  const unmatchedCoverageCount = effectiveReview.coverage?.unmatchedActiveLocalRegulars ?? 0;
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
 
@@ -690,12 +689,6 @@ export default function SyncReview({
           <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-200">
             No roster changes are planned in this review.
           </p>
-        )}
-
-        {unmatchedCoverageCount > 0 && (
-          <div className="rounded-lg border border-gray-200 bg-stone-50 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
-            {unmatchedCoverageCount} active LMPG regulars are not matched to any currently configured {providerLabel(provider)} source. They will remain unchanged. Add another sync batch if they should be included.
-          </div>
         )}
 
         {malformedV2 && (

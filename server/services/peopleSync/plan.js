@@ -323,6 +323,7 @@ function membershipBatchId(row) {
 function addGatheringActions(context) {
   const { plan, batches, eligibleByBatch, populationIds, identities, protectedIndividualIds, input } = context;
   const completeFullSnapshot = input.snapshot?.mode === 'full' && input.snapshot?.complete === true;
+  const lifecycleArchiveIndividualIds = new Set(plan.archive.map((action) => action.individualId));
   const actionableIdentities = identities.filter((item) => !item.reviewRequired);
   const individualByExternal = new Map(actionableIdentities.map((item) => [item.externalPersonId, item.individualId]));
   for (const addition of plan.addPeople) individualByExternal.set(addition.externalPersonId, null);
@@ -366,6 +367,7 @@ function addGatheringActions(context) {
     const gatheringTypeId = row.gatheringTypeId;
     const individualId = row.individualId;
     if (!ownerBatch || ownerBatch.gatheringAutoRemoveEnabled !== true || ownerBatch.gatheringTypeId !== gatheringTypeId) continue;
+    if (lifecycleArchiveIndividualIds.has(individualId)) continue;
     if (protectedIndividualIds.has(individualId)) continue;
     const externalPersonId = externalByIndividual.get(individualId);
     if (!completeFullSnapshot && !externalPersonId) continue;

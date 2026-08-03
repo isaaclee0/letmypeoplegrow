@@ -358,16 +358,32 @@ test('manual review and apply archives durable links for explicit Archived and D
   });
 });
 
-test('unattended sync archives durable links for explicit Archived and Deceased records', async () => {
+test('scheduled sync holds explicit Archived and Deceased proposals for review without lifecycle side effects', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await setAuthority(churchId);
     const selected = source('members', 'Members');
-    const batch = await reviewedBatch(churchId, selected);
+    const gathering = await Database.query(
+      'INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Sunday']
+    );
+    const gatheringTypeId = Number(gathering.insertId);
+    const batch = await reviewedBatch(churchId, selected, {
+      gatheringTypeId,
+      gatheringAutoRemoveEnabled: true,
+    });
     const archivedId = await seedIndividual(churchId, { firstName: 'Grace', lastName: 'Hopper' });
     const deceasedId = await seedIndividual(churchId, { firstName: 'Ada', lastName: 'Lovelace' });
     await linkPerson(churchId, 'archived-person', archivedId, 1);
     await linkPerson(churchId, 'deceased-person', deceasedId, 1);
+    await Database.query(
+      `INSERT INTO gathering_lists
+        (church_id, gathering_type_id, individual_id, added_by_sync_batch_id)
+       VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+      [
+        churchId, gatheringTypeId, archivedId, batch.id,
+        churchId, gatheringTypeId, deceasedId, batch.id,
+      ]
+    );
     scenarios = new Map([['members', snapshot(selected, {
       people: [
         person('archived-person', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' }),
@@ -378,15 +394,21 @@ test('unattended sync archives durable links for explicit Archived and Deceased 
 
     const result = await orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
 
-    assert.equal(result.status, 'applied');
-    assert.equal(result.counts.archive, 2);
+    assert.equal(result.status, 'review_required');
+    assert.equal(result.counts.archive, 0);
     const rows = await Database.query(
       'SELECT id, is_active FROM individuals WHERE church_id = ? ORDER BY id', [churchId]
     );
     assert.deepEqual(rows.map((row) => ({ id: Number(row.id), isActive: Number(row.is_active) })), [
-      { id: archivedId, isActive: 0 },
-      { id: deceasedId, isActive: 0 },
+      { id: archivedId, isActive: 1 },
+      { id: deceasedId, isActive: 1 },
     ]);
+    const [membership] = await Database.query(
+      `SELECT COUNT(*) AS count FROM gathering_lists
+        WHERE church_id = ? AND gathering_type_id = ? AND added_by_sync_batch_id = ?`,
+      [churchId, gatheringTypeId, batch.id]
+    );
+    assert.equal(Number(membership.count), 2);
   });
 });
 
