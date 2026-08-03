@@ -504,6 +504,13 @@ export default function SyncReview({
   const incompleteExternalIds = incompleteIdentityExternalIds(state, reviewContext);
   const affectedExternalId = incompleteExternalIds[0] || collisions[0]?.[1][0];
   const planView = deriveSyncPlanView(effectiveReview, state);
+  const acceptAllArchives = () => setState((current) => ({
+    ...current,
+    acceptedArchiveIds: new Set([
+      ...current.acceptedArchiveIds,
+      ...planView.archive.map((action) => action.individualId),
+    ]),
+  }));
   const signedCorrections = validV2Context ? correctionsForReview(effectiveReview) : {};
   const correctionsReady = recordsMatch(state.linkCorrections, signedCorrections);
   const requiresConfirmation = planView.archive.length > 0
@@ -747,7 +754,13 @@ export default function SyncReview({
           </>
         )}
 
-        <SyncPlanSections review={effectiveReview} state={state} onStateChange={setState} />
+        <SyncPlanSections
+          review={effectiveReview}
+          state={state}
+          archiveActions={planView.archive}
+          onStateChange={setState}
+          onAcceptAllArchives={acceptAllArchives}
+        />
 
         {requiresConfirmation && (
           <label className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">

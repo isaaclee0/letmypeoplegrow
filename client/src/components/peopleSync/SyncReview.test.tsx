@@ -478,6 +478,68 @@ describe('SyncReview compact V2 workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Apply 2 selected changes' }));
     expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({ acceptArchiveIndividualIds: [8] }));
   });
+
+  it('accepts every terminal-state archive proposal without selecting an unrelated local-only person', async () => {
+    const user = userEvent.setup();
+    const review = v2Review({
+      attention: false,
+      planOverrides: {
+        archive: [
+          {
+            id: 'archive:8', externalPersonId: 'ext-archived', individualId: 8,
+            reason: 'provider_state_archived', missingFullSyncCount: null,
+          },
+          {
+            id: 'archive:9', externalPersonId: 'ext-deceased', individualId: 9,
+            reason: 'provider_state_deceased', missingFullSyncCount: null,
+          },
+        ],
+        unmatchedLocalRegulars: [{
+          id: 'unmatchedLocalRegular:30', individualId: 30,
+          reason: 'no_authority_link', reviewRequired: true,
+        }],
+      },
+    });
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview
+      provider="planning_center"
+      review={review}
+      onRefresh={vi.fn()}
+      onApply={onApply}
+      applying={false}
+      requireAllPlannedArchivesAccepted
+    />);
+
+    expect(screen.getByText('Lifecycle review')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Accept all proposed archives' }));
+    expect(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Archive Jordan Lee' })).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'Archive Replacement Local' })).not.toBeInTheDocument();
+
+    const apply = screen.getByRole('button', { name: 'Apply 3 selected changes' });
+    expect(apply).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+
+    expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({
+      acceptArchiveIndividualIds: [8, 9],
+    }));
+    expect(screen.getAllByRole('button', { name: /Apply .*selected changes|Apply sync/ })).toHaveLength(1);
+  });
+
+  it('omits lifecycle review when the plan has no archive proposals', () => {
+    render(<SyncReview
+      provider="planning_center"
+      review={v2Review({ attention: false })}
+      onRefresh={vi.fn()}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept all proposed archives' })).not.toBeInTheDocument();
+  });
 });
 
 describe('SyncReview correction previews and dirty state', () => {

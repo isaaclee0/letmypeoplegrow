@@ -1,6 +1,6 @@
 import React from 'react';
 import type { SyncSelectionState } from './syncSelections';
-import type { IdentityDecision, PeopleSyncReview } from './types';
+import type { ArchiveAction, IdentityDecision, PeopleSyncReview } from './types';
 
 const ARCHIVE_REASON_COPY: Record<string, string> = {
   confirmed_missing_full_sync: 'Missing from two complete provider syncs',
@@ -119,10 +119,18 @@ function DenseChangeList({ children }: { children: React.ReactNode }) {
 export interface SyncPlanSectionsProps {
   review: PeopleSyncReview;
   state: SyncSelectionState;
+  archiveActions: ArchiveAction[];
   onStateChange: (state: SyncSelectionState) => void;
+  onAcceptAllArchives: () => void;
 }
 
-export default function SyncPlanSections({ review, state, onStateChange }: SyncPlanSectionsProps) {
+export default function SyncPlanSections({
+  review,
+  state,
+  archiveActions,
+  onStateChange,
+  onAcceptAllArchives,
+}: SyncPlanSectionsProps) {
   const view = deriveSyncPlanView(review, state);
   const directory = review.plan.people || { external: {}, local: {} };
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
@@ -149,7 +157,6 @@ export default function SyncPlanSections({ review, state, onStateChange }: SyncP
     + view.moveFamily.length
     + view.renameFamily.length;
   const gatheringCount = view.addToGathering.length + view.removeFromGathering.length;
-  const lifecycleCount = view.archive.length + view.reactivate.length;
   const skippedCount = view.skipped.length
     + view.unmatchedLocalRegulars.length
     + view.deferredExternalIds.length;
@@ -202,13 +209,20 @@ export default function SyncPlanSections({ review, state, onStateChange }: SyncP
       </CompactSection>
 
       <CompactSection
-        title="Archives and reactivations"
-        count={lifecycleCount}
-        open={view.archive.length > 0}
-        tone={view.archive.length > 0 ? 'amber' : 'neutral'}
+        title="Lifecycle review"
+        count={archiveActions.length}
+        open
+        tone="amber"
       >
+        <button
+          type="button"
+          onClick={onAcceptAllArchives}
+          className="mb-3 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500 dark:border-amber-600 dark:bg-gray-800 dark:text-amber-100 dark:hover:bg-amber-950/50"
+        >
+          Accept all proposed archives
+        </button>
         <DenseChangeList>
-          {view.archive.map((action) => (
+          {archiveActions.map((action) => (
             <li key={action.id}>
               <label className="flex items-start gap-2">
                 <input
@@ -225,6 +239,11 @@ export default function SyncPlanSections({ review, state, onStateChange }: SyncP
               </label>
             </li>
           ))}
+        </DenseChangeList>
+      </CompactSection>
+
+      <CompactSection title="Reactivations" count={view.reactivate.length}>
+        <DenseChangeList>
           {view.reactivate.map((action) => <li key={action.id}>Reactivate {localPerson(action.individualId)}</li>)}
         </DenseChangeList>
       </CompactSection>

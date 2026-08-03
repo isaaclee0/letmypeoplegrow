@@ -78,7 +78,22 @@ function reviewFixture(overrides: Partial<PeopleSyncPlan> = {}): PeopleSyncRevie
 
 function SectionsHarness({ review, initialState }: { review: PeopleSyncReview; initialState?: SyncSelectionState }) {
   const [state, setState] = useState(initialState || initializeSyncSelectionState(review));
-  return <SyncPlanSections review={review} state={state} onStateChange={setState} />;
+  const archiveActions = review.plan.archive;
+  return (
+    <SyncPlanSections
+      review={review}
+      state={state}
+      archiveActions={archiveActions}
+      onStateChange={setState}
+      onAcceptAllArchives={() => setState((current) => ({
+        ...current,
+        acceptedArchiveIds: new Set([
+          ...current.acceptedArchiveIds,
+          ...archiveActions.map((action) => action.individualId),
+        ]),
+      }))}
+    />
+  );
 }
 
 describe('SyncPlanSections', () => {
@@ -97,18 +112,27 @@ describe('SyncPlanSections', () => {
     expect(managed).not.toHaveAttribute('open');
     expect(screen.queryByText('Family changes')).not.toBeInTheDocument();
     expect(screen.queryByText('Gathering changes')).not.toBeInTheDocument();
-    expect(screen.queryByText('Archives and reactivations')).not.toBeInTheDocument();
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
     expect(screen.queryByText('Skipped or unchanged')).not.toBeInTheDocument();
   });
 
-  it('opens destructive sections and preserves archive and family-rename selections', async () => {
+  it('renders terminal archive proposals in lifecycle review and accepts all without selecting a local-only person', async () => {
     const user = userEvent.setup();
     const review = reviewFixture({
-      archive: [{
-        id: 'archive:8', externalPersonId: 'missing', individualId: 8,
-        reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+      archive: [
+        {
+          id: 'archive:8', externalPersonId: 'ext-archived', individualId: 8,
+          reason: 'provider_state_archived', missingFullSyncCount: null,
+        },
+        {
+          id: 'archive:9', externalPersonId: 'ext-deceased', individualId: 9,
+          reason: 'provider_state_deceased', missingFullSyncCount: null,
+        },
+      ],
+      unmatchedLocalRegulars: [{
+        id: 'unmatchedLocalRegular:7', individualId: 7,
+        reason: 'no_authority_link', reviewRequired: true,
       }],
-      reactivate: [{ id: 'reactivate:9', externalPersonId: 'restored', individualId: 9, reason: 'provider_state_active' }],
       renameFamily: [{ id: 'renameFamily:20', familyId: 20, familyName: 'Renamed household', reason: 'provider_household_changed' }],
       removeFromGathering: [{
         id: 'remove:8', batchId: 1, gatheringTypeId: 2, individualId: 8,
@@ -118,17 +142,35 @@ describe('SyncPlanSections', () => {
 
     render(<SectionsHarness review={review} />);
 
-    expect(screen.getByText('Archives and reactivations').closest('details')).toHaveAttribute('open');
+    expect(screen.getByText('Lifecycle review').closest('details')).toHaveAttribute('open');
     expect(screen.getByText('Gathering changes').closest('details')).toHaveAttribute('open');
     expect(screen.getByText('Family changes').closest('details')).toHaveAttribute('open');
-    expect(screen.getByText('Missing from two complete provider syncs')).toBeInTheDocument();
+    expect(screen.getByText('Archived in the provider')).toBeInTheDocument();
+    expect(screen.getByText('Marked deceased in the provider')).toBeInTheDocument();
 
-    const archive = screen.getByRole('checkbox', { name: 'Archive Local Archive' });
+    const archived = screen.getByRole('checkbox', { name: 'Archive Local Archive' });
+    const deceased = screen.getByRole('checkbox', { name: 'Archive Local Restore' });
     const rename = screen.getByRole('checkbox', { name: 'Accept family rename to Renamed household' });
-    await user.click(archive);
+    await user.click(screen.getByRole('button', { name: 'Accept all proposed archives' }));
     await user.click(rename);
-    expect(archive).toBeChecked();
+    expect(archived).toBeChecked();
+    expect(deceased).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'Archive Local Match' })).not.toBeInTheDocument();
     expect(rename).toBeChecked();
+  });
+
+  it('does not render lifecycle review when there are no archive proposals', () => {
+    const review = reviewFixture({
+      reactivate: [{
+        id: 'reactivate:9', externalPersonId: 'ext-restored', individualId: 9,
+        reason: 'provider_state_active',
+      }],
+    });
+
+    render(<SectionsHarness review={review} />);
+
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept all proposed archives' })).not.toBeInTheDocument();
   });
 
   it('derives downstream disclosures from the current identity decisions', async () => {
@@ -156,7 +198,13 @@ describe('SyncPlanSections', () => {
           }))}>
             Add source match instead
           </button>
-          <SyncPlanSections review={review} state={state} onStateChange={setState} />
+          <SyncPlanSections
+            review={review}
+            state={state}
+            archiveActions={review.plan.archive}
+            onStateChange={setState}
+            onAcceptAllArchives={() => {}}
+          />
         </>
       );
     }
@@ -199,7 +247,13 @@ describe('SyncPlanSections', () => {
           }))}>
             Decide later
           </button>
-          <SyncPlanSections review={review} state={state} onStateChange={setState} />
+          <SyncPlanSections
+            review={review}
+            state={state}
+            archiveActions={review.plan.archive}
+            onStateChange={setState}
+            onAcceptAllArchives={() => {}}
+          />
         </>
       );
     }
