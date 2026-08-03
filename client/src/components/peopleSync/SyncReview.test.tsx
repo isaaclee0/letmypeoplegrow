@@ -206,7 +206,7 @@ function legacyReview(): PeopleSyncReview {
     },
     archive: [{
       id: 'archive:11', externalPersonId: 'ext-legacy', individualId: 11,
-      reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+      reason: 'provider_state_archived',
     }],
     ambiguousPeople: [{
       id: 'ambiguous:legacy', externalPersonId: 'ext-legacy',
@@ -256,7 +256,7 @@ describe('SyncReview compact V2 workflow', () => {
       planOverrides: {
         archive: [{
           id: 'archive:8', externalPersonId: 'missing', individualId: 8,
-          reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+          reason: 'provider_state_archived',
         }],
         renameFamily: [{ id: 'renameFamily:20', familyId: 20, familyName: 'Renamed family' }],
       },
@@ -448,12 +448,14 @@ describe('SyncReview compact V2 workflow', () => {
     expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeDisabled();
   });
 
-  it('shows source coverage only when positive', () => {
-    const review = { ...v2Review({ attention: false }), coverage: { unmatchedActiveLocalRegulars: 208 } };
-    const { rerender } = render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
-    expect(screen.getByText(/208 active LMPG regulars/)).toBeInTheDocument();
-    rerender(<SyncReview provider="planning_center" review={{ ...review, runId: 7, reviewToken: 'fresh', coverage: { unmatchedActiveLocalRegulars: 0 } }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+  it('does not treat matcher source coverage as local-only lifecycle state', () => {
+    const review = {
+      ...v2Review({ attention: false }),
+      coverage: { unmatchedActiveLocalRegulars: 208 },
+    } as unknown as PeopleSyncReview;
+    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
     expect(screen.queryByText(/208 active LMPG regulars/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
   });
 
   it('keeps archive acceptance and the destructive acknowledgement immediately before apply', async () => {
@@ -463,7 +465,7 @@ describe('SyncReview compact V2 workflow', () => {
       planOverrides: {
         archive: [{
           id: 'archive:8', externalPersonId: 'missing', individualId: 8,
-          reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+          reason: 'provider_state_archived',
         }],
       },
     });
@@ -472,11 +474,72 @@ describe('SyncReview compact V2 workflow', () => {
 
     const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
     expect(apply).toBeDisabled();
-    expect(screen.getByText('Missing from two complete provider syncs')).toBeInTheDocument();
+    expect(screen.getByText('Archived in the provider')).toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' }));
     await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
     await user.click(screen.getByRole('button', { name: 'Apply 2 selected changes' }));
     expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({ acceptArchiveIndividualIds: [8] }));
+  });
+
+  it('accepts every terminal-state archive proposal without selecting an unrelated local-only person', async () => {
+    const user = userEvent.setup();
+    const review = v2Review({
+      attention: false,
+      planOverrides: {
+        archive: [
+          {
+            id: 'archive:8', externalPersonId: 'ext-archived', individualId: 8,
+            reason: 'provider_state_archived',
+          },
+          {
+            id: 'archive:9', externalPersonId: 'ext-deceased', individualId: 9,
+            reason: 'provider_state_deceased',
+          },
+        ],
+      },
+    });
+    review.coverage = {
+      unlinkedActiveLocalRegulars: 1,
+    } as PeopleSyncReview['coverage'];
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview
+      provider="planning_center"
+      review={review}
+      onRefresh={vi.fn()}
+      onApply={onApply}
+      applying={false}
+      requireAllPlannedArchivesAccepted
+    />);
+
+    expect(screen.getByText('Lifecycle review')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Accept all proposed archives' }));
+    expect(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Archive Jordan Lee' })).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'Archive Replacement Local' })).not.toBeInTheDocument();
+
+    const apply = screen.getByRole('button', { name: 'Apply 3 selected changes' });
+    expect(apply).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+
+    expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({
+      acceptArchiveIndividualIds: [8, 9],
+    }));
+    expect(screen.getAllByRole('button', { name: /Apply .*selected changes|Apply sync/ })).toHaveLength(1);
+  });
+
+  it('omits lifecycle review when the plan has no archive proposals', () => {
+    render(<SyncReview
+      provider="planning_center"
+      review={v2Review({ attention: false })}
+      onRefresh={vi.fn()}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept all proposed archives' })).not.toBeInTheDocument();
   });
 });
 

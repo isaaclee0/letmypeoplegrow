@@ -266,7 +266,6 @@ function buildLocalIdentityDigest({
     .map((link) => ({
       externalPersonId: externalId(link?.externalPersonId),
       individualId: individualId(link?.individualId),
-      missingFullSyncCount: Number(link?.missingFullSyncCount ?? 0),
     }))
     .filter((link) => link.externalPersonId !== null && link.individualId !== null)
     .sort((left, right) => compareText(left.externalPersonId, right.externalPersonId) ||

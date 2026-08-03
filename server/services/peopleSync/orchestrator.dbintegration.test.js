@@ -8,7 +8,6 @@ const providerRegistry = require('./providerRegistry');
 const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
 const runRepository = require('./runRepository');
-const linkRepository = require('./linkRepository');
 const authority = require('./authority');
 const { digestSourceIdentity } = require('./sourceModel');
 
@@ -282,7 +281,7 @@ test('changed source membership invalidates the review before apply', async () =
   });
 });
 
-test('context people corroborate matching but are excluded from durable full-fetch presence', async () => {
+test('context people corroborate matching without mutating legacy presence counters', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await setAuthority(churchId);
@@ -307,31 +306,109 @@ test('context people corroborate matching but are excluded from durable full-fet
 
     const result = await orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
     assert.equal(result.counts.linkPeople, 1);
-    assert.deepEqual(await missingCounts(churchId), { context: 1, member: 0 });
+    assert.deepEqual(await missingCounts(churchId), { context: 0, member: 0 });
   });
 });
 
-test('a lifecycle-ineligible linked source member is neither archived nor counted by full-fetch presence', async () => {
+test('manual review and apply archives durable links for explicit Archived and Deceased records', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await setAuthority(churchId);
     const selected = source('members', 'Members');
     const batch = await reviewedBatch(churchId, selected);
-    const individualId = await seedIndividual(churchId, { firstName: 'Grace', lastName: 'Hopper' });
-    await linkPerson(churchId, 'terminal', individualId, 1);
+    const archivedId = await seedIndividual(churchId, { firstName: 'Grace', lastName: 'Hopper' });
+    const deceasedId = await seedIndividual(churchId, { firstName: 'Ada', lastName: 'Lovelace' });
+    await linkPerson(churchId, 'archived-person', archivedId, 1);
+    await linkPerson(churchId, 'deceased-person', deceasedId, 1);
     scenarios = new Map([['members', snapshot(selected, {
-      people: [person('terminal', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' })],
-      memberExternalIds: ['terminal'],
+      people: [
+        person('archived-person', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' }),
+        person('deceased-person', { firstName: 'Ada', lastName: 'Lovelace', state: 'deceased' }),
+      ],
+      memberExternalIds: ['archived-person', 'deceased-person'],
+    })]]);
+
+    const review = await orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
+    });
+    assert.deepEqual(review.plan.archive, [
+      { id: `archive:archived-person:${archivedId}`, externalPersonId: 'archived-person',
+        individualId: archivedId, reason: 'provider_state_archived' },
+      { id: `archive:deceased-person:${deceasedId}`, externalPersonId: 'deceased-person',
+        individualId: deceasedId, reason: 'provider_state_deceased' },
+    ]);
+
+    const result = await orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+      selections: {
+        ...selectionsForReview(review),
+        acceptArchiveIndividualIds: [archivedId, deceasedId],
+      },
+    });
+
+    assert.equal(result.status, 'applied');
+    assert.equal(result.applied.archive, 2);
+    const rows = await Database.query(
+      'SELECT id, is_active FROM individuals WHERE church_id = ? ORDER BY id', [churchId]
+    );
+    assert.deepEqual(rows.map((row) => ({ id: Number(row.id), isActive: Number(row.is_active) })), [
+      { id: archivedId, isActive: 0 },
+      { id: deceasedId, isActive: 0 },
+    ]);
+  });
+});
+
+test('scheduled sync holds explicit Archived and Deceased proposals for review without lifecycle side effects', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const gathering = await Database.query(
+      'INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Sunday']
+    );
+    const gatheringTypeId = Number(gathering.insertId);
+    const batch = await reviewedBatch(churchId, selected, {
+      gatheringTypeId,
+      gatheringAutoRemoveEnabled: true,
+    });
+    const archivedId = await seedIndividual(churchId, { firstName: 'Grace', lastName: 'Hopper' });
+    const deceasedId = await seedIndividual(churchId, { firstName: 'Ada', lastName: 'Lovelace' });
+    await linkPerson(churchId, 'archived-person', archivedId, 1);
+    await linkPerson(churchId, 'deceased-person', deceasedId, 1);
+    await Database.query(
+      `INSERT INTO gathering_lists
+        (church_id, gathering_type_id, individual_id, added_by_sync_batch_id)
+       VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+      [
+        churchId, gatheringTypeId, archivedId, batch.id,
+        churchId, gatheringTypeId, deceasedId, batch.id,
+      ]
+    );
+    scenarios = new Map([['members', snapshot(selected, {
+      people: [
+        person('archived-person', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' }),
+        person('deceased-person', { firstName: 'Ada', lastName: 'Lovelace', state: 'deceased' }),
+      ],
+      memberExternalIds: ['archived-person', 'deceased-person'],
     })]]);
 
     const result = await orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
 
-    assert.equal(result.status, 'applied');
-    const [individual] = await Database.query(
-      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?', [churchId, individualId]
+    assert.equal(result.status, 'review_required');
+    assert.equal(result.counts.archive, 0);
+    const rows = await Database.query(
+      'SELECT id, is_active FROM individuals WHERE church_id = ? ORDER BY id', [churchId]
     );
-    assert.equal(individual.is_active, 1);
-    assert.deepEqual(await missingCounts(churchId), { terminal: 1 });
+    assert.deepEqual(rows.map((row) => ({ id: Number(row.id), isActive: Number(row.is_active) })), [
+      { id: archivedId, isActive: 1 },
+      { id: deceasedId, isActive: 1 },
+    ]);
+    const [membership] = await Database.query(
+      `SELECT COUNT(*) AS count FROM gathering_lists
+        WHERE church_id = ? AND gathering_type_id = ? AND added_by_sync_batch_id = ?`,
+      [churchId, gatheringTypeId, batch.id]
+    );
+    assert.equal(Number(membership.count), 2);
   });
 });
 
@@ -721,7 +798,7 @@ test('a failed old-account fetch cannot publish missing source health or notific
   });
 });
 
-test('reviewed post-apply presence ignores an old-account snapshot after reconnect', async () => {
+test('reviewed apply does not invoke the legacy post-apply presence boundary', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await replaceElvantoConnectionGeneration(churchId, 31, 'old-account-key');
@@ -734,26 +811,23 @@ test('reviewed post-apply presence ignores an old-account snapshot after reconne
     const review = await orchestrator.buildReview({
       churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
     });
-    let presenceCalls = 0;
 
     const result = await orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
       selections: selectionsForReview(review),
     }, {
-      recordFullFetchPresence: async (...args) => {
-        presenceCalls += 1;
+      recordFullFetchPresence: async () => {
         await replaceElvantoConnectionGeneration(churchId, 32, 'replacement-account-key');
-        return linkRepository.recordFullFetchPresence(...args);
       },
     });
 
     assert.equal(result.status, 'applied');
-    assert.equal(presenceCalls, 1);
+    assert.equal(await connectionStore.getConnectionGeneration(churchId, 'elvanto'), 31);
     assert.deepEqual(await missingCounts(churchId), { 'missing-person': 0 });
   });
 });
 
-test('unattended post-apply presence ignores an old-account snapshot after reconnect', async () => {
+test('unattended apply does not invoke the legacy post-apply presence boundary', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await replaceElvantoConnectionGeneration(churchId, 41, 'old-account-key');
@@ -763,20 +837,17 @@ test('unattended post-apply presence ignores an old-account snapshot after recon
     const individualId = await seedIndividual(churchId, { firstName: 'Existing' });
     await linkPerson(churchId, 'missing-person', individualId);
     scenarios = new Map([['members', snapshot(selected, { people: [], memberExternalIds: [] })]]);
-    let presenceCalls = 0;
 
     const result = await orchestrator.runUnattended({
       churchId, provider: 'elvanto', batchId: batch.id,
     }, {
-      recordFullFetchPresence: async (...args) => {
-        presenceCalls += 1;
+      recordFullFetchPresence: async () => {
         await replaceElvantoConnectionGeneration(churchId, 42, 'replacement-account-key');
-        return linkRepository.recordFullFetchPresence(...args);
       },
     });
 
     assert.equal(result.status, 'applied');
-    assert.equal(presenceCalls, 1);
+    assert.equal(await connectionStore.getConnectionGeneration(churchId, 'elvanto'), 41);
     assert.deepEqual(await missingCounts(churchId), { 'missing-person': 0 });
   });
 });

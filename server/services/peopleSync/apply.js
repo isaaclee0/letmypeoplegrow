@@ -107,7 +107,7 @@ async function assertLocalIdentityContextWithConnection(conn, churchId, provider
       [churchId]
     ),
     conn.query(
-      `SELECT external_person_id, individual_id, missing_full_sync_count FROM external_person_links
+      `SELECT external_person_id, individual_id FROM external_person_links
         WHERE church_id = ? AND provider = ? ORDER BY id`,
       [churchId, provider]
     ),
@@ -136,7 +136,6 @@ async function assertLocalIdentityContextWithConnection(conn, churchId, provider
     personLinks: linkRows.map((row) => ({
       externalPersonId: row.external_person_id,
       individualId: Number(row.individual_id),
-      missingFullSyncCount: Number(row.missing_full_sync_count),
     })),
     exclusions: exclusionRows.map((row) => ({
       externalPersonId: row.external_person_id,
@@ -316,13 +315,10 @@ function planWithSuppressedSuggestions(plan, accepted) {
   return filtered;
 }
 
-function planWithReviewedArchiveSelections(plan, accepted, reviewedApply) {
-  // Unattended sync applies the server-computed lifecycle plan as-is. A
-  // human-reviewed apply is different: every destructive archive surfaced
-  // in the review must be opted into explicitly. Contract v2 is itself a
-  // reviewed decision contract, including in lower-level callers/tests that
-  // do not provide the route-owned review-token wrapper.
-  if (!reviewedApply && accepted.contractVersion !== 2) return plan;
+function planWithReviewedArchiveSelections(plan, accepted) {
+  // Every lifecycle archive is a reviewed proposal, including when the plan
+  // reaches this boundary from unattended orchestration. Only explicit
+  // archive selections may turn a proposal into a mutation.
   return {
     ...plan,
     archive: asArray(plan.archive).filter((action) =>
@@ -504,8 +500,7 @@ async function applyPeopleSyncPlan({
     }
     const applicablePlan = planWithReviewedArchiveSelections(
       planWithSuppressedSuggestions(plan, accepted),
-      accepted,
-      reviewedApply
+      accepted
     );
     await enforceAuthorityLock(conn, churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
 

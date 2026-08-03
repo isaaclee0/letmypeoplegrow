@@ -123,16 +123,18 @@ test('maps new Active people to regulars and included Contacts to local visitors
   ]);
 });
 
-test('excluded Contacts leave the authoritative population and propose archive when linked', () => {
+test('source-rule exclusions never archive linked non-terminal people', () => {
+  const active = computePeopleSyncPlan(input({
+    externalPeople: [person({ state: 'active' })],
+    batches: [batch({ eligibleExternalPersonIds: [] })],
+  }));
   const plan = computePeopleSyncPlan(input({
     settings: { includeContacts: false, alignPeopleType: true },
     externalPeople: [person({ state: 'contact' })],
   }));
 
-  assert.deepEqual(plan.archive, [{
-    id: 'archive:ext-1:1', externalPersonId: 'ext-1', individualId: 1,
-    reason: 'contact_excluded', missingFullSyncCount: null,
-  }]);
+  assert.deepEqual(active.archive, []);
+  assert.deepEqual(plan.archive, []);
 });
 
 test('people type alignment off preserves an existing linked type', () => {
@@ -161,10 +163,38 @@ test('Archived and Deceased linked people propose archive with explicit reasons'
 
   assert.deepEqual(plan.archive, [
     { id: 'archive:archived-1:1', externalPersonId: 'archived-1', individualId: 1,
-      reason: 'provider_state_archived', missingFullSyncCount: null },
+      reason: 'provider_state_archived' },
     { id: 'archive:deceased-1:2', externalPersonId: 'deceased-1', individualId: 2,
-      reason: 'provider_state_deceased', missingFullSyncCount: null },
+      reason: 'provider_state_deceased' },
   ]);
+});
+
+test('a terminal linked person keeps its sync-owned gathering assignment for lifecycle review', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [person({ id: 'archived-1', state: 'archived' })],
+    localPeople: [local({ id: 7 })],
+    batches: [batch({
+      id: 10,
+      gatheringTypeId: 100,
+      gatheringAutoRemoveEnabled: true,
+      eligibleExternalPersonIds: ['archived-1'],
+    })],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'archived-1', individualId: 7, reason: 'existing_link' }],
+    }),
+    gatheringMemberships: [
+      { gatheringTypeId: 100, individualId: 7, addedBySyncBatchId: 10 },
+    ],
+  }));
+
+  assert.deepEqual(plan.archive, [{
+    id: 'archive:archived-1:7',
+    externalPersonId: 'archived-1',
+    individualId: 7,
+    reason: 'provider_state_archived',
+  }]);
+  assert.deepEqual(plan.addToGathering, []);
+  assert.deepEqual(plan.removeFromGathering, []);
 });
 
 test('a linked eligible person reappearing active proposes reactivation', () => {
@@ -334,16 +364,16 @@ test('pending matcher identity conflicts protect every candidate roster row from
   assert.deepEqual(plan.removeFromGathering, []);
 });
 
-test('pending matcher ambiguity suppresses presence-based archive actions', () => {
+test('does not propose an archive when a durable link is absent from a complete source read', () => {
   const plan = computePeopleSyncPlan(input({
     externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })],
-    matcher: matcher({ ambiguous: [{ externalPersonId: 'missing', candidateIndividualIds: [1, 2],
-      reason: 'conflicting_existing_link' }] }),
+    matcher: matcher(),
     personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 1 }],
   }));
 
-  assert.equal(plan.presenceProjection.updates[0].nextMissingFullSyncCount, 2);
   assert.deepEqual(plan.archive, []);
+  assert.equal(plan.skipped.some((action) => action.reason === 'awaiting_missing_confirmation'), false);
+  assert.equal(plan.skipped.some((action) => action.reason === 'confirmed_missing_full_sync'), false);
 });
 
 test('provider-neutral people without a status use the qualifying batch default type', () => {
@@ -382,87 +412,20 @@ test('unmatched unlinked locals never become archive actions', () => {
   assert.deepEqual(plan.archive, []);
 });
 
-test('missing counters below two do not archive and confirmed count two does', () => {
-  const plan = computePeopleSyncPlan(input({
-    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })],
-    matcher: matcher(), localPeople: [local({ id: 1 }), local({ id: 2 })],
-    missingCandidates: [
-      { externalPersonId: 'missing-2', individualId: 2, missingFullSyncCount: 2 },
-      { externalPersonId: 'missing-1', individualId: 1, missingFullSyncCount: 1 },
-    ],
-  }));
-
-  assert.deepEqual(plan.archive, [{
-    id: 'archive:missing-2:2', externalPersonId: 'missing-2', individualId: 2,
-    reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
-  }]);
-  assert.deepEqual(plan.skipped, [{
-    id: 'skipped:missing-1:1:awaiting_missing_confirmation', externalPersonId: 'missing-1',
-    individualId: 1, reason: 'awaiting_missing_confirmation', missingFullSyncCount: 1,
-  }]);
-});
-
-test('presence projection increments first and second complete-full misses deterministically', () => {
-  const first = computePeopleSyncPlan(input({
-    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })], matcher: matcher(),
-    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 0 }],
-  }));
-  const second = computePeopleSyncPlan(input({
-    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })], matcher: matcher(),
-    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 1 }],
-  }));
-
-  assert.deepEqual(first.presenceProjection, {
-    completeFullSnapshot: true,
-    updates: [{ externalPersonId: 'missing', individualId: 1,
-      previousMissingFullSyncCount: 0, nextMissingFullSyncCount: 1, seen: false }],
-  });
-  assert.deepEqual(first.archive, []);
-  assert.deepEqual(second.presenceProjection, {
-    completeFullSnapshot: true,
-    updates: [{ externalPersonId: 'missing', individualId: 1,
-      previousMissingFullSyncCount: 1, nextMissingFullSyncCount: 2, seen: false }],
-  });
-  assert.deepEqual(second.archive, [{
-    id: 'archive:missing:1', externalPersonId: 'missing', individualId: 1,
-    reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
-  }]);
-});
-
-test('presence in any enabled batch resets the linked missing count and blocks archive', () => {
-  const plan = computePeopleSyncPlan(input({
-    externalPeople: [person({ id: 'present' })],
-    batches: [
-      batch({ id: 1, eligibleExternalPersonIds: [] }),
-      batch({ id: 2, eligibleExternalPersonIds: ['present'] }),
-    ],
-    matcher: matcher({ linked: [{ externalPersonId: 'present', individualId: 1, reason: 'existing_link' }] }),
-    personLinks: [{ externalPersonId: 'present', individualId: 1, missingFullSyncCount: 2 }],
-  }));
-
-  assert.deepEqual(plan.presenceProjection.updates, [{
-    externalPersonId: 'present', individualId: 1,
-    previousMissingFullSyncCount: 2, nextMissingFullSyncCount: 0, seen: true,
-  }]);
-  assert.deepEqual(plan.archive, []);
-});
-
-test('partial and incremental snapshots never project missing-counter mutations', () => {
+test('plans retain an empty compatibility presence projection for every snapshot shape', () => {
   const common = {
     externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })], matcher: matcher(),
-    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 1 }],
+    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 9 }],
   };
+  const complete = computePeopleSyncPlan(input({ ...common }));
   const partial = computePeopleSyncPlan(input({
     ...common, snapshot: { fetchedAt: 'now', watermark: 'wm', mode: 'full', complete: false },
   }));
-  const incremental = computePeopleSyncPlan(input({
-    ...common, snapshot: { fetchedAt: 'now', watermark: 'wm', mode: 'incremental', complete: true },
-  }));
 
+  assert.deepEqual(complete.presenceProjection, { completeFullSnapshot: false, updates: [] });
   assert.deepEqual(partial.presenceProjection, { completeFullSnapshot: false, updates: [] });
-  assert.deepEqual(incremental.presenceProjection, { completeFullSnapshot: false, updates: [] });
+  assert.deepEqual(complete.archive, []);
   assert.deepEqual(partial.archive, []);
-  assert.deepEqual(incremental.archive, []);
 });
 
 test('stale and contended matcher conflicts are retained and never become additions', () => {

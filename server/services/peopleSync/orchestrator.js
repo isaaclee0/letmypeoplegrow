@@ -5,7 +5,7 @@
 // runUnattended/previewAuthoritySwitch/previewLinkCorrections exclusively and
 // must never call an adapter, matcher, plan, or apply module directly.
 //
-// ─── The 10-step pipeline ───────────────────────────────────────────────────
+// ─── The 9-step pipeline ────────────────────────────────────────────────────
 //
 // A specifically requested batch is first loaded and rejected if retired,
 // before connection or credential setup. Every operational batch then runs a
@@ -14,15 +14,11 @@
 //   2. load/validate batches and settings
 //   3. start audit run
 //   4. fetch snapshot
-//   5. load local state/links and existing missing counters
+//   5. load local state/links
 //   6. match
-//   7. compute the plan (including the projected next missing count, via
-//      plan.js's own presenceProjection — see below)
+//   7. compute the plan
 //   8. create a review token, OR apply safe unattended actions
-//   9. persist full-fetch presence at most once (only for an applied
-//      review or a completed unattended reconciliation — NEVER for a pure
-//      preview)
-//   10. finish audit run
+//   9. finish audit run
 //
 // Steps 1-2 (and the startRun call that begins step 3) happen BEFORE any
 // run row exists, so a failure there propagates directly — there is
@@ -32,23 +28,6 @@
 // caught, reported via failRun, and rethrown — apply is never reached
 // once any of that has failed.
 //
-// ─── Missing-counter integrity (the most safety-critical property here) ───
-//
-// plan.js's own computePeopleSyncPlan already computes the FULL projected
-// missing-count bookkeeping (plan.presenceProjection) from whatever
-// `personLinks` this module passes in — this module does not re-derive
-// that counting logic, it only decides WHEN the durable counters in
-// external_person_links get written via linkRepository.recordFullFetchPresence:
-//   - buildReview/previewAuthoritySwitch/previewLinkCorrections (pure
-//     previews): NEVER call it.
-//   - applyReviewed: calls it exactly once, AFTER applyPeopleSyncPlan's
-//     transaction has committed, using the fresh full snapshot it just
-//     fetched for verification. A stale-plan re-fetch inside a retried
-//     applyReviewed never double-counts because the write only happens
-//     after a successful apply, and only once per successful call.
-//   - runUnattended: calls it exactly once per completed classification
-//     (whether the run ends 'applied' or 'review_required') for a
-//     COMPLETE FULL source set only.
 'use strict';
 
 const { randomUUID } = require('node:crypto');
@@ -78,7 +57,7 @@ const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRet
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
 const UNATTENDED_TRIGGERS = new Set(['scheduled']);
-const HELD_REVIEW_BUCKETS = ['ambiguousPeople', 'familyConflicts', 'renameFamily', 'unmatchedLocalRegulars'];
+const HELD_REVIEW_BUCKETS = ['archive', 'ambiguousPeople', 'familyConflicts', 'renameFamily', 'unmatchedLocalRegulars'];
 const REVIEW_TOKEN_TTL_SECONDS = 30 * 60;
 const RAW_FIELD_DENYLIST = new Set(['attributes', 'customFields', 'custom_fields', 'raw', 'rawPayload', 'demographics']);
 
@@ -188,7 +167,6 @@ const defaultDeps = {
   listPersonLinks: linkRepository.listPersonLinks,
   listMatchReviewState: matchReviewRepository.listMatchReviewState,
   listFamilyLinks: linkRepository.listFamilyLinks,
-  recordFullFetchPresence: linkRepository.recordFullFetchPresence,
   listLocalIndividuals: defaultListLocalIndividuals,
   listLocalFamilies: defaultListLocalFamilies,
   listGatheringMemberships: defaultListGatheringMemberships,
@@ -254,18 +232,6 @@ function sourceExpectationsFor(batches) {
   })).sort((left, right) => Number(left.batchId) - Number(right.batchId));
 }
 
-function sourceExpectationsAfterReviewedApply(expectations, reviewedBatch) {
-  if (!reviewedBatch?.draftSource) return expectations;
-  return expectations.map((expectation) => expectation.batchId === reviewedBatch.id ? {
-    ...expectation,
-    sourceRevision: expectation.sourceRevision + 1,
-    activeSourceDigest: expectation.draftSourceDigest,
-    draftSourceDigest: null,
-    draftSourceBaseRevision: null,
-    selectedSource: 'active',
-  } : expectation);
-}
-
 function groupMembersByFamily(people) {
   const map = new Map();
   for (const person of people) {
@@ -313,6 +279,7 @@ function mergeAppliedCounts(applyResult, plan) {
 
 function heldCountsFromPlan(plan) {
   return {
+    archive: plan.archive.length,
     ambiguousPeople: plan.ambiguousPeople.length,
     familyConflicts: plan.familyConflicts.length,
     renameFamily: plan.renameFamily.length,
@@ -352,23 +319,26 @@ function sanitizePlanForReview(plan, externalPeople = [], localPeople = [], exte
   return sanitized;
 }
 
-function reviewCoverage(matcherResult, localPeople) {
-  const unmatchedIds = new Set((matcherResult?.unmatchedLocalIds || [])
-    .map((value) => Number(value))
-    .filter((value) => Number.isSafeInteger(value) && value > 0));
-
-  const localById = new Map((localPeople || [])
-    .map((person) => [Number(person?.id), person])
-    .filter(([id]) => Number.isSafeInteger(id) && id > 0));
-  let unmatchedActiveLocalRegulars = 0;
-  for (const individualId of unmatchedIds) {
-    const person = localById.get(individualId);
-    if (person?.isActive !== false && person?.isActive !== 0 && person?.peopleType === 'regular') {
-      unmatchedActiveLocalRegulars += 1;
-    }
+function unlinkedActiveLocalRegularCount({ provider, authoritative, individuals, personLinks }) {
+  if (authoritative !== true) return 0;
+  const linkedIndividualIds = new Set((personLinks || []).map((link) => Number(link.individualId)));
+  let count = 0;
+  for (const person of individuals || []) {
+    const individualId = Number(person?.id);
+    if (!Number.isSafeInteger(individualId) || individualId <= 0) continue;
+    if (person?.isActive === false || person?.isActive === 0 || person?.peopleType !== 'regular') continue;
+    const hasPlanningCenterCompatibilityLink = provider === 'planning_center'
+      && typeof person?.planningCenterId === 'string'
+      && person.planningCenterId.trim().length > 0;
+    if (!linkedIndividualIds.has(individualId) && !hasPlanningCenterCompatibilityLink) count += 1;
   }
+  return count;
+}
 
-  return { unmatchedActiveLocalRegulars };
+function reviewCoverage(body) {
+  return {
+    unlinkedActiveLocalRegulars: unlinkedActiveLocalRegularCount(body),
+  };
 }
 
 function safeErrorCode(error) {
@@ -649,8 +619,10 @@ async function acquireCompleteProviderSources({
         const member = sourcePeopleById.get(id);
         if (!id || !member) throw sourceIncomplete(provider);
         memberIds.add(id);
+        seenMemberExternalIds.add(id);
         // Lifecycle-ineligible records remain part of the provider snapshot
-        // digest/provenance, but never become actionable or "seen" members.
+        // digest/provenance and planning input, but never become eligible for
+        // matching, creation, or gathering membership without a durable link.
         if (!adapter.isLifecycleEligible(member, settings)) {
           if (!memberPeopleById.has(id)) {
             if (!ineligibleMemberPeopleById.has(id)) {
@@ -665,7 +637,6 @@ async function acquireCompleteProviderSources({
         // earlier source. Once a source owns them as a member, the member
         // snapshot is authoritative for both matching and review display.
         contextPeopleById.delete(id);
-        seenMemberExternalIds.add(id);
         ineligibleMemberPeopleById.delete(id);
         if (!memberPeopleById.has(id)) {
           memberPeopleById.set(id, member);
@@ -746,7 +717,6 @@ async function acquireCompleteProviderSources({
     contextPeople: [...contextPeopleById.values()],
     matchingPeople: [...matchingPeopleById.values()],
     ineligibleMemberPeople: [...ineligibleMemberPeopleById.values()],
-    ignoredLifecycleExternalIds: new Set(ineligibleMemberPeopleById.keys()),
     eligibleByBatch,
     seenMemberExternalIds,
     sourceProvenance,
@@ -837,7 +807,8 @@ function matchProjectedPeople(acquired, correction, effectiveReviewState) {
   const matchingPeople = acquired.matchingPeople.filter((person) =>
     !correction.unlinkedExternalIds.has(String(person.id)));
   // Retain an ineligible record only when it protects an existing projected
-  // link from being rematched. It remains filtered from planning/presence.
+  // link from being rematched. The durable identity may reach lifecycle
+  // planning, while eligibility still prevents matching or creation.
   for (const person of acquired.ineligibleMemberPeople) {
     if (linkedExternalIds.has(String(person.id))) matchingPeople.push(person);
   }
@@ -867,12 +838,10 @@ function appendDeferredCorrectionRows(plan, unlinkedExternalIds) {
 }
 
 function computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState) {
-  const actionablePersonLinks = correction.projectedLinks.filter((link) =>
-    !acquired.ignoredLifecycleExternalIds.has(String(link.externalPersonId))
-  );
+  const planningPeople = [...acquired.snapshot.people, ...acquired.ineligibleMemberPeople];
   const plan = acquired.deps.computePeopleSyncPlan({
     provider: acquired.provider,
-    externalPeople: acquired.snapshot.people,
+    externalPeople: planningPeople,
     localPeople: acquired.individuals,
     matcher: matcherResult,
     batches: acquired.batches,
@@ -881,10 +850,9 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     authoritative: acquired.authoritative,
     activeAuthority: acquired.activeAuthority,
     trigger: acquired.trigger,
-    personLinks: actionablePersonLinks.map((link) => ({
+    personLinks: correction.projectedLinks.map((link) => ({
       externalPersonId: link.externalPersonId,
       individualId: link.individualId,
-      missingFullSyncCount: link.missingFullSyncCount,
     })),
     snapshot: {
       fetchedAt: acquired.snapshot.fetchedAt,
@@ -897,7 +865,7 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   });
   appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
 
-  const externalPeople = [...acquired.snapshot.people, ...acquired.contextPeople];
+  const externalPeople = [...planningPeople, ...acquired.contextPeople];
   const sourceExternalIds = correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId);
   plan.reviewContext = buildReviewContext({
     plan,
@@ -988,7 +956,7 @@ async function buildReview({
       reviewToken,
       decisionContractVersion: DECISION_CONTRACT_VERSION,
       summary: summarizePlan(body.plan),
-      coverage: reviewCoverage(body.matcherResult, body.individuals),
+      coverage: reviewCoverage(body),
       plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
     };
@@ -1062,7 +1030,7 @@ async function previewLinkCorrections({
     reviewToken,
     decisionContractVersion: DECISION_CONTRACT_VERSION,
     summary: summarizePlan(corrected.plan),
-    coverage: reviewCoverage(corrected.matcherResult, corrected.individuals),
+    coverage: reviewCoverage(corrected),
     plan: sanitizePlanForReview(
       corrected.plan, corrected.externalPeople, corrected.individuals,
       corrected.snapshot.families, corrected.families
@@ -1155,7 +1123,7 @@ async function previewAuthoritySwitch({
       reviewToken,
       decisionContractVersion: DECISION_CONTRACT_VERSION,
       summary: summarizePlan(body.plan),
-      coverage: reviewCoverage(body.matcherResult, body.individuals),
+      coverage: reviewCoverage(body),
       plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
       authority: authorityState,
@@ -1202,8 +1170,7 @@ function reviewTokenErrorMessage(code) {
 // after that point may ever cause this run's audit record to read
 // 'failed' — that would misrepresent a successful import/archive as
 // having not happened. Authority activation is committed inside that same
-// apply transaction; only presence accounting and finishRun remain
-// best-effort after it returns.
+// apply transaction; only finishRun remains after it returns.
 async function applyReviewed({ churchId, provider, batchId = null, reviewToken, selections = {}, userId } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -1235,10 +1202,6 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   };
   const sourceExpectations = sourceExpectationsFor(reviewBatches);
   const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-  const postApplyAuthorityExpectation = isAuthoritySwitch
-    ? { active: provider, pending: null }
-    : authorityExpectation;
-  const postApplySourceExpectations = sourceExpectationsAfterReviewedApply(sourceExpectations, reviewedBatch);
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
 
@@ -1337,21 +1300,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     throw reportedError;
   }
 
-  // 9. persist full-fetch presence at most once. applyReviewed always
-  // re-fetched the complete provider-owned source set above, so this is
-  // unconditional here.
-  try {
-    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
-      complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
-      authorityExpectation: postApplyAuthorityExpectation,
-      sourceExpectations: postApplySourceExpectations,
-      connectionExpectation,
-    });
-  } catch (presenceErr) {
-    logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-  }
-
-  // 10. classify and finish the audit run — see finishAppliedRun's own
+  // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
   // mergeAppliedCounts()/finishRun() pair.
   const { status } = await finishAppliedRun(deps, {
@@ -1367,16 +1316,13 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 // ─── runUnattended ───────────────────────────────────────────────────────────
 //
 // Permitted only when `provider` is the church's current active authority.
-// Applies deterministic links, additions, managed updates, explicit
-// upstream archive/reactivate (including a CONFIRMED — i.e. already at
-// count >= 2 — missing-person archive; plan.js itself never proposes an
-// archive action below count 2, see its addMissingActions), and
-// provenance-safe gathering changes, by calling applyPeopleSyncPlan with
-// NO selections. ambiguousPeople/familyConflicts/renameFamily/
-// unmatchedLocalRegulars are never mutated by apply.js regardless of
+// Applies deterministic links, additions, managed updates, reactivations,
+// and provenance-safe gathering changes by calling applyPeopleSyncPlan with
+// NO selections. Archive proposals, ambiguousPeople/familyConflicts/
+// renameFamily/unmatchedLocalRegulars are never mutated by apply.js regardless of
 // selections, so "stripping" them is a matter of how this run's outcome is
 // CLASSIFIED and reported, not of altering what apply.js does: whenever any
-// of those four buckets is non-empty, the run is marked review_required
+// of those five buckets is non-empty, the run is marked review_required
 // (with its pending counts) instead of applied, and notifyReviewRequired is
 // called so admins learn about it later (a scheduled run has nobody
 // watching in real time — unlike buildReview/applyReviewed, which are
@@ -1440,8 +1386,8 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
       provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
     );
 
-    // 8. apply safe unattended actions (no selections — ambiguous/conflict/
-    // rename/unmatched-local buckets are never mutated by apply.js off an
+    // 8. apply safe unattended actions (no selections — archive/ambiguous/
+    // conflict/rename/unmatched-local buckets are never mutated by apply.js off an
     // empty selection set regardless).
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections: {}, userId: null,
@@ -1454,17 +1400,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     throw err;
   }
 
-  // 9. persist member-only full-fetch presence exactly once after apply.
-  try {
-    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
-      complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
-      authorityExpectation, sourceExpectations, connectionExpectation,
-    });
-  } catch (presenceErr) {
-    logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-  }
-
-  // 10. classify and finish the audit run — see finishAppliedRun's own
+  // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
   // hasHeldItems()/mergeAppliedCounts()/finishRun() sequence.
   const { status, counts } = await finishAppliedRun(deps, {
@@ -1474,7 +1410,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
 
   if (status === 'review_required') {
     try {
-      // Held-bucket counts only (see HELD_REVIEW_BUCKETS) — note all four
+      // Held-bucket counts only (see HELD_REVIEW_BUCKETS) — note all five
       // are currently church-wide/batch-invariant in practice (matching/
       // unmatched-local review does not vary per batch today), which is
       // what makes per-provider (not per-batch) notification dedup safe;

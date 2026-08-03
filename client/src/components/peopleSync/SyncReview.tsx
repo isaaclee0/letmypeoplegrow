@@ -471,7 +471,6 @@ export default function SyncReview({
       },
     }
     : effectiveReview;
-  const unmatchedCoverageCount = effectiveReview.coverage?.unmatchedActiveLocalRegulars ?? 0;
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
 
@@ -504,6 +503,13 @@ export default function SyncReview({
   const incompleteExternalIds = incompleteIdentityExternalIds(state, reviewContext);
   const affectedExternalId = incompleteExternalIds[0] || collisions[0]?.[1][0];
   const planView = deriveSyncPlanView(effectiveReview, state);
+  const acceptAllArchives = () => setState((current) => ({
+    ...current,
+    acceptedArchiveIds: new Set([
+      ...current.acceptedArchiveIds,
+      ...planView.archive.map((action) => action.individualId),
+    ]),
+  }));
   const signedCorrections = validV2Context ? correctionsForReview(effectiveReview) : {};
   const correctionsReady = recordsMatch(state.linkCorrections, signedCorrections);
   const requiresConfirmation = planView.archive.length > 0
@@ -685,12 +691,6 @@ export default function SyncReview({
           </p>
         )}
 
-        {unmatchedCoverageCount > 0 && (
-          <div className="rounded-lg border border-gray-200 bg-stone-50 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
-            {unmatchedCoverageCount} active LMPG regulars are not matched to any currently configured {providerLabel(provider)} source. They will remain unchanged. Add another sync batch if they should be included.
-          </div>
-        )}
-
         {malformedV2 && (
           <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
             This sync review could not be safely loaded. Refresh the plan before applying it.
@@ -747,7 +747,13 @@ export default function SyncReview({
           </>
         )}
 
-        <SyncPlanSections review={effectiveReview} state={state} onStateChange={setState} />
+        <SyncPlanSections
+          review={effectiveReview}
+          state={state}
+          archiveActions={planView.archive}
+          onStateChange={setState}
+          onAcceptAllArchives={acceptAllArchives}
+        />
 
         {requiresConfirmation && (
           <label className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">

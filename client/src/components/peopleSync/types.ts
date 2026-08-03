@@ -281,7 +281,6 @@ export interface ArchiveAction {
   externalPersonId: string;
   individualId: number;
   reason: string;
-  missingFullSyncCount: number | null;
 }
 
 export interface ReactivateAction {
@@ -358,16 +357,15 @@ export interface UnmatchedLocalRegularAction {
 }
 
 // Different producers attach different optional fields (individualId is
-// absent for a "create_regular_non_authoritative" skip, present for others;
-// activeAuthority/missingFullSyncCount are each only set by their own
-// producer) -- see plan.js's several `plan.skipped.push(...)` call sites.
+// absent for a "create_regular_non_authoritative" skip and present for
+// others; activeAuthority is set only by its own producer) -- see plan.js's
+// several `plan.skipped.push(...)` call sites.
 export interface SkippedAction {
   id: string;
   externalPersonId: string;
   individualId?: number;
   reason: string;
   activeAuthority?: AuthorityProvider;
-  missingFullSyncCount?: number;
 }
 
 export interface PeopleSyncSnapshotInfo {
@@ -499,7 +497,7 @@ export type PeopleSyncApplyCounts = Record<PeopleSyncBucketName, number> & {
 // ─── Review / apply results (server/services/peopleSync/orchestrator.js) ──
 
 export interface PeopleSyncCoverage {
-  unmatchedActiveLocalRegulars: number;
+  unlinkedActiveLocalRegulars: number;
 }
 
 // buildReview()'s and previewAuthoritySwitch()'s return shape. `authority`

@@ -268,7 +268,7 @@ test('a local person can have one link for each provider', async () => {
       id: 1, churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId,
       linkSource: 'matched', linkedAt: (await listPersonLinks(churchId, 'elvanto'))[0].linkedAt,
       lastSeenAt: (await listPersonLinks(churchId, 'elvanto'))[0].lastSeenAt,
-      missingFullSyncCount: 0, reviewDeclined: false,
+      reviewDeclined: false,
     }]);
     assert.equal((await listPersonLinks(churchId, 'planning_center'))[0].externalPersonId, 'pco-1');
   });
@@ -324,104 +324,52 @@ test('outer transactions roll back person and family connection-scoped link writ
   });
 });
 
-test('seen people reset their missing counter and refresh last seen', async () => {
+test('seen people refresh last seen without changing the legacy missing counter', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId);
     await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created' });
-    await recordFullFetchPresence(churchId, 'elvanto', new Set(), { complete: true });
+    await Database.query(
+      `UPDATE external_person_links
+        SET missing_full_sync_count = 7, last_seen_at = NULL
+        WHERE church_id = ? AND provider = 'elvanto' AND external_person_id = 'elvanto-1'`,
+      [churchId]
+    );
     await markPeopleSeen(churchId, 'elvanto', new Set(['elvanto-1']));
-    const [link] = await listPersonLinks(churchId, 'elvanto');
-    assert.equal(link.missingFullSyncCount, 0);
-    assert.ok(link.lastSeenAt);
+    const [row] = await Database.query(
+      `SELECT missing_full_sync_count, last_seen_at FROM external_person_links
+        WHERE church_id = ? AND provider = 'elvanto' AND external_person_id = 'elvanto-1'`,
+      [churchId]
+    );
+    assert.equal(row.missing_full_sync_count, 7);
+    assert.ok(row.last_seen_at);
   });
 });
 
-test('complete full fetches increment missing counters and seen people reset them', async () => {
-  await withTestChurchDb(async (churchId) => {
-    const individualId = await seedIndividual(churchId);
-    await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created' });
-
-    const first = await recordFullFetchPresence(churchId, 'elvanto', new Set(), { complete: true });
-    assert.equal(first.missingCandidates[0].missingFullSyncCount, 1);
-    const second = await recordFullFetchPresence(churchId, 'elvanto', new Set(), { complete: true });
-    assert.equal(second.missingCandidates[0].missingFullSyncCount, 2);
-    await recordFullFetchPresence(churchId, 'elvanto', new Set(['elvanto-1']), { complete: true });
-    const links = await listPersonLinks(churchId, 'elvanto');
-    assert.equal(links[0].missingFullSyncCount, 0);
-  });
-});
-
-test('full-fetch presence rejects a changed authority stance before updating counters', async () => {
+test('full-fetch presence compatibility boundary cannot change a pre-seeded missing counter', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId);
     await upsertPersonLink({
       churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created',
     });
     await Database.query(
-      `UPDATE people_sync_settings SET authority_provider = 'none', pending_authority_provider = NULL
-        WHERE church_id = ?`,
+      `UPDATE external_person_links
+        SET missing_full_sync_count = 7, last_seen_at = '2000-01-01 00:00:00'
+        WHERE church_id = ? AND provider = 'elvanto' AND external_person_id = 'elvanto-1'`,
       [churchId]
     );
 
-    await assert.rejects(
-      recordFullFetchPresence(churchId, 'elvanto', new Set(), {
-        complete: true,
-        authorityExpectation: { active: 'elvanto', pending: null },
-      }),
-      (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+    const result = await recordFullFetchPresence(
+      churchId, 'elvanto', new Set(['elvanto-1']), { complete: true }
     );
-    assert.equal((await listPersonLinks(churchId, 'elvanto'))[0].missingFullSyncCount, 0);
-  });
-});
-
-test('full-fetch presence rejects a changed Elvanto connection generation before updating counters', async () => {
-  await withTestChurchDb(async (churchId) => {
-    const individualId = await seedIndividual(churchId);
-    await upsertPersonLink({
-      churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created',
-    });
-    await Database.query(
-      `INSERT INTO integration_connection_generations (church_id, provider, generation)
-       VALUES (?, 'elvanto', 8)`,
+    const [row] = await Database.query(
+      `SELECT missing_full_sync_count, last_seen_at FROM external_person_links
+        WHERE church_id = ? AND provider = 'elvanto' AND external_person_id = 'elvanto-1'`,
       [churchId]
     );
 
-    await assert.rejects(
-      recordFullFetchPresence(churchId, 'elvanto', new Set(), {
-        complete: true,
-        connectionExpectation: { generation: 7 },
-      }),
-      (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
-    );
-    assert.equal((await listPersonLinks(churchId, 'elvanto'))[0].missingFullSyncCount, 0);
-  });
-});
-
-test('a full-presence write rolls back every earlier counter update when a later write aborts', async () => {
-  await withTestChurchDb(async (churchId) => {
-    const firstIndividualId = await seedIndividual(churchId, 'First');
-    const secondIndividualId = await seedIndividual(churchId, 'Second');
-    await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId: firstIndividualId, linkSource: 'created' });
-    await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-2', individualId: secondIndividualId, linkSource: 'created' });
-    await Database.query(`CREATE TRIGGER abort_second_presence
-      BEFORE UPDATE ON external_person_links
-      WHEN NEW.external_person_id = 'elvanto-2'
-      BEGIN SELECT RAISE(ABORT, 'forced presence failure'); END`);
-
-    await assert.rejects(recordFullFetchPresence(churchId, 'elvanto', new Set(), { complete: true }), /forced presence failure/);
-    assert.deepEqual((await listPersonLinks(churchId, 'elvanto')).map((link) => link.missingFullSyncCount), [0, 0]);
-  });
-});
-
-test('incomplete full-fetch presence input fails before it writes counters', async () => {
-  await withTestChurchDb(async (churchId) => {
-    const individualId = await seedIndividual(churchId);
-    await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created' });
-    await assert.rejects(
-      recordFullFetchPresence(churchId, 'elvanto', new Set(), { complete: false }),
-      /incomplete full fetch/i
-    );
-    assert.equal((await listPersonLinks(churchId, 'elvanto'))[0].missingFullSyncCount, 0);
+    assert.deepEqual(result, { missingCandidates: [] });
+    assert.equal(row.missing_full_sync_count, 7);
+    assert.equal(row.last_seen_at, '2000-01-01 00:00:00');
   });
 });
 
