@@ -10,6 +10,43 @@
 // there's no row to write it to yet.
 
 const Database = require('../../config/database');
+const { createPcoReadClient, PcoSourceError } = require('./readClient');
+
+const API = 'https://api.planningcenteronline.com/people/v2';
+
+function projectBackgroundCheckPerson(resource) {
+  const id = resource?.id === null || resource?.id === undefined
+    ? '' : String(resource.id).trim();
+  if (!resource || resource.type !== 'Person' || !id) {
+    throw new PcoSourceError(
+      'Planning Center People contains a malformed Person resource',
+      'SYNC_SOURCE_INCOMPLETE',
+      {}
+    );
+  }
+  const raw = resource.attributes?.passed_background_check;
+  return {
+    id,
+    passedBackgroundCheck: typeof raw === 'boolean' ? raw : null,
+  };
+}
+
+async function fetchBackgroundCheckSnapshot(options = {}) {
+  const client = options.client || createPcoReadClient({
+    accessToken: options.accessToken,
+    request: options.request,
+    sleep: options.sleep,
+    maxRetries: options.maxRetries,
+    requestScope: 'account',
+  });
+  const people = [];
+  await client.getAll(`${API}/people?per_page=100`, async (envelope) => {
+    for (const resource of envelope.data) people.push(projectBackgroundCheckPerson(resource));
+  });
+  people.sort((left, right) => left.id.localeCompare(right.id));
+  const now = options.now || (() => new Date());
+  return { fetchedAt: now().toISOString(), complete: true, people };
+}
 
 // pcoPeople: the array returned by planningCenterSync.js's fetchAllPcoPeople
 // / projectPerson — each entry has { id, passedBackgroundCheck, ... }.
@@ -29,4 +66,4 @@ async function syncBackgroundCheckStatuses(churchId, pcoPeople) {
   return synced;
 }
 
-module.exports = { syncBackgroundCheckStatuses };
+module.exports = { fetchBackgroundCheckSnapshot, syncBackgroundCheckStatuses };
