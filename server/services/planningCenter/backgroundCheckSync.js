@@ -17,8 +17,8 @@ const API = 'https://api.planningcenteronline.com/people/v2';
 const SUCCESS_CACHE_TTL_MS = 60 * 1000;
 const successfulSnapshots = new Map();
 const refreshInFlight = new Map();
-let allChurchCacheGeneration = 0;
-const churchCacheGenerations = new Map();
+let allChurchCredentialGeneration = 0;
+const churchCredentialGenerations = new Map();
 
 function projectBackgroundCheckPerson(resource) {
   const id = resource?.id === null || resource?.id === undefined
@@ -99,15 +99,30 @@ async function applyBackgroundCheckSnapshot(churchId, snapshot) {
 function invalidateBackgroundCheckStatusCache(churchId) {
   if (churchId) {
     successfulSnapshots.delete(churchId);
-    churchCacheGenerations.set(
+    churchCredentialGenerations.set(
       churchId,
-      (churchCacheGenerations.get(churchId) || 0) + 1
+      (churchCredentialGenerations.get(churchId) || 0) + 1
     );
   } else {
     successfulSnapshots.clear();
-    allChurchCacheGeneration += 1;
-    churchCacheGenerations.clear();
+    allChurchCredentialGeneration += 1;
+    churchCredentialGenerations.clear();
   }
+}
+
+function getCredentialGeneration(churchId) {
+  return {
+    allChurches: allChurchCredentialGeneration,
+    church: churchCredentialGenerations.get(churchId) || 0,
+  };
+}
+
+function sameCredentialGeneration(left, right) {
+  return left?.allChurches === right?.allChurches && left?.church === right?.church;
+}
+
+function isCredentialGenerationCurrent(churchId, generation) {
+  return sameCredentialGeneration(generation, getCredentialGeneration(churchId));
 }
 
 async function defaultWithToken(churchId, operation) {
@@ -122,39 +137,51 @@ async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
 
   const now = overrides.now || Date.now;
   const applySnapshot = overrides.applySnapshot || applyBackgroundCheckSnapshot;
-  if (refreshInFlight.has(churchId)) {
-    return refreshInFlight.get(churchId);
+  const credentialGeneration = getCredentialGeneration(churchId);
+  const activeRefresh = refreshInFlight.get(churchId);
+  if (
+    activeRefresh
+    && sameCredentialGeneration(activeRefresh.credentialGeneration, credentialGeneration)
+  ) {
+    return activeRefresh.promise;
   }
   const cached = successfulSnapshots.get(churchId);
-  if (cached && now() - cached.cachedAt < SUCCESS_CACHE_TTL_MS) {
+  if (
+    cached
+    && sameCredentialGeneration(cached.credentialGeneration, credentialGeneration)
+    && now() - cached.cachedAt < SUCCESS_CACHE_TTL_MS
+  ) {
     return applySnapshot(churchId, cached.snapshot);
   }
 
   const withToken = overrides.withToken || defaultWithToken;
   const fetchSnapshot = overrides.fetchSnapshot || fetchBackgroundCheckSnapshot;
-  const cacheGeneration = {
-    allChurches: allChurchCacheGeneration,
-    church: churchCacheGenerations.get(churchId) || 0,
-  };
   const refreshPromise = (async () => {
     const snapshot = await withToken(
       churchId,
       (accessToken) => fetchSnapshot({ accessToken })
     );
+    if (!isCredentialGenerationCurrent(churchId, credentialGeneration)) {
+      return refreshBackgroundCheckStatuses(churchId, overrides);
+    }
     const result = await applySnapshot(churchId, snapshot);
-    if (
-      allChurchCacheGeneration === cacheGeneration.allChurches
-      && (churchCacheGenerations.get(churchId) || 0) === cacheGeneration.church
-    ) {
-      successfulSnapshots.set(churchId, { snapshot, cachedAt: now() });
+    if (isCredentialGenerationCurrent(churchId, credentialGeneration)) {
+      successfulSnapshots.set(churchId, {
+        snapshot,
+        cachedAt: now(),
+        credentialGeneration,
+      });
     }
     return result;
   })();
-  refreshInFlight.set(churchId, refreshPromise);
+  const refreshEntry = { credentialGeneration, promise: refreshPromise };
+  refreshInFlight.set(churchId, refreshEntry);
   try {
     return await refreshPromise;
   } finally {
-    refreshInFlight.delete(churchId);
+    if (refreshInFlight.get(churchId) === refreshEntry) {
+      refreshInFlight.delete(churchId);
+    }
   }
 }
 

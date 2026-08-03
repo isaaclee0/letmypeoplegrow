@@ -793,6 +793,16 @@ CREATE INDEX IF NOT EXISTS idx_cn_contact ON contact_notifications(contact_id);
 CREATE INDEX IF NOT EXISTS idx_cn_church ON contact_notifications(church_id);
 `;
 
+const INDIVIDUALS_UPDATED_AT_TRIGGER = `
+CREATE TRIGGER IF NOT EXISTS individuals_updated_at
+AFTER UPDATE OF
+  id, first_name, last_name, people_type, last_attendance_date, family_id,
+  is_child, is_active, is_visitor, created_by, church_id, created_at,
+  badge_text, badge_color, badge_icon, planning_center_id, pco_link_declined
+ON individuals
+BEGIN UPDATE individuals SET updated_at = datetime('now') WHERE id = NEW.id; END;
+`;
+
 const UPDATED_AT_TRIGGERS = `
 CREATE TRIGGER IF NOT EXISTS users_updated_at AFTER UPDATE ON users
 BEGIN UPDATE users SET updated_at = datetime('now') WHERE id = NEW.id; END;
@@ -806,8 +816,7 @@ BEGIN UPDATE gathering_types SET updated_at = datetime('now') WHERE id = NEW.id;
 CREATE TRIGGER IF NOT EXISTS families_updated_at AFTER UPDATE ON families
 BEGIN UPDATE families SET updated_at = datetime('now') WHERE id = NEW.id; END;
 
-CREATE TRIGGER IF NOT EXISTS individuals_updated_at AFTER UPDATE ON individuals
-BEGIN UPDATE individuals SET updated_at = datetime('now') WHERE id = NEW.id; END;
+${INDIVIDUALS_UPDATED_AT_TRIGGER}
 
 CREATE TRIGGER IF NOT EXISTS attendance_sessions_updated_at AFTER UPDATE ON attendance_sessions
 BEGIN UPDATE attendance_sessions SET updated_at = datetime('now') WHERE id = NEW.id; END;
@@ -834,4 +843,10 @@ CREATE TRIGGER IF NOT EXISTS contacts_updated_at AFTER UPDATE ON contacts
 BEGIN UPDATE contacts SET updated_at = datetime('now') WHERE id = NEW.id; END;
 `;
 
-module.exports = { REGISTRY_SCHEMA, CHURCH_SCHEMA, PROVIDER_NEUTRAL_SYNC_SCHEMA, UPDATED_AT_TRIGGERS };
+module.exports = {
+  REGISTRY_SCHEMA,
+  CHURCH_SCHEMA,
+  PROVIDER_NEUTRAL_SYNC_SCHEMA,
+  UPDATED_AT_TRIGGERS,
+  INDIVIDUALS_UPDATED_AT_TRIGGER,
+};

@@ -208,47 +208,67 @@ test('refresh joins the first apply after the provider fetch has completed', asy
   assert.deepEqual(results, [applyResult, applyResult]);
 });
 
-test('invalidation during an active fetch prevents that fetch from repopulating the cache', async () => {
+test('invalidation during an active fetch discards stale account work and retries with fresh credentials', async () => {
   invalidateBackgroundCheckStatusCache();
-  let providerReads = 0;
+  let currentToken = 'old-account-token';
+  const providerReads = [];
+  const localApplies = [];
   let markFirstFetchStarted;
   let releaseFirstFetch;
   const firstFetchStarted = new Promise((resolve) => { markFirstFetchStarted = resolve; });
   const firstFetchRelease = new Promise((resolve) => { releaseFirstFetch = resolve; });
-  const remoteSnapshot = {
+  const staleSnapshot = {
     fetchedAt: '2026-08-03T05:00:00.000Z',
     complete: true,
-    people: [],
+    people: [{ id: 'p1', passedBackgroundCheck: false }],
+  };
+  const freshSnapshot = {
+    fetchedAt: '2026-08-03T05:01:00.000Z',
+    complete: true,
+    people: [{ id: 'p1', passedBackgroundCheck: true }],
   };
   const overrides = {
     isTrackingEnabled: async () => true,
     now: () => 1_000,
-    withToken: async (_churchId, operation) => operation('token'),
-    fetchSnapshot: async () => {
-      providerReads += 1;
-      if (providerReads === 1) {
+    withToken: async (_churchId, operation) => operation(currentToken),
+    fetchSnapshot: async ({ accessToken }) => {
+      providerReads.push(accessToken);
+      if (accessToken === 'old-account-token') {
         markFirstFetchStarted();
         await firstFetchRelease;
+        return staleSnapshot;
       }
-      return remoteSnapshot;
+      return freshSnapshot;
     },
-    applySnapshot: async () => ({
-      fetchedAt: remoteSnapshot.fetchedAt,
-      updated: 0,
-      cleared: 0,
-      notCleared: 0,
-      unknown: 0,
-    }),
+    applySnapshot: async (_churchId, snapshot) => {
+      localApplies.push(snapshot);
+      return {
+        fetchedAt: snapshot.fetchedAt,
+        updated: 1,
+        cleared: snapshot === freshSnapshot ? 1 : 0,
+        notCleared: snapshot === staleSnapshot ? 1 : 0,
+        unknown: 0,
+      };
+    },
   };
 
   const activeRefresh = refreshBackgroundCheckStatuses('church-a', overrides);
   await firstFetchStarted;
+  currentToken = 'fresh-account-token';
   invalidateBackgroundCheckStatusCache('church-a');
   releaseFirstFetch();
-  await activeRefresh;
-  await refreshBackgroundCheckStatuses('church-a', overrides);
 
-  assert.equal(providerReads, 2);
+  const result = await activeRefresh;
+
+  assert.deepEqual(providerReads, ['old-account-token', 'fresh-account-token']);
+  assert.deepEqual(localApplies, [freshSnapshot]);
+  assert.deepEqual(result, {
+    fetchedAt: freshSnapshot.fetchedAt,
+    updated: 1,
+    cleared: 1,
+    notCleared: 0,
+    unknown: 0,
+  });
 });
 
 test('refresh singleflight is isolated per church', async () => {

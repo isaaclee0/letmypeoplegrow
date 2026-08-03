@@ -10,6 +10,7 @@ const {
   assertPlanningCenterBatchOperational,
 } = require('../services/peopleSync/legacyBatch');
 const pcoSync = require('../services/planningCenterSync');
+const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
@@ -1024,6 +1025,7 @@ router.get('/planning-center/callback', async (req, res) => {
       connectedBy: connectUserId,
       metadata: { accountName },
     });
+    backgroundCheckSync.invalidateBackgroundCheckStatusCache(connectChurchId);
 
     // Re-validate returnTo on the way out (defense in depth).
     if (returnTo && /^\/app\//.test(returnTo)) {
@@ -1047,6 +1049,7 @@ router.post('/planning-center/disconnect', async (req, res) => {
     // church-wide (see getChurchPlanningCenterTokens), so disconnect must be too
     // or a non-connecting admin's click would silently no-op.
     await pcoCredentialMigration.disconnectConnection(churchId);
+    backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
     res.json({ success: true, message: 'Planning Center disconnected successfully.' });
   } catch (error) {
     if (error instanceof pcoCredentialMigration.PcoAuthorityConnectionRequiredError) {

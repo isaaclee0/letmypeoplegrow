@@ -5,13 +5,14 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { applyBackgroundCheckSnapshot } = require('./backgroundCheckSync');
 
 async function seedIndividual(churchId, {
-  planningCenterId = null, isActive = true, cleared = null,
+  planningCenterId = null, isActive = true, cleared = null, updatedAt = null,
 } = {}) {
   const result = await Database.query(
     `INSERT INTO individuals
-       (first_name, last_name, church_id, is_active, planning_center_id, pco_background_check_cleared)
-     VALUES ('Test', 'Person', ?, ?, ?, ?)`,
-    [churchId, isActive ? 1 : 0, planningCenterId, cleared]
+       (first_name, last_name, church_id, is_active, planning_center_id,
+        pco_background_check_cleared, updated_at)
+     VALUES ('Test', 'Person', ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
+    [churchId, isActive ? 1 : 0, planningCenterId, cleared, updatedAt]
   );
   return result.insertId;
 }
@@ -33,21 +34,59 @@ const snapshot = (people) => ({
 test('applies true, false, and unknown to active and archived PCO-ID-only people', async () => {
   await withTestChurchDb(async (churchId) => {
     const clearedId = await seedIndividual(churchId, { planningCenterId: 'pco-1' });
-    const failedId = await seedIndividual(churchId, { planningCenterId: 'pco-2', isActive: false });
+    const failedId = await seedIndividual(churchId, {
+      planningCenterId: 'pco-2', isActive: false, cleared: 1,
+    });
     const unknownId = await seedIndividual(churchId, { planningCenterId: 'pco-3', cleared: 1 });
+    const rawUnknownId = await seedIndividual(churchId, { planningCenterId: 'pco-4', cleared: 1 });
 
     const result = await applyBackgroundCheckSnapshot(churchId, snapshot([
       { id: 'pco-1', passedBackgroundCheck: true },
       { id: 'pco-2', passedBackgroundCheck: false },
       { id: 'pco-3', passedBackgroundCheck: null },
+      { id: 'pco-4', passedBackgroundCheck: 'not-a-boolean' },
     ]));
     assert.deepEqual(result, {
       fetchedAt: '2026-08-03T05:00:00.000Z',
-      updated: 3, cleared: 1, notCleared: 1, unknown: 1,
+      updated: 4, cleared: 1, notCleared: 1, unknown: 2,
     });
     assert.equal(await getCleared(clearedId), 1);
     assert.equal(await getCleared(failedId), 0);
     assert.equal(await getCleared(unknownId), null);
+    assert.equal(await getCleared(rawUnknownId), null);
+  });
+});
+
+test('background-check projection preserves updated_at while person edits still advance it', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const oldUpdatedAt = '2001-02-03 04:05:06.789';
+    const individualId = await seedIndividual(churchId, {
+      planningCenterId: 'pco-timestamp', cleared: 0, updatedAt: oldUpdatedAt,
+    });
+
+    await applyBackgroundCheckSnapshot(churchId, snapshot([
+      { id: 'pco-timestamp', passedBackgroundCheck: true },
+    ]));
+
+    const afterProjection = (await Database.query(
+      `SELECT pco_background_check_cleared AS cleared, updated_at AS updatedAt
+         FROM individuals WHERE id = ? AND church_id = ?`,
+      [individualId, churchId]
+    ))[0];
+    assert.deepEqual(afterProjection, { cleared: 1, updatedAt: oldUpdatedAt });
+
+    await Database.query(
+      `UPDATE individuals SET first_name = 'Changed'
+        WHERE id = ? AND church_id = ?`,
+      [individualId, churchId]
+    );
+    const afterPersonEdit = (await Database.query(
+      `SELECT first_name AS firstName, updated_at AS updatedAt
+         FROM individuals WHERE id = ? AND church_id = ?`,
+      [individualId, churchId]
+    ))[0];
+    assert.equal(afterPersonEdit.firstName, 'Changed');
+    assert.notEqual(afterPersonEdit.updatedAt, oldUpdatedAt);
   });
 });
 

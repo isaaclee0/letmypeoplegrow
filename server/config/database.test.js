@@ -253,6 +253,62 @@ test('unlinkUserLookup: returns false when no matching row exists', async () => 
   });
 });
 
+test('getChurchDb replaces the legacy individuals timestamp trigger on an existing church database', async () => {
+  // Catches changing only CREATE TRIGGER IF NOT EXISTS in schema.js, which
+  // leaves the unconditional deployed trigger in place after a restart.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    const oldUpdatedAt = '2001-02-03 04:05:06.789';
+    const individualId = Number(db.prepare(
+      `INSERT INTO individuals
+        (first_name, last_name, church_id, planning_center_id,
+         pco_background_check_cleared, updated_at)
+       VALUES ('Legacy', 'Trigger', ?, 'pco-legacy-trigger', 0, ?)`
+    ).run(churchId, oldUpdatedAt).lastInsertRowid);
+    db.exec(`
+      DROP TRIGGER individuals_updated_at;
+      CREATE TRIGGER individuals_updated_at AFTER UPDATE ON individuals
+      BEGIN UPDATE individuals SET updated_at = datetime('now') WHERE id = NEW.id; END;
+    `);
+    db.prepare(
+      "DELETE FROM migrations WHERE version = 'v2.2.0_individuals_background_check_timestamp'"
+    ).run();
+
+    Database.closeChurchDb(churchId);
+    const migrated = Database.getChurchDb(churchId);
+    migrated.prepare(
+      `UPDATE individuals SET pco_background_check_cleared = 1
+        WHERE id = ? AND church_id = ?`
+    ).run(individualId, churchId);
+    assert.strictEqual(
+      migrated.prepare(
+        'SELECT updated_at FROM individuals WHERE id = ? AND church_id = ?'
+      ).get(individualId, churchId).updated_at,
+      oldUpdatedAt,
+      'background-only projection must retain the exact stored timestamp'
+    );
+
+    migrated.prepare(
+      `UPDATE individuals SET last_name = 'Edited'
+        WHERE id = ? AND church_id = ?`
+    ).run(individualId, churchId);
+    assert.notStrictEqual(
+      migrated.prepare(
+        'SELECT updated_at FROM individuals WHERE id = ? AND church_id = ?'
+      ).get(individualId, churchId).updated_at,
+      oldUpdatedAt,
+      'a normal person edit must still advance updated_at'
+    );
+    assert.deepStrictEqual(
+      migrated.prepare(
+        "SELECT status FROM migrations WHERE version = 'v2.2.0_individuals_background_check_timestamp'"
+      ).get(),
+      { status: 'success' },
+      'the deployed-trigger correction must be recorded as a completed runtime migration'
+    );
+  });
+});
+
 test('getChurchDb migrates an existing PCO database to generic provenance and backfills it once', async () => {
   // Catches an upgrade that creates neutral tables for new churches but leaves
   // existing PCO roster ownership, scheduled authority, or links unavailable
@@ -808,6 +864,14 @@ test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique
     process.env.CHURCH_DATA_DIR = tempDir;
     Database.initialize();
     const migrated = Database.getChurchDb(churchId);
+
+    assert.doesNotThrow(
+      () => migrated.prepare(
+        `UPDATE individuals SET first_name = 'Updated'
+          WHERE church_id = ? AND planning_center_id = 'legacy-unique-id'`
+      ).run(churchId),
+      'an old database without updated_at must not receive an unusable timestamp trigger'
+    );
 
     assert.strictEqual(
       migrated.prepare('SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND planning_center_id = ?')

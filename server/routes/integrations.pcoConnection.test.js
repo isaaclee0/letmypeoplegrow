@@ -3,12 +3,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const https = require('node:https');
+const { EventEmitter } = require('node:events');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const connectionStore = require('../services/peopleSync/connectionStore');
 const pcoSync = require('../services/planningCenterSync');
+const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
 const integrationsRouter = require('./integrations');
 
 async function withCredentialKey(run) {
@@ -67,7 +70,15 @@ async function startApp(churchId) {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       });
-      return { status: response.status, body: await response.json() };
+      const contentType = response.headers.get('content-type') || '';
+      const body = contentType.includes('application/json')
+        ? await response.json()
+        : await response.text();
+      return {
+        status: response.status,
+        body,
+        location: response.headers.get('location'),
+      };
     },
     async close() {
       await new Promise((resolve) => server.close(resolve));
@@ -75,6 +86,60 @@ async function startApp(churchId) {
       else process.env.JWT_SECRET = previousSecret;
     },
   };
+}
+
+function makeBackgroundRefreshHarness(churchId) {
+  let providerReads = 0;
+  const snapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+  return {
+    async refresh() {
+      return backgroundCheckSync.refreshBackgroundCheckStatuses(churchId, {
+        isTrackingEnabled: async () => true,
+        now: () => 1_000,
+        withToken: async (_scopedChurchId, operation) => operation('cache-test-token'),
+        fetchSnapshot: async () => {
+          providerReads += 1;
+          return snapshot;
+        },
+        applySnapshot: async () => ({
+          fetchedAt: snapshot.fetchedAt,
+          updated: 0,
+          cleared: 0,
+          notCleared: 0,
+          unknown: 0,
+        }),
+      });
+    },
+    providerReads: () => providerReads,
+  };
+}
+
+function mockPcoTokenExchange(t) {
+  t.mock.method(https, 'request', (_options, callback) => {
+    const request = new EventEmitter();
+    request.setTimeout = () => {};
+    request.write = () => {};
+    request.destroy = (error) => request.emit('error', error);
+    request.end = () => {
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.headers = { 'content-type': 'application/json' };
+      callback(response);
+      queueMicrotask(() => {
+        response.emit('data', JSON.stringify({
+          access_token: 'replacement-access-token',
+          refresh_token: 'replacement-refresh-token',
+          expires_in: 7200,
+        }));
+        response.emit('end');
+      });
+    };
+    return request;
+  });
 }
 
 async function seedPcoConnection(churchId) {
@@ -263,6 +328,76 @@ test('PCO status preserves typed transient credential-refresh failures without r
     if (previousEnabled === undefined) delete process.env.PLANNING_CENTER_ENABLED;
     else process.env.PLANNING_CENTER_ENABLED = previousEnabled;
   }
+});
+
+test('successful OAuth credential replacement invalidates the church background-check snapshot', async (t) => {
+  const previousClientId = process.env.PLANNING_CENTER_CLIENT_ID;
+  const previousClientSecret = process.env.PLANNING_CENTER_CLIENT_SECRET;
+  process.env.PLANNING_CENTER_CLIENT_ID = 'test-client';
+  process.env.PLANNING_CENTER_CLIENT_SECRET = 'test-secret';
+  mockPcoTokenExchange(t);
+
+  try {
+    await withRouteChurchDb(async ({ churchId, app }) => {
+      backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+      try {
+        await seedPcoConnection(churchId);
+        const backgroundRefresh = makeBackgroundRefreshHarness(churchId);
+        await backgroundRefresh.refresh();
+        assert.equal(backgroundRefresh.providerReads(), 1);
+
+        const state = Buffer.from(JSON.stringify({
+          redirectUri: 'http://localhost/api/integrations/planning-center/callback',
+        })).toString('base64');
+        await withPcoStatusStubs({
+          validatePlanningCenterToken: async () => ({
+            connected: true,
+            accountName: 'Replacement Account',
+          }),
+        }, async () => {
+          const response = await app.request(
+            `/api/integrations/planning-center/callback?code=test-code&state=${encodeURIComponent(state)}`,
+            { redirect: 'manual' }
+          );
+          assert.equal(response.status, 302);
+          assert.match(response.location, /pco_success=true/);
+        });
+
+        await backgroundRefresh.refresh();
+        assert.equal(backgroundRefresh.providerReads(), 2);
+      } finally {
+        backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+      }
+    });
+  } finally {
+    if (previousClientId === undefined) delete process.env.PLANNING_CENTER_CLIENT_ID;
+    else process.env.PLANNING_CENTER_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.PLANNING_CENTER_CLIENT_SECRET;
+    else process.env.PLANNING_CENTER_CLIENT_SECRET = previousClientSecret;
+  }
+});
+
+test('successful PCO disconnect invalidates the church background-check snapshot', async () => {
+  await withRouteChurchDb(async ({ churchId, app }) => {
+    backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+    try {
+      await seedPcoConnection(churchId);
+      const backgroundRefresh = makeBackgroundRefreshHarness(churchId);
+      await backgroundRefresh.refresh();
+      assert.equal(backgroundRefresh.providerReads(), 1);
+
+      const response = await app.request('/api/integrations/planning-center/disconnect', {
+        method: 'POST',
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.success, true);
+
+      await backgroundRefresh.refresh();
+      assert.equal(backgroundRefresh.providerReads(), 2);
+    } finally {
+      backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+    }
+  });
 });
 
 test('PCO disconnect is blocked while Planning Center is the authority provider', async () => {
