@@ -48,22 +48,46 @@ async function fetchBackgroundCheckSnapshot(options = {}) {
   return { fetchedAt: now().toISOString(), complete: true, people };
 }
 
-// pcoPeople: the array returned by planningCenterSync.js's fetchAllPcoPeople
-// / projectPerson — each entry has { id, passedBackgroundCheck, ... }.
-// Returns the number of individuals actually updated.
-async function syncBackgroundCheckStatuses(churchId, pcoPeople) {
-  let synced = 0;
-  for (const p of pcoPeople) {
-    if (typeof p.passedBackgroundCheck !== 'boolean') continue;
-    const result = await Database.query(
-      `UPDATE individuals
-          SET pco_background_check_cleared = ?
-        WHERE church_id = ? AND planning_center_id = ?`,
-      [p.passedBackgroundCheck ? 1 : 0, churchId, p.id]
-    );
-    if (result.affectedRows > 0) synced++;
+async function applyBackgroundCheckSnapshot(churchId, snapshot) {
+  if (!churchId || snapshot?.complete !== true || !Array.isArray(snapshot.people)) {
+    throw new Error('A complete Planning Center background-check snapshot is required');
   }
-  return synced;
+  const statuses = new Map(snapshot.people.map((person) => [
+    String(person.id),
+    typeof person.passedBackgroundCheck === 'boolean' ? person.passedBackgroundCheck : null,
+  ]));
+
+  return Database.transactionForChurch(churchId, async (conn) => {
+    const rows = await conn.query(
+      `SELECT id, planning_center_id
+         FROM individuals
+        WHERE church_id = ?
+          AND planning_center_id IS NOT NULL
+          AND planning_center_id <> ''
+        ORDER BY id`,
+      [churchId]
+    );
+    const counts = {
+      fetchedAt: snapshot.fetchedAt,
+      updated: 0, cleared: 0, notCleared: 0, unknown: 0,
+    };
+    for (const row of rows) {
+      const status = statuses.has(String(row.planning_center_id))
+        ? statuses.get(String(row.planning_center_id)) : null;
+      await conn.query(
+        `UPDATE individuals
+            SET pco_background_check_cleared = ?
+          WHERE id = ? AND church_id = ? AND planning_center_id = ?`,
+        [status === null ? null : status ? 1 : 0,
+          row.id, churchId, row.planning_center_id]
+      );
+      counts.updated += 1;
+      if (status === true) counts.cleared += 1;
+      else if (status === false) counts.notCleared += 1;
+      else counts.unknown += 1;
+    }
+    return counts;
+  });
 }
 
-module.exports = { fetchBackgroundCheckSnapshot, syncBackgroundCheckStatuses };
+module.exports = { fetchBackgroundCheckSnapshot, applyBackgroundCheckSnapshot };

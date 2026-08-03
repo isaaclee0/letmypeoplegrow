@@ -2,15 +2,18 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
-const { syncBackgroundCheckStatuses } = require('./backgroundCheckSync');
+const { applyBackgroundCheckSnapshot } = require('./backgroundCheckSync');
 
-async function seedIndividual(churchId, { planningCenterId = null } = {}) {
-  const res = await Database.query(
-    `INSERT INTO individuals (first_name, last_name, church_id, is_active, planning_center_id)
-     VALUES ('Test', 'Person', ?, 1, ?)`,
-    [churchId, planningCenterId]
+async function seedIndividual(churchId, {
+  planningCenterId = null, isActive = true, cleared = null,
+} = {}) {
+  const result = await Database.query(
+    `INSERT INTO individuals
+       (first_name, last_name, church_id, is_active, planning_center_id, pco_background_check_cleared)
+     VALUES ('Test', 'Person', ?, ?, ?, ?)`,
+    [churchId, isActive ? 1 : 0, planningCenterId, cleared]
   );
-  return res.insertId;
+  return result.insertId;
 }
 
 async function getCleared(individualId) {
@@ -21,54 +24,84 @@ async function getCleared(individualId) {
   return rows[0].cleared;
 }
 
-test('syncBackgroundCheckStatuses: writes 1 for a linked person with passedBackgroundCheck true', async () => {
+const snapshot = (people) => ({
+  fetchedAt: '2026-08-03T05:00:00.000Z',
+  complete: true,
+  people,
+});
+
+test('applies true, false, and unknown to active and archived PCO-ID-only people', async () => {
   await withTestChurchDb(async (churchId) => {
-    const id = await seedIndividual(churchId, { planningCenterId: 'pco_1' });
-    const synced = await syncBackgroundCheckStatuses(churchId, [
-      { id: 'pco_1', passedBackgroundCheck: true },
-    ]);
-    assert.strictEqual(synced, 1);
-    assert.strictEqual(await getCleared(id), 1);
+    const clearedId = await seedIndividual(churchId, { planningCenterId: 'pco-1' });
+    const failedId = await seedIndividual(churchId, { planningCenterId: 'pco-2', isActive: false });
+    const unknownId = await seedIndividual(churchId, { planningCenterId: 'pco-3', cleared: 1 });
+
+    const result = await applyBackgroundCheckSnapshot(churchId, snapshot([
+      { id: 'pco-1', passedBackgroundCheck: true },
+      { id: 'pco-2', passedBackgroundCheck: false },
+      { id: 'pco-3', passedBackgroundCheck: null },
+    ]));
+    assert.deepEqual(result, {
+      fetchedAt: '2026-08-03T05:00:00.000Z',
+      updated: 3, cleared: 1, notCleared: 1, unknown: 1,
+    });
+    assert.equal(await getCleared(clearedId), 1);
+    assert.equal(await getCleared(failedId), 0);
+    assert.equal(await getCleared(unknownId), null);
   });
 });
 
-test('syncBackgroundCheckStatuses: writes 0 for a linked person with passedBackgroundCheck false', async () => {
+test('clears a stale green status when a local PCO ID is absent from a complete snapshot', async () => {
   await withTestChurchDb(async (churchId) => {
-    const id = await seedIndividual(churchId, { planningCenterId: 'pco_2' });
-    await syncBackgroundCheckStatuses(churchId, [
-      { id: 'pco_2', passedBackgroundCheck: false },
-    ]);
-    assert.strictEqual(await getCleared(id), 0);
+    const individualId = await seedIndividual(churchId, {
+      planningCenterId: 'missing-from-pco', cleared: 1,
+    });
+    await applyBackgroundCheckSnapshot(churchId, snapshot([]));
+    assert.equal(await getCleared(individualId), null);
   });
 });
 
-test('syncBackgroundCheckStatuses: no-ops for PCO people not linked to any individual', async () => {
+test('does not require an external_person_links row', async () => {
   await withTestChurchDb(async (churchId) => {
-    const synced = await syncBackgroundCheckStatuses(churchId, [
-      { id: 'pco_unlinked', passedBackgroundCheck: true },
-    ]);
-    assert.strictEqual(synced, 0);
+    const individualId = await seedIndividual(churchId, {
+      planningCenterId: 'checkin-imported', isActive: false,
+    });
+    const links = await Database.query(
+      `SELECT COUNT(*) AS count FROM external_person_links
+        WHERE church_id = ? AND provider = 'planning_center'`,
+      [churchId]
+    );
+    assert.equal(links[0].count, 0);
+    await applyBackgroundCheckSnapshot(churchId, snapshot([
+      { id: 'checkin-imported', passedBackgroundCheck: true },
+    ]));
+    assert.equal(await getCleared(individualId), 1);
   });
 });
 
-test('syncBackgroundCheckStatuses: is scoped per church (church isolation)', async () => {
+test('complete snapshot apply is scoped to one church', async () => {
   await withTestChurchDb(async (churchIdA) => {
     await withTestChurchDb(async (churchIdB) => {
-      const idB = await seedIndividual(churchIdB, { planningCenterId: 'pco_shared_id' });
-      await syncBackgroundCheckStatuses(churchIdA, [
-        { id: 'pco_shared_id', passedBackgroundCheck: true },
-      ]);
-      // churchB's individual, which happens to share the same PCO id string,
-      // must not be touched by a sync run scoped to churchA.
-      assert.strictEqual(await getCleared(idB), null);
+      const idB = await seedIndividual(churchIdB, {
+        planningCenterId: 'shared-provider-id', cleared: 0,
+      });
+      await applyBackgroundCheckSnapshot(churchIdA, snapshot([
+        { id: 'shared-provider-id', passedBackgroundCheck: true },
+      ]));
+      assert.equal(await getCleared(idB), 0);
     });
   });
 });
 
-test('syncBackgroundCheckStatuses: skips entries with no passedBackgroundCheck field', async () => {
+test('rejects a partial snapshot before changing local status', async () => {
   await withTestChurchDb(async (churchId) => {
-    await seedIndividual(churchId, { planningCenterId: 'pco_3' });
-    const synced = await syncBackgroundCheckStatuses(churchId, [{ id: 'pco_3' }]);
-    assert.strictEqual(synced, 0);
+    const individualId = await seedIndividual(churchId, {
+      planningCenterId: 'pco-1', cleared: 1,
+    });
+    await assert.rejects(
+      applyBackgroundCheckSnapshot(churchId, { complete: false, people: [] }),
+      /complete Planning Center background-check snapshot/
+    );
+    assert.equal(await getCleared(individualId), 1);
   });
 });
