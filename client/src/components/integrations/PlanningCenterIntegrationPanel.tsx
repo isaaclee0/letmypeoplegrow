@@ -509,7 +509,14 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <div className="mt-3">
                     <PlanningCenterBatchEditor
                       batch={editingBatch === 'new' ? null : editingBatch}
-                      onSaved={() => { setEditingBatch(null); void reloadAfterBatchMutation(); }}
+                      onSaved={(savedBatch) => {
+                        if (editingBatch === 'new') {
+                          navigate(`/app/settings/integrations/planning-center/batches/${savedBatch.id}/review`);
+                          return;
+                        }
+                        setEditingBatch(null);
+                        void reloadAfterBatchMutation();
+                      }}
                       onCancel={() => setEditingBatch(null)}
                     />
                   </div>

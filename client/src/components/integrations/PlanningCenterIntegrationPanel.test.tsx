@@ -25,7 +25,14 @@ vi.mock('../../services/api', () => ({
   settingsAPI: { getIntegrationSettings: vi.fn(), updateIntegrationSettings: vi.fn() },
 }));
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
-vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({ default: () => <div>Batch editor</div> }));
+vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({
+  default: ({ onSaved }: { onSaved: (savedBatch: PeopleSyncBatch) => void }) => (
+    <div>
+      Batch editor
+      <button type="button" onClick={() => onSaved({ id: 48 } as PeopleSyncBatch)}>Save mocked batch</button>
+    </div>
+  ),
+}));
 vi.mock('../peopleSync/PeopleSourceControl', () => ({ default: () => <div>People source control</div> }));
 
 const settings: PeopleSyncSettings = {
@@ -92,6 +99,27 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/12/review');
     expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Planning Center batch sync review' })).not.toBeInTheDocument();
+  });
+
+  it('opens review immediately after creating a batch', async () => {
+    renderPanel();
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/48/review');
+  });
+
+  it('keeps the existing reload behavior after editing a batch', async () => {
+    renderPanel();
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
   });
 
   it('retains modern batch edit and delete mutations beside dedicated review navigation', async () => {
