@@ -350,7 +350,14 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
               <ElvantoBatchEditor
                 batch={editingBatch === 'new' ? null : editingBatch}
                 gatherings={gatherings}
-                onSaved={() => { setEditingBatch(null); void reloadAfterBatchMutation(); }}
+                onSaved={(savedBatch) => {
+                  if (editingBatch === 'new') {
+                    navigate(`/app/settings/integrations/elvanto/batches/${savedBatch.id}/review`);
+                    return;
+                  }
+                  setEditingBatch(null);
+                  void reloadAfterBatchMutation();
+                }}
                 onCancel={() => setEditingBatch(null)}
               />
             )}

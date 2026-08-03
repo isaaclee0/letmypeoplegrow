@@ -19,7 +19,14 @@ vi.mock('../../services/api', () => ({
   gatheringsAPI: { getAll: vi.fn(), create: vi.fn() },
   peopleSyncAPI: { getRuns: vi.fn(), discardSourceDraft: vi.fn(), updateSettings: vi.fn() },
 }));
-vi.mock('../elvanto/ElvantoBatchEditor', () => ({ default: () => <div>Batch editor</div> }));
+vi.mock('../elvanto/ElvantoBatchEditor', () => ({
+  default: ({ onSaved }: { onSaved: (savedBatch: PeopleSyncBatch) => void }) => (
+    <div>
+      Batch editor
+      <button type="button" onClick={() => onSaved({ id: 27 } as PeopleSyncBatch)}>Save mocked batch</button>
+    </div>
+  ),
+}));
 vi.mock('../elvanto/ElvantoGatheringImport', () => ({ default: () => null }));
 vi.mock('../peopleSync/PeopleSourceControl', () => ({ default: () => <div>People source control</div> }));
 
@@ -64,6 +71,27 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/batches/5/review');
     expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Elvanto Members sync review' })).not.toBeInTheDocument();
+  });
+
+  it('opens review immediately after creating a batch', async () => {
+    renderPanel();
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/batches/27/review');
+  });
+
+  it('keeps the existing reload behavior after editing a batch', async () => {
+    renderPanel();
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
   });
 
   it('retains batch edit and delete mutations beside dedicated review navigation', async () => {
