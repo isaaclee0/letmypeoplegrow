@@ -615,8 +615,10 @@ async function acquireCompleteProviderSources({
         const member = sourcePeopleById.get(id);
         if (!id || !member) throw sourceIncomplete(provider);
         memberIds.add(id);
+        seenMemberExternalIds.add(id);
         // Lifecycle-ineligible records remain part of the provider snapshot
-        // digest/provenance, but never become actionable or "seen" members.
+        // digest/provenance and planning input, but never become eligible for
+        // matching, creation, or gathering membership without a durable link.
         if (!adapter.isLifecycleEligible(member, settings)) {
           if (!memberPeopleById.has(id)) {
             if (!ineligibleMemberPeopleById.has(id)) {
@@ -631,7 +633,6 @@ async function acquireCompleteProviderSources({
         // earlier source. Once a source owns them as a member, the member
         // snapshot is authoritative for both matching and review display.
         contextPeopleById.delete(id);
-        seenMemberExternalIds.add(id);
         ineligibleMemberPeopleById.delete(id);
         if (!memberPeopleById.has(id)) {
           memberPeopleById.set(id, member);
@@ -712,7 +713,6 @@ async function acquireCompleteProviderSources({
     contextPeople: [...contextPeopleById.values()],
     matchingPeople: [...matchingPeopleById.values()],
     ineligibleMemberPeople: [...ineligibleMemberPeopleById.values()],
-    ignoredLifecycleExternalIds: new Set(ineligibleMemberPeopleById.keys()),
     eligibleByBatch,
     seenMemberExternalIds,
     sourceProvenance,
@@ -803,7 +803,8 @@ function matchProjectedPeople(acquired, correction, effectiveReviewState) {
   const matchingPeople = acquired.matchingPeople.filter((person) =>
     !correction.unlinkedExternalIds.has(String(person.id)));
   // Retain an ineligible record only when it protects an existing projected
-  // link from being rematched. It remains filtered from planning/presence.
+  // link from being rematched. The durable identity may reach lifecycle
+  // planning, while eligibility still prevents matching or creation.
   for (const person of acquired.ineligibleMemberPeople) {
     if (linkedExternalIds.has(String(person.id))) matchingPeople.push(person);
   }
@@ -833,12 +834,10 @@ function appendDeferredCorrectionRows(plan, unlinkedExternalIds) {
 }
 
 function computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState) {
-  const actionablePersonLinks = correction.projectedLinks.filter((link) =>
-    !acquired.ignoredLifecycleExternalIds.has(String(link.externalPersonId))
-  );
+  const planningPeople = [...acquired.snapshot.people, ...acquired.ineligibleMemberPeople];
   const plan = acquired.deps.computePeopleSyncPlan({
     provider: acquired.provider,
-    externalPeople: acquired.snapshot.people,
+    externalPeople: planningPeople,
     localPeople: acquired.individuals,
     matcher: matcherResult,
     batches: acquired.batches,
@@ -847,7 +846,7 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     authoritative: acquired.authoritative,
     activeAuthority: acquired.activeAuthority,
     trigger: acquired.trigger,
-    personLinks: actionablePersonLinks.map((link) => ({
+    personLinks: correction.projectedLinks.map((link) => ({
       externalPersonId: link.externalPersonId,
       individualId: link.individualId,
     })),
@@ -862,7 +861,7 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   });
   appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
 
-  const externalPeople = [...acquired.snapshot.people, ...acquired.contextPeople];
+  const externalPeople = [...planningPeople, ...acquired.contextPeople];
   const sourceExternalIds = correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId);
   plan.reviewContext = buildReviewContext({
     plan,

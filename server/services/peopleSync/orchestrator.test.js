@@ -1093,7 +1093,7 @@ test('an unlinked lifecycle-ineligible member cannot match or act', async () => 
   await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
 
   assert.deepEqual([...plans[0].eligibleByBatch.get(1)], ['active']);
-  assert.deepEqual(plans[0].externalPeople.map((item) => item.id), ['active']);
+  assert.deepEqual(plans[0].externalPeople.map((item) => item.id), ['active', 'archived']);
   assert.deepEqual(matchingInputs[0].map((item) => item.id), ['active']);
   assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
   assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
@@ -1143,7 +1143,7 @@ for (const sourceOrder of [
   });
 }
 
-test('a lifecycle-ineligible existing link is reserved only for safe matching and never archived', async () => {
+test('a linked terminal member reaches planning through its durable identity and proposes archive', async () => {
   const matchingInputs = [];
   const { deps, plans, applied, presence } = makeDeps({
     localIndividuals: [
@@ -1165,9 +1165,12 @@ test('a lifecycle-ineligible existing link is reserved only for safe matching an
   await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
 
   assert.deepEqual(matchingInputs[0].map((item) => item.id), ['archived'], 'only an existing link may retain terminal matching context');
-  assert.deepEqual(plans[0].externalPeople, []);
-  assert.deepEqual(plans[0].personLinks, []);
-  assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
+  assert.deepEqual(plans[0].externalPeople.map((item) => item.id), ['archived']);
+  assert.deepEqual(plans[0].personLinks, [{ externalPersonId: 'archived', individualId: 9 }]);
+  assert.deepEqual(applied[0].plan.archive, [{
+    id: 'archive:archived:9', externalPersonId: 'archived', individualId: 9,
+    reason: 'provider_state_archived',
+  }]);
   assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
   assert.equal(presence.length, 0);
 });

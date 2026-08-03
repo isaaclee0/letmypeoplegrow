@@ -247,12 +247,10 @@ function addLifecycleAndManagedActions(context) {
       continue;
     }
 
-    if (canManage && isActive(localPerson) && (isTerminalState(state) || !included)) {
-      const reason = isTerminalState(state) ? `provider_state_${state}` :
-        state === 'contact' && input.settings?.includeContacts === false ? 'contact_excluded' : 'no_longer_eligible';
+    if (canManage && isActive(localPerson) && isTerminalState(state)) {
       plan.archive.push({
         id: actionId('archive', externalPersonId, individualId), externalPersonId, individualId,
-        reason,
+        reason: `provider_state_${state}`,
       });
       continue;
     }

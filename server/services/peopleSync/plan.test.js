@@ -123,16 +123,18 @@ test('maps new Active people to regulars and included Contacts to local visitors
   ]);
 });
 
-test('excluded Contacts leave the authoritative population and propose archive when linked', () => {
+test('source-rule exclusions never archive linked non-terminal people', () => {
+  const active = computePeopleSyncPlan(input({
+    externalPeople: [person({ state: 'active' })],
+    batches: [batch({ eligibleExternalPersonIds: [] })],
+  }));
   const plan = computePeopleSyncPlan(input({
     settings: { includeContacts: false, alignPeopleType: true },
     externalPeople: [person({ state: 'contact' })],
   }));
 
-  assert.deepEqual(plan.archive, [{
-    id: 'archive:ext-1:1', externalPersonId: 'ext-1', individualId: 1,
-    reason: 'contact_excluded',
-  }]);
+  assert.deepEqual(active.archive, []);
+  assert.deepEqual(plan.archive, []);
 });
 
 test('people type alignment off preserves an existing linked type', () => {
