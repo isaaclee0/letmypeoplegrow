@@ -17,6 +17,8 @@ const API = 'https://api.planningcenteronline.com/people/v2';
 const SUCCESS_CACHE_TTL_MS = 60 * 1000;
 const successfulSnapshots = new Map();
 const refreshInFlight = new Map();
+let allChurchCacheGeneration = 0;
+const churchCacheGenerations = new Map();
 
 function projectBackgroundCheckPerson(resource) {
   const id = resource?.id === null || resource?.id === undefined
@@ -95,8 +97,17 @@ async function applyBackgroundCheckSnapshot(churchId, snapshot) {
 }
 
 function invalidateBackgroundCheckStatusCache(churchId) {
-  if (churchId) successfulSnapshots.delete(churchId);
-  else successfulSnapshots.clear();
+  if (churchId) {
+    successfulSnapshots.delete(churchId);
+    churchCacheGenerations.set(
+      churchId,
+      (churchCacheGenerations.get(churchId) || 0) + 1
+    );
+  } else {
+    successfulSnapshots.clear();
+    allChurchCacheGeneration += 1;
+    churchCacheGenerations.clear();
+  }
 }
 
 async function defaultWithToken(churchId, operation) {
@@ -111,23 +122,33 @@ async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
 
   const now = overrides.now || Date.now;
   const applySnapshot = overrides.applySnapshot || applyBackgroundCheckSnapshot;
+  if (refreshInFlight.has(churchId)) {
+    return refreshInFlight.get(churchId);
+  }
   const cached = successfulSnapshots.get(churchId);
   if (cached && now() - cached.cachedAt < SUCCESS_CACHE_TTL_MS) {
     return applySnapshot(churchId, cached.snapshot);
   }
-  if (refreshInFlight.has(churchId)) {
-    return refreshInFlight.get(churchId);
-  }
 
   const withToken = overrides.withToken || defaultWithToken;
   const fetchSnapshot = overrides.fetchSnapshot || fetchBackgroundCheckSnapshot;
+  const cacheGeneration = {
+    allChurches: allChurchCacheGeneration,
+    church: churchCacheGenerations.get(churchId) || 0,
+  };
   const refreshPromise = (async () => {
     const snapshot = await withToken(
       churchId,
       (accessToken) => fetchSnapshot({ accessToken })
     );
-    successfulSnapshots.set(churchId, { snapshot, cachedAt: now() });
-    return applySnapshot(churchId, snapshot);
+    const result = await applySnapshot(churchId, snapshot);
+    if (
+      allChurchCacheGeneration === cacheGeneration.allChurches
+      && (churchCacheGenerations.get(churchId) || 0) === cacheGeneration.church
+    ) {
+      successfulSnapshots.set(churchId, { snapshot, cachedAt: now() });
+    }
+    return result;
   })();
   refreshInFlight.set(churchId, refreshPromise);
   try {

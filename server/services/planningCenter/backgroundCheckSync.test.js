@@ -159,6 +159,98 @@ test('refresh coalesces concurrent work and re-applies a recent successful snaps
   assert.equal(localApplies, 2);
 });
 
+test('refresh joins the first apply after the provider fetch has completed', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let providerReads = 0;
+  let localApplies = 0;
+  let markFirstApplyStarted;
+  let releaseFirstApply;
+  const firstApplyStarted = new Promise((resolve) => { markFirstApplyStarted = resolve; });
+  const firstApplyRelease = new Promise((resolve) => { releaseFirstApply = resolve; });
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+  const applyResult = {
+    fetchedAt: remoteSnapshot.fetchedAt,
+    updated: 0,
+    cleared: 0,
+    notCleared: 0,
+    unknown: 0,
+  };
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    now: () => 1_000,
+    withToken: async (_churchId, operation) => operation('token'),
+    fetchSnapshot: async () => { providerReads += 1; return remoteSnapshot; },
+    applySnapshot: async () => {
+      localApplies += 1;
+      if (localApplies === 1) {
+        markFirstApplyStarted();
+        await firstApplyRelease;
+      }
+      return applyResult;
+    },
+  };
+
+  const firstRefresh = refreshBackgroundCheckStatuses('church-a', overrides);
+  await firstApplyStarted;
+  const arrivingRefresh = refreshBackgroundCheckStatuses('church-a', overrides);
+  await new Promise((resolve) => setImmediate(resolve));
+  const appliesWhileFirstIsActive = localApplies;
+  releaseFirstApply();
+  const results = await Promise.all([firstRefresh, arrivingRefresh]);
+
+  assert.equal(providerReads, 1);
+  assert.equal(appliesWhileFirstIsActive, 1);
+  assert.equal(localApplies, 1);
+  assert.deepEqual(results, [applyResult, applyResult]);
+});
+
+test('invalidation during an active fetch prevents that fetch from repopulating the cache', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let providerReads = 0;
+  let markFirstFetchStarted;
+  let releaseFirstFetch;
+  const firstFetchStarted = new Promise((resolve) => { markFirstFetchStarted = resolve; });
+  const firstFetchRelease = new Promise((resolve) => { releaseFirstFetch = resolve; });
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    now: () => 1_000,
+    withToken: async (_churchId, operation) => operation('token'),
+    fetchSnapshot: async () => {
+      providerReads += 1;
+      if (providerReads === 1) {
+        markFirstFetchStarted();
+        await firstFetchRelease;
+      }
+      return remoteSnapshot;
+    },
+    applySnapshot: async () => ({
+      fetchedAt: remoteSnapshot.fetchedAt,
+      updated: 0,
+      cleared: 0,
+      notCleared: 0,
+      unknown: 0,
+    }),
+  };
+
+  const activeRefresh = refreshBackgroundCheckStatuses('church-a', overrides);
+  await firstFetchStarted;
+  invalidateBackgroundCheckStatusCache('church-a');
+  releaseFirstFetch();
+  await activeRefresh;
+  await refreshBackgroundCheckStatuses('church-a', overrides);
+
+  assert.equal(providerReads, 2);
+});
+
 test('refresh singleflight is isolated per church', async () => {
   invalidateBackgroundCheckStatusCache();
   const providerReads = [];
