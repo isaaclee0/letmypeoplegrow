@@ -9,6 +9,7 @@ const COUNT_KEYS = new Set([
   'demoteToLocalVisitor', 'archive', 'reactivate', 'moveFamily', 'renameFamily', 'addToGathering',
   'removeFromGathering', 'ambiguousPeople', 'familyConflicts', 'unmatchedLocalRegulars', 'skipped',
   'familyNamesUpdated', 'gatheringAssigned', 'gatheringRemoved',
+  'backgroundCheckSynced', 'backgroundCheckSyncFailed',
 ]);
 const CREDENTIAL_KEYS = new Set(['apikey', 'accesstoken', 'refreshtoken', 'credential', 'authorization', 'password', 'secret', 'token']);
 const SOURCE_PROVENANCE_KEYS = Object.freeze([

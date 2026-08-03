@@ -23,6 +23,22 @@ test('runs record only camel-cased safe audit fields and provider/church scoped 
   });
 });
 
+test('Planning Center runs persist supplementary background-check outcome counts', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const run = await startRun({
+      churchId, provider: 'planning_center', batchId: null, trigger: 'manual', fetchMode: 'full',
+    });
+    const counts = { backgroundCheckSynced: 7, backgroundCheckSyncFailed: 0 };
+
+    const finished = await finishRun({
+      churchId, provider: 'planning_center', runId: run.id, status: 'applied', counts,
+    });
+
+    assert.deepEqual(finished.counts, counts);
+    assert.deepEqual((await listRecentRuns(churchId, 'planning_center'))[0].counts, counts);
+  });
+});
+
 test('audit writes reject raw provider payloads and credential-shaped fields recursively', async () => {
   await withTestChurchDb(async (churchId) => {
     await assert.rejects(

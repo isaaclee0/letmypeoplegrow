@@ -158,10 +158,131 @@ function makeDeps({
     verifyReviewToken: () => verifyResult,
     isReviewTokenApplied: async () => false,
     notifyReviewRequired: async () => ({ notified: true }),
+    refreshBackgroundCheckStatuses: async () => ({
+      fetchedAt: '2026-08-03T05:00:00.000Z',
+      updated: 0, cleared: 0, notCleared: 0, unknown: 0,
+    }),
     ...extra,
   };
   return { deps, events, finished, failed, applied, presence, availableHealth, failedHealth, plans };
 }
+
+function pcoApplyDeps(extra = {}) {
+  const pcoSource = { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' };
+  return makeDeps({
+    batches: [batch({ id: 1, provider: 'planning_center', source: pcoSource })],
+    authorityState: { active: 'planning_center', pending: null },
+    extra: {
+      getProvider: () => ({
+        provider: 'planning_center',
+        validateConnection: async () => ({ ok: true }),
+        listSources: async () => [],
+        fetchSourceSnapshot: async () => ({
+          provider: 'planning_center', source: pcoSource, complete: true,
+          fetchedAt: '2026-08-03T04:00:00.000Z', providerRefreshedAt: null,
+          memberExternalIds: ['pco-1'],
+          people: [person('pco-1')], contextPeople: [], families: [],
+        }),
+        isLifecycleEligible: () => true,
+      }),
+      ...extra,
+    },
+  });
+}
+
+test('reviewed PCO apply refreshes supplementary background checks after roster apply', async () => {
+  const order = [];
+  const refreshedChurches = [];
+  const { deps, finished } = pcoApplyDeps({
+    applyPeopleSyncPlan: async () => { order.push('apply'); return emptyApplyResult(); },
+    refreshBackgroundCheckStatuses: async (churchId) => {
+      order.push('background');
+      refreshedChurches.push(churchId);
+      return { fetchedAt: '2026-08-03T05:00:00.000Z', updated: 7, cleared: 3, notCleared: 2, unknown: 2 };
+    },
+  });
+  const result = await applyReviewed({
+    churchId: 'church-a', provider: 'planning_center', batchId: 1,
+    reviewToken: 'valid-review', selections: {}, userId: 1,
+  }, deps);
+
+  assert.deepEqual(order, ['apply', 'background']);
+  assert.deepEqual(refreshedChurches, ['church-a']);
+  assert.equal(result.applied.backgroundCheckSynced, 7);
+  assert.equal(result.applied.backgroundCheckSyncFailed, 0);
+  assert.equal(finished[0].counts.backgroundCheckSynced, 7);
+});
+
+test('unattended PCO apply refreshes background checks once', async () => {
+  let refreshes = 0;
+  const { deps } = pcoApplyDeps({
+    refreshBackgroundCheckStatuses: async () => {
+      refreshes += 1;
+      return { fetchedAt: '2026-08-03T05:00:00.000Z', updated: 5, cleared: 5, notCleared: 0, unknown: 0 };
+    },
+  });
+  const result = await runUnattended({
+    churchId: 'church-a', provider: 'planning_center', batchId: 1,
+  }, deps);
+
+  assert.equal(refreshes, 1);
+  assert.equal(result.counts.backgroundCheckSynced, 5);
+  assert.equal(result.counts.backgroundCheckSyncFailed, 0);
+});
+
+test('background-check failure cannot fail an already-applied PCO run', async () => {
+  const { deps, finished, failed } = pcoApplyDeps({
+    refreshBackgroundCheckStatuses: async () => { throw new Error('supplementary read failed'); },
+  });
+  const result = await runUnattended({
+    churchId: 'church-a', provider: 'planning_center', batchId: 1,
+  }, deps);
+
+  assert.equal(result.status, 'applied');
+  assert.equal(result.counts.backgroundCheckSynced, 0);
+  assert.equal(result.counts.backgroundCheckSyncFailed, 1);
+  assert.equal(finished[0].status, 'applied');
+  assert.equal(finished[0].counts.backgroundCheckSyncFailed, 1);
+  assert.equal(failed.length, 0);
+});
+
+test('Elvanto apply and PCO preview do not refresh background checks', async () => {
+  let refreshes = 0;
+  const elvanto = makeDeps({ extra: {
+    refreshBackgroundCheckStatuses: async () => { refreshes += 1; },
+  } });
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, elvanto.deps);
+
+  const pco = pcoApplyDeps({
+    refreshBackgroundCheckStatuses: async () => { refreshes += 1; },
+  });
+  await buildReview({
+    churchId: 'church-a', provider: 'planning_center', batchId: 1, trigger: 'manual',
+  }, pco.deps);
+
+  assert.equal(refreshes, 0);
+});
+
+test('failed PCO roster apply does not fetch supplementary background checks', async () => {
+  let refreshes = 0;
+  const applyError = Object.assign(new Error('transaction aborted'), { code: 'SYNC_PLAN_STALE', status: 409 });
+  const { deps, finished, failed } = pcoApplyDeps({
+    applyPeopleSyncPlan: async () => { throw applyError; },
+    refreshBackgroundCheckStatuses: async () => { refreshes += 1; },
+  });
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'planning_center', batchId: 1,
+      reviewToken: 'valid-review', selections: {}, userId: 1,
+    }, deps),
+    (error) => error instanceof OrchestratorError && error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+  );
+
+  assert.equal(refreshes, 0);
+  assert.equal(finished.length, 0);
+  assert.equal(failed.length, 1);
+});
 
 function correctionPreviewDeps() {
   const providerReads = [];
