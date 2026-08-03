@@ -2,7 +2,13 @@ const BetterSqlite3 = require('better-sqlite3');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('path');
 const fs = require('fs');
-const { REGISTRY_SCHEMA, CHURCH_SCHEMA, PROVIDER_NEUTRAL_SYNC_SCHEMA, UPDATED_AT_TRIGGERS } = require('./schema');
+const {
+  REGISTRY_SCHEMA,
+  CHURCH_SCHEMA,
+  PROVIDER_NEUTRAL_SYNC_SCHEMA,
+  UPDATED_AT_TRIGGER_DEFINITIONS,
+  INDIVIDUALS_UPDATED_AT_TRIGGER,
+} = require('./schema');
 const { randomUUID } = require('crypto');
 
 const asyncLocalStorage = new AsyncLocalStorage();
@@ -15,6 +21,12 @@ const SCHEDULED_PCO_AUTHORITY_MIGRATION = Object.freeze({
   version: 'v2.2.0_scheduled_pco_authority',
   name: 'scheduled_pco_authority',
   description: 'Preserve scheduled Planning Center sync as the strict managed people authority',
+});
+
+const INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION = Object.freeze({
+  version: 'v2.2.0_individuals_background_check_timestamp',
+  name: 'individuals_background_check_timestamp',
+  description: 'Preserve person updated_at during supplementary PCO background-check projection',
 });
 
 function ensureMigrationTrackingSchema(db) {
@@ -75,6 +87,55 @@ function migrateScheduledPcoAuthority(db, churchId) {
 
     markScheduledPcoAuthorityMigrationApplied(db);
   })();
+}
+
+function migrateIndividualsBackgroundCheckTimestamp(db) {
+  const individualColumns = db.prepare('PRAGMA table_info(individuals)').all();
+  if (!individualColumns.some((column) => column.name === 'updated_at')) {
+    db.exec('DROP TRIGGER IF EXISTS individuals_updated_at');
+    return;
+  }
+
+  ensureMigrationTrackingSchema(db);
+  db.transaction(() => {
+    const alreadyApplied = db.prepare(
+      "SELECT 1 FROM migrations WHERE version = ? AND status = 'success' LIMIT 1"
+    ).get(INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION.version);
+    if (alreadyApplied) return;
+
+    db.exec('DROP TRIGGER IF EXISTS individuals_updated_at');
+    db.exec(INDIVIDUALS_UPDATED_AT_TRIGGER);
+    db.prepare(`INSERT INTO migrations
+      (version, name, description, execution_time_ms, status, executed_at)
+      VALUES (?, ?, ?, 0, 'success', datetime('now'))
+      ON CONFLICT(version) DO UPDATE SET
+        name = excluded.name,
+        description = excluded.description,
+        execution_time_ms = excluded.execution_time_ms,
+        status = excluded.status,
+        executed_at = excluded.executed_at,
+        error_message = NULL`).run(
+      INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION.version,
+      INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION.name,
+      INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION.description
+    );
+  })();
+}
+
+function ensureCompatibleUpdatedAtTriggers(db) {
+  for (const definition of UPDATED_AT_TRIGGER_DEFINITIONS) {
+    const tableExists = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+    ).get(definition.table);
+    const columns = tableExists
+      ? db.prepare(`PRAGMA table_info("${definition.table}")`).all()
+      : [];
+    if (!columns.some((column) => column.name === 'updated_at')) {
+      db.exec(`DROP TRIGGER IF EXISTS "${definition.name}"`);
+      continue;
+    }
+    db.exec(definition.sql);
+  }
 }
 
 function ensureProviderNeutralSyncSchema(db) {
@@ -310,7 +371,6 @@ class Database {
 
     if (isNew) {
       db.exec(CHURCH_SCHEMA);
-      db.exec(UPDATED_AT_TRIGGERS);
       // Fresh churches use the reviewed provider-neutral authority flow and
       // must never be auto-promoted merely because they later schedule a PCO
       // batch. Only databases that predate this marker receive the legacy
@@ -589,6 +649,12 @@ class Database {
       backfillProviderNeutralSync(db, churchId);
     }
 
+    // Existing SQLite triggers are not replaced by CREATE TRIGGER IF NOT
+    // EXISTS. Recreate this one transactionally once per church so deployed
+    // databases gain the background-only timestamp exception too.
+    migrateIndividualsBackgroundCheckTimestamp(db);
+    ensureCompatibleUpdatedAtTriggers(db);
+
     churchDbs.set(churchId, db);
     return db;
   }
@@ -596,7 +662,7 @@ class Database {
   static ensureChurchSchema(churchId) {
     const db = Database.getChurchDb(churchId);
     ensureProviderNeutralSyncSchema(db);
-    db.exec(UPDATED_AT_TRIGGERS);
+    ensureCompatibleUpdatedAtTriggers(db);
     backfillProviderNeutralSync(db, churchId);
   }
 

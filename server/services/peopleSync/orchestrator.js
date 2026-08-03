@@ -53,6 +53,7 @@ const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
 const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
 const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRetiredPlanningCenterBatch } = require('./legacyBatch');
+const backgroundCheckSync = require('../planningCenter/backgroundCheckSync');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
@@ -184,6 +185,7 @@ const defaultDeps = {
   recordActiveSourceAvailable,
   recordActiveSourceFailure,
   getUnattendedProviderEnabled: unattendedPolicy.isProviderUnattendedEnabled,
+  refreshBackgroundCheckStatuses: backgroundCheckSync.refreshBackgroundCheckStatuses,
 };
 
 function mergeDeps(overrides) {
@@ -425,6 +427,24 @@ function safeSummarizePlan(logContext, plan) {
   } catch (err) {
     logger.error(`peopleSync orchestrator: failed to summarize plan for church ${logContext.churchId} run ${logContext.runId}: ${err.message}`);
     return {};
+  }
+}
+
+async function safeSyncProviderExtras(deps, { churchId, provider, runId }) {
+  if (provider !== 'planning_center') {
+    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 0 };
+  }
+  try {
+    const result = await deps.refreshBackgroundCheckStatuses(churchId);
+    return {
+      backgroundCheckSynced: Number(result?.updated) || 0,
+      backgroundCheckSyncFailed: 0,
+    };
+  } catch (error) {
+    logger.warn(
+      `peopleSync orchestrator: background-check refresh failed for church ${churchId} run ${runId}: ${safeErrorMessage(error)}`
+    );
+    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 1 };
   }
 }
 
@@ -1300,6 +1320,13 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     throw reportedError;
   }
 
+  applyResult = {
+    ...applyResult,
+    ...(await safeSyncProviderExtras(deps, {
+      churchId, provider, runId: run.id,
+    })),
+  };
+
   // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
   // mergeAppliedCounts()/finishRun() pair.
@@ -1399,6 +1426,13 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
     throw err;
   }
+
+  applyResult = {
+    ...applyResult,
+    ...(await safeSyncProviderExtras(deps, {
+      churchId, provider, runId: run.id,
+    })),
+  };
 
   // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
