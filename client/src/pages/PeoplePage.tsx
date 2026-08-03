@@ -105,6 +105,19 @@ interface VisitorConfig {
   travellerVisitorServiceLimit: number;
 }
 
+export function matchesExternalSourceFilter(
+  person: Pick<Person, 'externalLinks'>,
+  authorityProvider: AuthorityProvider,
+  filter: 'all' | 'linked' | 'unlinked',
+): boolean {
+  if (authorityProvider === 'none' || filter === 'all') {
+    return true;
+  }
+
+  const isLinked = Boolean(person.externalLinks?.[authorityProvider]);
+  return filter === 'linked' ? isLinked : !isLinked;
+}
+
 export function personAuthorityPermissions(
   externalLinks: ExternalLinks | undefined,
   authorityProvider: AuthorityProvider,
@@ -183,6 +196,7 @@ const PeoplePage: React.FC = () => {
   const [selectedFamily, setSelectedFamily] = useState<number | null>(null);
   const [selectedGathering, setSelectedGathering] = useState<number | null>(null);
   const [ageFilter, setAgeFilter] = useState<'all' | 'adult' | 'child'>('all');
+  const [externalSourceFilter, setExternalSourceFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
   // Removed selectedPerson state - no longer used
   // Removed showPersonDetails - not used anymore
   const [showAddModal, setShowAddModal] = useState(false);
@@ -357,6 +371,19 @@ const PeoplePage: React.FC = () => {
     loadArchivedPeople();
     loadVisitorConfig();
   }, []);
+
+  useEffect(() => {
+    const visibleIds = new Set(
+      people
+        .filter((person) => person.peopleType !== 'regular'
+          || matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter))
+        .map((person) => person.id),
+    );
+    setSelectedPeople((current) => {
+      const next = current.filter((id) => visibleIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [authorityProvider, externalSourceFilter, people]);
 
   // Handle URL parameters for navigation from AttendancePage
   useEffect(() => {
@@ -690,11 +717,12 @@ const PeoplePage: React.FC = () => {
 
 
   // Group people by family
-  const groupedPeople = people.reduce((groups, person) => {
-    // Only include regular attendees in this main list
-    if (person.peopleType !== 'regular') {
-      return groups;
-    }
+  const externalSourceFilteredPeople = people.filter((person) =>
+    person.peopleType === 'regular'
+      && matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter)
+  );
+
+  const groupedPeople = externalSourceFilteredPeople.reduce((groups, person) => {
     if (person.familyId && person.familyName) {
       // Group by family if person has a family
       const familyKey = `family_${person.familyId}`;
@@ -992,11 +1020,7 @@ const PeoplePage: React.FC = () => {
   }, [filteredVisitorGroups, families, visitorConfig]);
 
   // Create individual people list (not grouped by family)
-  const filteredIndividualPeople = people.filter((person: Person) => {
-    if (person.peopleType !== 'regular') {
-      return false;
-    }
-    
+  const filteredIndividualPeople = externalSourceFilteredPeople.filter((person: Person) => {
     // Filter by age (adult/child)
     if (ageFilter === 'child' && !person.isChild) return false;
     if (ageFilter === 'adult' && person.isChild) return false;
@@ -1577,7 +1601,7 @@ const PeoplePage: React.FC = () => {
       {/* Filters */}
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className={`grid grid-cols-1 gap-4 ${authorityProvider === 'none' ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
             {/* Search - only show when there are people to search */}
             {people.length > 0 && (
             <div>
@@ -1621,6 +1645,24 @@ const PeoplePage: React.FC = () => {
                   ))}
               </select>
             </div>
+
+            {authorityProvider !== 'none' && (
+              <div>
+                <label htmlFor="externalSourceFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  External source
+                </label>
+                <select
+                  id="externalSourceFilter"
+                  value={externalSourceFilter}
+                  onChange={(event) => setExternalSourceFilter(event.target.value as 'all' | 'linked' | 'unlinked')}
+                  className="mt-1 block w-full py-2 pl-3 pr-10 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                >
+                  <option value="all">All</option>
+                  <option value="linked">Linked</option>
+                  <option value="unlinked">Not linked</option>
+                </select>
+              </div>
+            )}
           </div>
           
           {/* Grouping Toggle & Age Filter */}
