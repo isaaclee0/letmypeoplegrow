@@ -149,13 +149,24 @@ function makeDeps({
     listGatheringMemberships: async () => gatheringMemberships,
     matchPeople,
     computePeopleSyncPlan: (input) => { plans.push(input); return computePeopleSyncPlan(input); },
-    applyPeopleSyncPlan: async (input) => { events.push('apply'); applied.push(input); return emptyApplyResult(); },
+    applyPeopleSyncPlan: async (input) => {
+      if (input.reviewedApply) assert.equal(input.reviewedApply.operationKind, 'people_sync');
+      events.push('apply');
+      applied.push(input);
+      return emptyApplyResult();
+    },
     validateSelections: () => ({
       acceptedLinks: [], skipExternalPersonIds: new Set(), acceptedArchiveIndividualIds: new Set(), acceptedFamilyRenameIds: new Set(),
     }),
     digestPlan,
-    createReviewToken: ({ planDigest }) => `review:${planDigest}`,
-    verifyReviewToken: () => verifyResult,
+    createReviewToken: ({ operationKind, planDigest }) => {
+      assert.equal(operationKind, 'people_sync');
+      return `review:${planDigest}`;
+    },
+    verifyReviewToken: (_token, expected) => {
+      assert.equal(expected.operationKind, 'people_sync');
+      return verifyResult;
+    },
     isReviewTokenApplied: async () => false,
     notifyReviewRequired: async () => ({ notified: true }),
     refreshBackgroundCheckStatuses: async () => ({
@@ -314,13 +325,15 @@ function correctionPreviewDeps() {
         started.push(input);
         return { id: started.length, ...input };
       },
-      createReviewToken: ({ planDigest, basePlanDigest, rootReviewTokenDigest }) => {
+      createReviewToken: ({ operationKind, planDigest, basePlanDigest, rootReviewTokenDigest }) => {
+        assert.equal(operationKind, 'people_sync');
         created.push(planDigest);
         const token = `review:${planDigest}`;
         if (basePlanDigest) tokenLineage.set(token, { basePlanDigest, rootReviewTokenDigest });
         return token;
       },
-      verifyReviewToken: (token, { planDigest }) => {
+      verifyReviewToken: (token, { operationKind, planDigest }) => {
+        assert.equal(operationKind, 'people_sync');
         if (token === 'invalid-base-token') return { ok: false, code: 'SYNC_REVIEW_INVALID' };
         if (token === 'expired-base-token') return { ok: false, code: 'SYNC_REVIEW_EXPIRED' };
         if (token === 'stale-base-token') return { ok: false, code: 'SYNC_PLAN_STALE' };
@@ -336,7 +349,8 @@ function correctionPreviewDeps() {
           } }
           : { ok: false, code: 'SYNC_PLAN_STALE' };
       },
-      verifyReviewTokenLineage: (token, { basePlanDigest }) => {
+      verifyReviewTokenLineage: (token, { operationKind, basePlanDigest }) => {
+        assert.equal(operationKind, 'people_sync');
         if (token === validBaseToken) {
           if (expectedBaseDigest === null) expectedBaseDigest = basePlanDigest;
           return basePlanDigest === expectedBaseDigest
@@ -1074,10 +1088,17 @@ test('reviewed apply rejects a rebuilt context when holds, exclusions, candidate
         assert.equal(plan.reviewContext?.version, 2);
         return digestPlan(plan);
       },
-      createReviewToken: ({ planDigest }) => { signedDigest = planDigest; return `review:${planDigest}`; },
-      verifyReviewToken: (token, { planDigest }) => token === `review:${planDigest}` && planDigest === signedDigest
-        ? { ok: true }
-        : { ok: false, code: 'SYNC_PLAN_STALE' },
+      createReviewToken: ({ operationKind, planDigest }) => {
+        assert.equal(operationKind, 'people_sync');
+        signedDigest = planDigest;
+        return `review:${planDigest}`;
+      },
+      verifyReviewToken: (token, { operationKind, planDigest }) => {
+        assert.equal(operationKind, 'people_sync');
+        return token === `review:${planDigest}` && planDigest === signedDigest
+          ? { ok: true }
+          : { ok: false, code: 'SYNC_PLAN_STALE' };
+      },
     },
   });
 

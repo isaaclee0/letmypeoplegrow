@@ -971,6 +971,7 @@ async function buildReview({
     );
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
+      operationKind: 'people_sync',
       churchId, provider, batchId, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
     });
 
@@ -1017,7 +1018,7 @@ async function previewLinkCorrections({
   base.plan.sourceContext = sourceContext;
   const baseDigest = deps.digestPlan(base.plan);
   const baseVerification = deps.verifyReviewToken(baseReviewToken, {
-    churchId, provider, batchId, planDigest: baseDigest,
+    operationKind: 'people_sync', churchId, provider, batchId, planDigest: baseDigest,
   });
   if (!baseVerification.ok) {
     throw new OrchestratorError(
@@ -1048,7 +1049,7 @@ async function previewLinkCorrections({
   corrected.plan.sourceContext = sourceContext;
   const correctedDigest = deps.digestPlan(corrected.plan);
   const reviewToken = deps.createReviewToken({
-    churchId, provider, batchId, planDigest: correctedDigest,
+    operationKind: 'people_sync', churchId, provider, batchId, planDigest: correctedDigest,
     basePlanDigest: baseDigest,
     rootReviewTokenDigest,
     expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -1137,6 +1138,7 @@ async function previewAuthoritySwitch({
     if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
+      operationKind: 'people_sync',
       churchId, provider, batchId: null, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
     });
 
@@ -1256,6 +1258,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       );
       if (isAuthoritySwitch && authorityPreviewId) base.plan.authorityPreviewId = authorityPreviewId;
       const lineageVerification = deps.verifyReviewTokenLineage(reviewToken, {
+        operationKind: 'people_sync',
         churchId,
         provider,
         batchId,
@@ -1278,7 +1281,9 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     );
     if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
-    const verification = deps.verifyReviewToken(reviewToken, { churchId, provider, batchId, planDigest });
+    const verification = deps.verifyReviewToken(reviewToken, {
+      operationKind: 'people_sync', churchId, provider, batchId, planDigest,
+    });
     if (!verification.ok) {
       throw new OrchestratorError(verification.code, reviewTokenErrorMessage(verification.code), reviewTokenErrorStatus(verification.code));
     }
@@ -1296,6 +1301,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       activateAuthority: isAuthoritySwitch,
       authorityPreviewId,
       reviewedApply: {
+        operationKind: 'people_sync',
         reviewToken,
         planDigest,
         batchId,
