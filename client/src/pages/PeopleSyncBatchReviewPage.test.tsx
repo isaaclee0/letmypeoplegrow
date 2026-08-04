@@ -426,6 +426,47 @@ describe('PeopleSyncBatchReviewPage', () => {
     expect(screen.queryByRole('button', { name: /Apply .*selected change/ })).not.toBeInTheDocument();
   });
 
+  it('replaces an active review with switch-source guidance when refreshed metadata becomes prepared', async () => {
+    const active = batchFor('planning_center');
+    const prepared = {
+      ...active,
+      operationalState: 'prepared' as const,
+      reviewable: false,
+      runnable: false,
+    };
+    const metadataRefresh = deferred<{ data: { success: true; batches: PeopleSyncBatch[] } }>();
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
+      .mockResolvedValueOnce({ data: { success: true, batches: [active] } } as never)
+      .mockReturnValueOnce(metadataRefresh.promise as never);
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan)
+      .mockResolvedValue({ data: { success: true, ...reviewFor({ established: true }) } } as never);
+    renderRoute('/app/settings/integrations/planning-center/batches/7/review');
+
+    expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Already linked 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeInTheDocument();
+    expect(integrationsAPI.getPlanningCenterBatchPlan).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading sync review');
+    expect(screen.queryByText('Planning Center sync review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Already linked 1' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Apply .*selected change/ })).not.toBeInTheDocument();
+
+    metadataRefresh.resolve({ data: { success: true, batches: [prepared] } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+    );
+    expect(screen.queryByText('Planning Center sync review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Already linked 1' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Apply .*selected change/ })).not.toBeInTheDocument();
+    expect(integrationsAPI.getPlanningCenterBatchPlan).toHaveBeenCalledTimes(1);
+    expect(integrationsAPI.previewPlanningCenterLinkCorrections).not.toHaveBeenCalled();
+    expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
+  });
+
   it('uses the original base token for corrections and the effective preview token for apply', async () => {
     const base = reviewFor({ token: 'original-base', established: true });
     const preview = correctionPreview(30, 'effective-preview');

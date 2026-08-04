@@ -38,8 +38,8 @@ export default function PeopleSyncBatchReviewPage() {
   const [dirty, setDirty] = useState(false);
   const providerLabel = adapter?.provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
   const routeContextKey = adapter && batchId !== null ? `${adapter.provider}:${batchId}` : null;
-  const visibleBatch = loadedContextKey === routeContextKey ? batch : null;
-  const visibleReview = loadedContextKey === routeContextKey ? review : null;
+  const visibleBatch = !loading && loadedContextKey === routeContextKey ? batch : null;
+  const visibleReview = !loading && loadedContextKey === routeContextKey ? review : null;
   const ignoreConfirmedDiscard = useCallback(() => undefined, []);
   const { confirmAction } = useUnsavedReviewGuard({
     dirty,
@@ -56,6 +56,12 @@ export default function PeopleSyncBatchReviewPage() {
       if (generation !== requestGeneration.current) return false;
       const nextBatch = batches.find((candidate) => candidate.id === batchId);
       if (!nextBatch) throw new Error('This sync batch is no longer available.');
+      if (!nextBatch.reviewable) {
+        setBatch(nextBatch);
+        setReview(null);
+        setLoadedContextKey(`${adapter.provider}:${batchId}`);
+        setDirty(false);
+      }
       const nextReview = await adapter.loadReview(nextBatch);
       if (generation !== requestGeneration.current) return false;
       setBatch(nextBatch);
