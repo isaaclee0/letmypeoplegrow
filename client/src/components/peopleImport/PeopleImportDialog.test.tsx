@@ -81,14 +81,20 @@ describe('PeopleImportDialog', () => {
   });
 
   it('shows loading then List, Category, Group, and Everyone source choices', async () => {
-    const pending = deferred<{ data: { success: true; sources: never[]; allOption: { kind: 'all'; name: 'Everyone' } } }>();
+    const pending = deferred<{ data: { success: true; sources: { kind: 'planning_center_list'; externalId: string; name: string; memberCount: number; providerRefreshedAt: null }[]; allOption: { kind: 'all'; name: 'Everyone' } } }>();
     vi.mocked(peopleImportAPI.listSources).mockReturnValueOnce(pending.promise as never);
     render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Planning Center' }));
     expect(screen.getByText('Loading people sources…')).toBeInTheDocument();
-    await act(async () => pending.resolve({ data: { success: true, allOption: { kind: 'all', name: 'Everyone' }, sources: [] } }));
+    await act(async () => pending.resolve({ data: {
+      success: true,
+      allOption: { kind: 'all', name: 'Everyone' },
+      sources: [{ kind: 'planning_center_list', externalId: 'list-members', name: 'Members', memberCount: 12, providerRefreshedAt: null }],
+    } }));
     expect(await screen.findByRole('radio', { name: 'Everyone' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Members/ })).toBeInTheDocument();
+    expect(screen.getByText(/List/)).toBeInTheDocument();
 
     vi.mocked(peopleImportAPI.listSources).mockResolvedValueOnce({
       data: {
@@ -125,6 +131,20 @@ describe('PeopleImportDialog', () => {
     expect(screen.queryByText('People import review')).not.toBeInTheDocument();
   });
 
+  it('shows preview progress until the review is ready', async () => {
+    const pending = deferred<{ data: PeopleImportReview }>();
+    vi.mocked(peopleImportAPI.preview).mockReturnValueOnce(pending.promise as never);
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Planning Center' }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Everyone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review import' }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Preparing import review…');
+    await act(async () => pending.resolve({ data: review }));
+    expect(await screen.findByRole('button', { name: 'Apply import' })).toBeInTheDocument();
+  });
+
   it('fences a late provider source response after a newer provider is selected', async () => {
     const planningCenter = deferred<{ data: { success: true; sources: never[]; allOption: { kind: 'all'; name: 'Everyone' } } }>();
     vi.mocked(peopleImportAPI.listSources)
@@ -146,7 +166,8 @@ describe('PeopleImportDialog', () => {
   it('prevents a second apply while the first request is pending', async () => {
     const pending = deferred<{ data: { runId: number; status: 'applied'; applied: never; summary: PeopleImportReview['summary'] } }>();
     vi.mocked(peopleImportAPI.apply).mockReturnValueOnce(pending.promise as never);
-    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    const onClose = vi.fn();
+    render(<PeopleImportDialog isOpen onClose={onClose} onApplied={vi.fn()} />);
     await openAllPlanningCenterReview();
 
     const apply = screen.getByRole('button', { name: 'Apply import' });
@@ -155,7 +176,57 @@ describe('PeopleImportDialog', () => {
 
     expect(peopleImportAPI.apply).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).not.toHaveBeenCalled();
     await act(async () => pending.resolve({ data: { runId: 1, status: 'applied', applied: {} as never, summary: review.summary } }));
+  });
+
+  it('fences an apply response after an externally closed and reopened dialog', async () => {
+    const pending = deferred<{ data: { runId: number; status: 'applied'; applied: never; summary: PeopleImportReview['summary'] } }>();
+    vi.mocked(peopleImportAPI.apply).mockReturnValueOnce(pending.promise as never);
+    const onApplied = vi.fn();
+    const { rerender } = render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={onApplied} />);
+    await openAllPlanningCenterReview();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply import' }));
+    rerender(<PeopleImportDialog isOpen={false} onClose={vi.fn()} onApplied={onApplied} />);
+    await act(async () => undefined);
+    rerender(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={onApplied} />);
+    await act(async () => pending.resolve({ data: { runId: 1, status: 'applied', applied: {} as never, summary: review.summary } }));
+
+    expect(onApplied).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose the provider to import people from.')).toBeInTheDocument();
+    expect(screen.queryByText('Import applied.')).not.toBeInTheDocument();
+  });
+
+  it('allows closing after commit while the People-page refresh is unresolved', async () => {
+    const refresh = deferred<void>();
+    const onClose = vi.fn();
+    render(<PeopleImportDialog isOpen onClose={onClose} onApplied={() => refresh.promise} />);
+    await openAllPlanningCenterReview();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply import' }));
+    expect(await screen.findByText('Import applied.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a late People-page refresh failure after close and restart', async () => {
+    const refresh = deferred<void>();
+    const onApplied = vi.fn(() => refresh.promise);
+    const { rerender } = render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={onApplied} />);
+    await openAllPlanningCenterReview();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply import' }));
+    await screen.findByText('Import applied.');
+    rerender(<PeopleImportDialog isOpen={false} onClose={vi.fn()} onApplied={onApplied} />);
+    await act(async () => undefined);
+    rerender(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={onApplied} />);
+    await act(async () => refresh.reject(new Error('People refresh failed')));
+
+    expect(screen.getByText('Choose the provider to import people from.')).toBeInTheDocument();
+    expect(screen.queryByText('People refresh failed')).not.toBeInTheDocument();
   });
 
   it('keeps the committed result and hides Apply import when page refresh fails', async () => {

@@ -123,6 +123,7 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
     try {
       const response = await peopleImportAPI.apply(provider, { selection, reviewToken, selections });
       if (generation !== generationRef.current) return;
+      applyInFlightRef.current = false;
       setResult(response.data);
       setState('applied');
       try {
