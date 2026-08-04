@@ -542,10 +542,7 @@ async function applyPeopleSyncPlan({
       result.linkPeople++;
     }
 
-    // 2. Family links (symmetric to person links). plan.js does not populate
-    // this bucket yet (family matching is future work) — handled here
-    // defensively/forward-compatibly so a later plan.js change can populate
-    // it without a matching apply.js change.
+    // 2. Family links established by reviewed household reconciliation.
     for (const action of asArray(plan.linkFamilies)) {
       await linkRepository.upsertFamilyLinkWithConnection(conn, {
         churchId, provider, externalFamilyId: action.externalFamilyId,
@@ -561,8 +558,21 @@ async function applyPeopleSyncPlan({
     }
 
     // 3. New families. The reviewed name must already be on the action —
-    // apply never derives/rebuilds a family name from member data.
-    for (const action of asArray(plan.addFamilies)) {
+    // apply never derives/rebuilds a family name from member data. New
+    // household actions carry their dependent person IDs so deferring every
+    // member cannot leave an empty family behind. Older actions without that
+    // metadata retain their established unconditional behavior.
+    const acceptedCreateExternalIds = accepted.contractVersion === 2
+      ? accepted.createExternalIds
+      : new Set(asArray(plan.addPeople)
+        .filter((action) => !accepted.skipExternalPersonIds.has(action.externalPersonId))
+        .map((action) => action.externalPersonId));
+    const addFamilyActions = asArray(plan.addFamilies).filter((action) => {
+      const memberExternalIds = asArray(action.memberExternalIds);
+      return memberExternalIds.length === 0 ||
+        memberExternalIds.some((externalPersonId) => acceptedCreateExternalIds.has(externalPersonId));
+    });
+    for (const action of addFamilyActions) {
       const familyName = typeof action.familyName === 'string' ? action.familyName.trim() : '';
       if (!familyName) throw new Error(`addFamilies action ${action.id} is missing a reviewed family name`);
       const insertResult = await conn.query(

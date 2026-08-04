@@ -628,7 +628,7 @@ test('a forced link collision rolls back every newly created person and family f
     await assert.rejects(applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({
-        addFamilies: [{ id: 'addFamilies:fam-x', familyName: 'New Family' }],
+        addFamilies: [{ id: 'addFamilies:fam-x', familyName: 'New Family', externalFamilyId: 'fam-x' }],
         // Two additions that collide on the SAME externalPersonId: the first
         // creates its individual and link successfully; the second creates
         // its individual but then fails to link (external_person_id already
@@ -643,6 +643,10 @@ test('a forced link collision rolls back every newly created person and family f
 
     const after = await counts(churchId);
     assert.deepEqual(after, { individuals: 0, families: 0, links: 0 });
+    const [familyLinks] = await Database.query(
+      'SELECT COUNT(*) AS n FROM external_family_links WHERE church_id = ?', [churchId]
+    );
+    assert.equal(Number(familyLinks.n), 0);
   });
 });
 
@@ -1688,6 +1692,179 @@ test('a v2 create uses only signed create data, resolves its external family, an
   });
 });
 
+test('creates one reviewed family shared by all accepted new household members', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const plan = v2Plan({
+      'ext-ada': reviewIdentity({
+        createPerson: {
+          firstName: 'Ada', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+      'ext-charles': reviewIdentity({
+        createPerson: {
+          firstName: 'Charles', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+    }, {
+      addFamilies: [{
+        id: 'addFamilies:house-1', externalFamilyId: 'house-1',
+        familyName: 'Lovelace, Ada and Charles', memberExternalIds: ['ext-ada', 'ext-charles'],
+      }],
+      addPeople: [
+        { id: 'addPeople:ext-ada', externalPersonId: 'ext-ada' },
+        { id: 'addPeople:ext-charles', externalPersonId: 'ext-charles' },
+      ],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({
+        'ext-ada': { outcome: 'create' },
+        'ext-charles': { outcome: 'create' },
+      }),
+    });
+
+    assert.equal(result.addFamilies, 1);
+    assert.equal(result.addPeople, 2);
+    const families = await Database.query(
+      'SELECT id, family_name FROM families WHERE church_id = ?', [churchId]
+    );
+    const people = await Database.query(
+      'SELECT first_name, family_id FROM individuals WHERE church_id = ? ORDER BY first_name', [churchId]
+    );
+    assert.equal(families.length, 1);
+    assert.equal(families[0].family_name, 'Lovelace, Ada and Charles');
+    assert.deepEqual(people, [
+      { first_name: 'Ada', family_id: families[0].id },
+      { first_name: 'Charles', family_id: families[0].id },
+    ]);
+  });
+});
+
+test('skips an unselected household family when every new member is deferred', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const plan = v2Plan({
+      'ext-ada': reviewIdentity({
+        createPerson: {
+          firstName: 'Ada', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+      'ext-charles': reviewIdentity({
+        createPerson: {
+          firstName: 'Charles', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+    }, {
+      addFamilies: [{
+        id: 'addFamilies:house-1', externalFamilyId: 'house-1',
+        familyName: 'Lovelace, Ada and Charles', memberExternalIds: ['ext-ada', 'ext-charles'],
+      }],
+      addPeople: [
+        { id: 'addPeople:ext-ada', externalPersonId: 'ext-ada' },
+        { id: 'addPeople:ext-charles', externalPersonId: 'ext-charles' },
+      ],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({
+        'ext-ada': { outcome: 'defer' },
+        'ext-charles': { outcome: 'defer' },
+      }),
+    });
+
+    assert.equal(result.addFamilies, 0);
+    assert.equal(result.addPeople, 0);
+    assert.deepEqual(await counts(churchId), { individuals: 0, families: 0, links: 0 });
+    const [familyLinks] = await Database.query(
+      'SELECT COUNT(*) AS n FROM external_family_links WHERE church_id = ?', [churchId]
+    );
+    assert.equal(Number(familyLinks.n), 0);
+  });
+});
+
+test('creates the household family when at least one reviewed new member is accepted', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const plan = v2Plan({
+      'ext-ada': reviewIdentity({
+        createPerson: {
+          firstName: 'Ada', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+      'ext-charles': reviewIdentity({
+        createPerson: {
+          firstName: 'Charles', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+    }, {
+      addFamilies: [{
+        id: 'addFamilies:house-1', externalFamilyId: 'house-1',
+        familyName: 'Lovelace, Ada and Charles', memberExternalIds: ['ext-ada', 'ext-charles'],
+      }],
+      addPeople: [
+        { id: 'addPeople:ext-ada', externalPersonId: 'ext-ada' },
+        { id: 'addPeople:ext-charles', externalPersonId: 'ext-charles' },
+      ],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({
+        'ext-ada': { outcome: 'create' },
+        'ext-charles': { outcome: 'defer' },
+      }),
+    });
+
+    assert.equal(result.addFamilies, 1);
+    assert.equal(result.addPeople, 1);
+    const [person] = await Database.query(
+      'SELECT first_name, family_id FROM individuals WHERE church_id = ?', [churchId]
+    );
+    const [family] = await Database.query(
+      'SELECT id FROM families WHERE church_id = ?', [churchId]
+    );
+    assert.deepEqual(person, { first_name: 'Ada', family_id: family.id });
+  });
+});
+
+test('links a reviewed household to an existing family before creating its new member', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const familyId = await seedFamily(churchId, 'Lovelace, Ada');
+    const plan = v2Plan({
+      'ext-charles': reviewIdentity({
+        createPerson: {
+          firstName: 'Charles', lastName: 'Lovelace', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      }),
+    }, {
+      linkFamilies: [{
+        id: `linkFamilies:house-1:${familyId}`, externalFamilyId: 'house-1', familyId,
+        memberExternalIds: ['ext-existing', 'ext-charles'], reason: 'household_member_family',
+      }],
+      addPeople: [{ id: 'addPeople:ext-charles', externalPersonId: 'ext-charles' }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-charles': { outcome: 'create' } }),
+    });
+
+    assert.equal(result.linkFamilies, 1);
+    assert.equal(result.addPeople, 1);
+    const [person] = await Database.query(
+      'SELECT family_id FROM individuals WHERE church_id = ?', [churchId]
+    );
+    assert.equal(person.family_id, familyId);
+  });
+});
+
 test('a v2 defer upserts a deferred hold without linking or creating the person', async () => {
   // Catches a deferred addPeople identity falling through to the legacy
   // creation path or failing to persist its durable review hold.
@@ -1928,6 +2105,28 @@ test('moveFamily rejects a family id from another church', async () => {
     await assert.rejects(applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({ moveFamily: [{ id: 'moveFamily:x', individualId, familyId: otherFamilyId }] }),
+    }), /outside this church/i);
+  });
+});
+
+test('linkFamilies rejects a family id from another church', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const otherChurchId = `${churchId}_other`;
+    Database.getChurchDb(otherChurchId);
+    await Database.queryForChurch(
+      otherChurchId, `INSERT INTO church_settings (church_id, church_name) VALUES (?, 'Other')`, [otherChurchId]
+    );
+    const otherFamilyId = await Database.queryForChurch(
+      otherChurchId, `INSERT INTO families (church_id, family_name) VALUES (?, 'Other Family')`, [otherChurchId]
+    ).then((result) => Number(result.insertId));
+
+    await assert.rejects(applyPeopleSyncPlan({
+      churchId, provider: 'elvanto',
+      plan: emptyPlan({
+        linkFamilies: [{
+          id: 'linkFamilies:house-1', externalFamilyId: 'house-1', familyId: otherFamilyId,
+        }],
+      }),
     }), /outside this church/i);
   });
 });
