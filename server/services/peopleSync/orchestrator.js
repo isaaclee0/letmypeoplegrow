@@ -37,8 +37,7 @@ const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
 const unattendedPolicy = require('./unattendedPolicy');
 const runRepository = require('./runRepository');
-const linkRepository = require('./linkRepository');
-const matchReviewRepository = require('./matchReviewRepository');
+const { loadLocalProjectionState } = require('./localProjectionState');
 const authority = require('./authority');
 const providerRegistry = require('./providerRegistry');
 const { matchPeople } = require('./matcher');
@@ -83,53 +82,6 @@ function assertChurchId(churchId) {
 
 // ─── Default (production) collaborators ─────────────────────────────────────
 
-async function defaultListLocalIndividuals(churchId) {
-  const rows = await Database.queryForChurch(
-    churchId,
-    `SELECT id, first_name, last_name, people_type, family_id, is_child, is_active, planning_center_id
-       FROM individuals WHERE church_id = ?`,
-    [churchId]
-  );
-  return rows.map((row) => ({
-    id: Number(row.id),
-    firstName: row.first_name,
-    lastName: row.last_name,
-    peopleType: row.people_type,
-    familyId: row.family_id === null || row.family_id === undefined ? null : Number(row.family_id),
-    isChild: !!row.is_child,
-    isActive: !!row.is_active,
-    planningCenterId: row.planning_center_id || null,
-  }));
-}
-
-async function defaultListLocalFamilies(churchId) {
-  const rows = await Database.queryForChurch(
-    churchId,
-    `SELECT id, family_name, family_identifier, planning_center_id FROM families WHERE church_id = ?`,
-    [churchId]
-  );
-  return rows.map((row) => ({
-    id: Number(row.id),
-    familyName: row.family_name,
-    familyIdentifier: row.family_identifier,
-    planningCenterId: row.planning_center_id || null,
-  }));
-}
-
-async function defaultListGatheringMemberships(churchId) {
-  const rows = await Database.queryForChurch(
-    churchId,
-    `SELECT gathering_type_id, individual_id, added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?`,
-    [churchId]
-  );
-  return rows.map((row) => ({
-    gatheringTypeId: Number(row.gathering_type_id),
-    individualId: Number(row.individual_id),
-    addedBySyncBatchId: row.added_by_sync_batch_id === null || row.added_by_sync_batch_id === undefined
-      ? null : Number(row.added_by_sync_batch_id),
-  }));
-}
-
 // Church-wide sync settings (people_sync_settings). Column names are
 // elvanto-prefixed for historical reasons (only Elvanto currently ever
 // produces a 'contact' state — see plan.js/normalizeState — so these are
@@ -165,12 +117,7 @@ const defaultDeps = {
   failRun: runRepository.failRun,
   validateSourceProvenance: runRepository.validateSourceProvenance,
   getProvider: providerRegistry.getProvider,
-  listPersonLinks: linkRepository.listPersonLinks,
-  listMatchReviewState: matchReviewRepository.listMatchReviewState,
-  listFamilyLinks: linkRepository.listFamilyLinks,
-  listLocalIndividuals: defaultListLocalIndividuals,
-  listLocalFamilies: defaultListLocalFamilies,
-  listGatheringMemberships: defaultListGatheringMemberships,
+  loadLocalProjectionState,
   matchPeople,
   computePeopleSyncPlan,
   applyPeopleSyncPlan,
@@ -760,25 +707,14 @@ function memberOnlyMatcherResult(result, memberIds) {
   };
 }
 
-async function loadChurchScopedProjectionInputs(churchId, provider, deps) {
-  return Promise.all([
-    deps.listLocalIndividuals(churchId),
-    deps.listLocalFamilies(churchId),
-    deps.listPersonLinks(churchId, provider),
-    deps.listFamilyLinks(churchId, provider),
-    deps.listGatheringMemberships(churchId),
-    deps.listMatchReviewState(churchId, provider),
-  ]);
-}
-
 async function acquirePipelineState(input) {
   // 4. Fetch every provider-owned source sequentially and build one member union.
   const providerState = await acquireCompleteProviderSources(input);
   assertAuthorityPreviewActive(input.signal);
 
   // 5. Load church-scoped local state only after the complete provider read.
-  const [individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState] =
-    await loadChurchScopedProjectionInputs(input.churchId, input.provider, input.deps);
+  const { individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState } =
+    await input.deps.loadLocalProjectionState(input.churchId, input.provider);
   assertAuthorityPreviewActive(input.signal);
 
   return {

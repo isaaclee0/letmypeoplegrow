@@ -98,7 +98,9 @@ function makeDeps({
   lifecycleEligible = (value, settings) => value.state !== 'archived' && value.state !== 'deceased' &&
     (value.state !== 'contact' || settings.includeContacts !== false),
   localIndividuals = [],
+  localFamilies = [],
   personLinks = [],
+  familyLinks = [],
   matchReviewState = { exclusions: [], holds: [] },
   gatheringMemberships = [],
   verifyResult = { ok: true },
@@ -140,13 +142,15 @@ function makeDeps({
     failRun: async (input) => { events.push('failRun'); failed.push(input); return input; },
     recordActiveSourceAvailable: async (input) => { events.push(`available:${input.batchId}`); availableHealth.push(input); },
     recordActiveSourceFailure: async (input) => { events.push(`failure:${input.batchId}`); failedHealth.push(input); },
-    listPersonLinks: async () => personLinks,
-    listMatchReviewState: async () => matchReviewState,
-    listFamilyLinks: async () => [],
+    loadLocalProjectionState: async () => ({
+      individuals: localIndividuals,
+      families: localFamilies,
+      personLinks,
+      familyLinks,
+      gatheringMemberships,
+      matchReviewState,
+    }),
     recordFullFetchPresence: async (...args) => { events.push('presence'); presence.push(args); return {}; },
-    listLocalIndividuals: async () => localIndividuals,
-    listLocalFamilies: async () => [],
-    listGatheringMemberships: async () => gatheringMemberships,
     matchPeople,
     computePeopleSyncPlan: (input) => { plans.push(input); return computePeopleSyncPlan(input); },
     applyPeopleSyncPlan: async (input) => {
@@ -703,29 +707,23 @@ test('a batch review cannot correct an established identity owned by another ena
   );
 });
 
-test('pipeline acquisition preserves the established church-scoped read invocation order', async () => {
-  const order = [];
-  const read = (name, value) => async () => {
-    order.push(name);
-    return value;
-  };
+test('pipeline acquisition delegates church-scoped local reads to the projection-state loader', async () => {
+  const calls = [];
   const { deps } = makeDeps({
     extra: {
-      listLocalIndividuals: read('individuals', []),
-      listLocalFamilies: read('families', []),
-      listPersonLinks: read('person-links', []),
-      listFamilyLinks: read('family-links', []),
-      listGatheringMemberships: read('gathering-memberships', []),
-      listMatchReviewState: read('match-review-state', { exclusions: [], holds: [] }),
+      loadLocalProjectionState: async (churchId, provider) => {
+        calls.push([churchId, provider]);
+        return {
+          individuals: [], families: [], personLinks: [], familyLinks: [], gatheringMemberships: [],
+          matchReviewState: { exclusions: [], holds: [] },
+        };
+      },
     },
   });
 
   await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
 
-  assert.deepEqual(order, [
-    'individuals', 'families', 'person-links', 'family-links',
-    'gathering-memberships', 'match-review-state',
-  ]);
+  assert.deepEqual(calls, [['church-a', 'elvanto']]);
 });
 
 test('target review substitutes only the target draft source while other enabled batches use active sources', async () => {
@@ -951,15 +949,13 @@ test('household context can corroborate a member match but never becomes eligibl
   const familyLinks = [];
   const { deps, plans, presence, applied } = makeDeps({
     localIndividuals: locals,
+    localFamilies,
     personLinks,
+    familyLinks,
     fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
       people: [member], memberExternalIds: ['member'], contextPeople: [context],
       families: [{ id: 'external-family', memberExternalIds: ['member', 'context'], primaryContactExternalId: 'context' }],
     }),
-    extra: {
-      listLocalFamilies: async () => localFamilies,
-      listFamilyLinks: async () => familyLinks,
-    },
   });
 
   await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
@@ -1083,7 +1079,14 @@ test('reviewed apply rejects a rebuilt context when holds, exclusions, candidate
       });
     },
     extra: {
-      listMatchReviewState: async () => reviewState,
+      loadLocalProjectionState: async () => ({
+        individuals: [
+          { id: 7, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+          { id: 8, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+          { id: 9, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+        ],
+        families: [], personLinks: [], familyLinks: [], gatheringMemberships: [], matchReviewState: reviewState,
+      }),
       digestPlan: (plan) => {
         assert.equal(plan.reviewContext?.version, 2);
         return digestPlan(plan);
