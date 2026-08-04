@@ -8,6 +8,7 @@ import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
 import FamilyEditorModal from '../components/people/FamilyEditorModal';
 import AddPeopleModal from '../components/people/AddPeopleModal';
+import PeopleImportDialog from '../components/peopleImport/PeopleImportDialog';
 import MergeModal from '../components/people/MergeModal';
 import NotesModal from '../components/people/NotesModal';
 import AttendanceHistoryModal from '../components/people/AttendanceHistoryModal';
@@ -192,6 +193,7 @@ const PeoplePage: React.FC = () => {
   // Removed selectedPerson state - no longer used
   // Removed showPersonDetails - not used anymore
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showPeopleImport, setShowPeopleImport] = useState(false);
   // Removed old management modals
   const [selectedGatheringAssignments, setSelectedGatheringAssignments] = useState<{ [key: number]: boolean }>({});
   const [selectedPeopleType, setSelectedPeopleType] = useState<'regular' | 'local_visitor' | 'traveller_visitor'>('regular');
@@ -1346,15 +1348,26 @@ const PeoplePage: React.FC = () => {
                 Add, edit, and organize people and families
               </p>
             </div>
-            {people.length > 0 && (
-              <button
-                onClick={downloadPeopleTSV}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-              >
-                <DocumentTextIcon className="h-4 w-4 mr-2" />
-                Export People
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setShowPeopleImport(true)}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  Import people
+                </button>
+              )}
+              {people.length > 0 && (
+                <button
+                  onClick={downloadPeopleTSV}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  <DocumentTextIcon className="h-4 w-4 mr-2" />
+                  Export People
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -2387,6 +2400,16 @@ const PeoplePage: React.FC = () => {
         people={people}
         defaultMode={gatheringTypes.some(g => g.individualMode) ? 'individual' : 'family'}
         showModeToggle={true}
+      />
+
+      <PeopleImportDialog
+        isOpen={showPeopleImport}
+        onClose={() => setShowPeopleImport(false)}
+        onApplied={async () => {
+          await loadPeople();
+          await loadFamilies();
+          showSuccess('People imported successfully.');
+        }}
       />
 
       {/* Removed duplicate Person Details Modal */}
