@@ -102,14 +102,14 @@ function heldExternalIds(holds) {
   return new Set((holds || []).map((hold) => externalId(hold?.externalPersonId)).filter(Boolean));
 }
 
-function createPerson(externalPerson, qualifyingBatches) {
+function createPerson(externalPerson, qualifyingBatches, plannedPeopleType) {
   if (!externalPerson) return null;
   return {
     firstName: text(externalPerson.firstName),
     lastName: text(externalPerson.lastName),
     isChild: typeof externalPerson.child === 'boolean' ? externalPerson.child : null,
     externalFamilyId: externalPerson.familyId === undefined ? null : externalPerson.familyId,
-    peopleType: desiredPeopleType(externalPerson, qualifyingBatches),
+    peopleType: plannedPeopleType || desiredPeopleType(externalPerson, qualifyingBatches),
   };
 }
 
@@ -137,13 +137,19 @@ function buildReviewContext(input = {}) {
   const identities = {};
   for (const id of reviewableExternalIds(input.plan)) {
     const candidates = actionCandidates(input.plan, id);
+    const plannedAddition = (input.plan?.addPeople || [])
+      .find((action) => externalId(action?.externalPersonId) === id);
     identities[id] = {
       suggestedIndividualId: suggestedIndividualId(input.plan, id, candidates),
       candidateIndividualIds: candidates,
       excludedIndividualIds: excluded.get(id) || [],
       held: held.has(id),
       canCreate: true,
-      createPerson: createPerson(externalPeople.get(id), batchesFor(id, input.batches, input.eligibleByBatch)),
+      createPerson: createPerson(
+        externalPeople.get(id),
+        batchesFor(id, input.batches, input.eligibleByBatch),
+        plannedAddition?.peopleType || input.createPeopleType,
+      ),
     };
   }
   return {

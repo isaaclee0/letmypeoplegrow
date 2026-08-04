@@ -423,6 +423,7 @@ async function applyPeopleSyncPlan({
   connectionExpectation = null,
   requireConnection = false,
   allowedMutationBuckets = null,
+  markLinksSeen = true,
 }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
@@ -547,7 +548,7 @@ async function applyPeopleSyncPlan({
     for (const action of linkActions) {
       await linkRepository.upsertPersonLinkWithConnection(conn, {
         churchId, provider, externalPersonId: action.externalPersonId,
-        individualId: action.individualId, linkSource: action.linkSource || 'matched',
+        individualId: action.individualId, linkSource: action.linkSource || 'matched', markSeen: markLinksSeen,
       });
       if (provider === 'planning_center') {
         await conn.query(
@@ -562,7 +563,7 @@ async function applyPeopleSyncPlan({
     for (const action of asArray(plan.linkFamilies)) {
       await linkRepository.upsertFamilyLinkWithConnection(conn, {
         churchId, provider, externalFamilyId: action.externalFamilyId,
-        familyId: action.familyId, linkSource: action.linkSource || 'matched',
+        familyId: action.familyId, linkSource: action.linkSource || 'matched', markSeen: markLinksSeen,
       });
       if (provider === 'planning_center') {
         await conn.query(
@@ -599,6 +600,7 @@ async function applyPeopleSyncPlan({
       if (action.externalFamilyId) {
         await linkRepository.upsertFamilyLinkWithConnection(conn, {
           churchId, provider, externalFamilyId: action.externalFamilyId, familyId, linkSource: 'created',
+          markSeen: markLinksSeen,
         });
         if (provider === 'planning_center') {
           await conn.query(
@@ -668,6 +670,7 @@ async function applyPeopleSyncPlan({
       newIndividualIdByExternal.set(action.externalPersonId, individualId);
       await linkRepository.upsertPersonLinkWithConnection(conn, {
         churchId, provider, externalPersonId: action.externalPersonId, individualId, linkSource: 'created',
+        markSeen: markLinksSeen,
       });
       if (provider === 'planning_center') {
         await conn.query(

@@ -107,6 +107,47 @@ test('corrections reject a stale old pair before changing any link', async () =>
   });
 });
 
+test('link upserts stamp seen time by default and can keep import links dormant', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const defaultPersonId = await seedIndividual(churchId, 'Default Seen');
+    const dormantPersonId = await seedIndividual(churchId, 'Dormant');
+    const defaultFamilyId = await seedFamily(churchId, 'Default Seen');
+    const dormantFamilyId = await seedFamily(churchId, 'Dormant');
+
+    await upsertPersonLink({
+      churchId, provider: 'elvanto', externalPersonId: 'seen-person',
+      individualId: defaultPersonId, linkSource: 'created',
+    });
+    await upsertPersonLink({
+      churchId, provider: 'elvanto', externalPersonId: 'dormant-person',
+      individualId: dormantPersonId, linkSource: 'created', markSeen: false,
+    });
+    await upsertFamilyLink({
+      churchId, provider: 'elvanto', externalFamilyId: 'seen-family',
+      familyId: defaultFamilyId, linkSource: 'created',
+    });
+    await upsertFamilyLink({
+      churchId, provider: 'elvanto', externalFamilyId: 'dormant-family',
+      familyId: dormantFamilyId, linkSource: 'created', markSeen: false,
+    });
+
+    const personRows = await Database.query(
+      `SELECT external_person_id, last_seen_at FROM external_person_links
+       WHERE church_id = ? ORDER BY external_person_id`,
+      [churchId]
+    );
+    const familyRows = await Database.query(
+      `SELECT external_family_id, last_seen_at FROM external_family_links
+       WHERE church_id = ? ORDER BY external_family_id`,
+      [churchId]
+    );
+    assert.equal(personRows.find((row) => row.external_person_id === 'seen-person').last_seen_at !== null, true);
+    assert.equal(personRows.find((row) => row.external_person_id === 'dormant-person').last_seen_at, null);
+    assert.equal(familyRows.find((row) => row.external_family_id === 'seen-family').last_seen_at !== null, true);
+    assert.equal(familyRows.find((row) => row.external_family_id === 'dormant-family').last_seen_at, null);
+  });
+});
+
 test('correction targets cannot cross the church boundary', async () => {
   await withTestChurchDb(async (churchId) => {
     const linkedId = await seedIndividual(churchId, 'Linked');

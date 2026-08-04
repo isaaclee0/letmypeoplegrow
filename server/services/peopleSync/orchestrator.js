@@ -516,6 +516,45 @@ function snapshotDigestInput(snapshot) {
   };
 }
 
+// Pure structural validation shared by source reconciliation and one-time
+// imports. Identity is deliberately separate: callers must compare the
+// returned source with the source/selection they requested so an otherwise
+// complete response for the wrong provider-owned source fails as unavailable,
+// not merely malformed.
+function isCompleteSourceSnapshot(snapshot, provider) {
+  const providerRefreshedAt = snapshot?.providerRefreshedAt ?? snapshot?.source?.providerRefreshedAt ?? null;
+  if (!snapshot || snapshot.provider !== provider ||
+      !snapshot.source || typeof snapshot.source !== 'object' || Array.isArray(snapshot.source) ||
+      snapshot.complete !== true || typeof snapshot.source.kind !== 'string' ||
+      typeof snapshot.source.externalId !== 'string' ||
+      typeof snapshot.source.name !== 'string' || !snapshot.source.name.trim() ||
+      !isIsoTimestamp(snapshot.fetchedAt) || !isIsoTimestamp(providerRefreshedAt, { allowNull: true }) ||
+      !Array.isArray(snapshot.memberExternalIds) || !Array.isArray(snapshot.people) ||
+      !Array.isArray(snapshot.contextPeople) || !Array.isArray(snapshot.families)) {
+    return false;
+  }
+
+  const peopleIds = new Set();
+  for (const candidate of snapshot.people) {
+    const id = personId(candidate);
+    if (!id) return false;
+    peopleIds.add(id);
+  }
+  for (const candidate of snapshot.contextPeople) {
+    const id = personId(candidate);
+    if (!id || peopleIds.has(id)) return false;
+  }
+  for (const rawId of snapshot.memberExternalIds) {
+    const id = rawId === null || rawId === undefined ? '' : String(rawId);
+    if (!id || !peopleIds.has(id)) return false;
+  }
+  for (const family of snapshot.families) {
+    const id = family?.id === null || family?.id === undefined ? '' : String(family.id);
+    if (!id) return false;
+  }
+  return true;
+}
+
 async function recordSourceFailureSafely(deps, input) {
   try {
     await deps.recordActiveSourceFailure(input);
@@ -562,12 +601,7 @@ async function acquireCompleteProviderSources({
         throw sourceIncomplete(provider);
       }
       if (!sameSourceIdentity(sourceSnapshot.source, selectedSource)) throw sourceUnavailable(provider);
-      if (sourceSnapshot.complete !== true || typeof sourceSnapshot.source.kind !== 'string' ||
-          typeof sourceSnapshot.source.externalId !== 'string' ||
-          typeof sourceSnapshot.source.name !== 'string' || !sourceSnapshot.source.name.trim() ||
-          !isIsoTimestamp(sourceSnapshot.fetchedAt) || !isIsoTimestamp(providerRefreshedAt, { allowNull: true }) ||
-          !Array.isArray(sourceSnapshot.memberExternalIds) || !Array.isArray(sourceSnapshot.people) ||
-          !Array.isArray(sourceSnapshot.contextPeople) || !Array.isArray(sourceSnapshot.families)) {
+      if (!isCompleteSourceSnapshot(sourceSnapshot, provider)) {
         throw sourceIncomplete(provider);
       }
 
@@ -1424,6 +1458,9 @@ module.exports = {
   previewLinkCorrections,
   sanitizePlanForReview,
   reviewCoverage,
+  isCompleteSourceSnapshot,
+  sameSourceIdentity,
+  snapshotDigestInput,
   // Exported for orchestrator.test.js's dependency-injected unit tests.
   defaultDeps,
 };

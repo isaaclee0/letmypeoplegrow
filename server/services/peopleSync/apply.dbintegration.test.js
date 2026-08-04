@@ -52,9 +52,10 @@ function v2Selections(identityDecisions) {
 function reviewedApply(churchId, provider, plan, batchId = null) {
   const planDigest = digestPlan(plan);
   const reviewToken = createReviewToken({
-    churchId, provider, batchId, planDigest, expiresInSeconds: 1800,
+    operationKind: 'people_sync', churchId, provider, batchId, planDigest, expiresInSeconds: 1800,
   });
   return {
+    operationKind: 'people_sync',
     reviewToken,
     planDigest,
     batchId,
@@ -449,6 +450,7 @@ test('base and pre-minted correction tokens atomically share one consumable revi
 
     const baseReview = reviewedApply(churchId, provider, plan);
     const childReviewToken = createReviewToken({
+      operationKind: 'people_sync',
       churchId,
       provider,
       batchId: null,
@@ -458,6 +460,7 @@ test('base and pre-minted correction tokens atomically share one consumable revi
       expiresInSeconds: 1800,
     });
     const childReview = {
+      operationKind: 'people_sync',
       reviewToken: childReviewToken,
       planDigest,
       batchId: null,
@@ -477,6 +480,7 @@ test('base and pre-minted correction tokens atomically share one consumable revi
 
     const secondBaseReview = reviewedApply(churchId, provider, plan);
     const secondChildReviewToken = createReviewToken({
+      operationKind: 'people_sync',
       churchId,
       provider,
       batchId: null,
@@ -486,6 +490,7 @@ test('base and pre-minted correction tokens atomically share one consumable revi
       expiresInSeconds: 1800,
     });
     const secondChildReview = {
+      operationKind: 'people_sync',
       reviewToken: secondChildReviewToken,
       planDigest,
       batchId: null,

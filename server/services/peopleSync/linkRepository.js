@@ -71,6 +71,7 @@ async function assertLocalRecord(conn, table, id, churchId) {
 async function upsertPersonLinkWithConnection(conn, input) {
   assertLinkInput(input, 'person');
   const { churchId, provider, externalPersonId, individualId, linkSource } = input;
+  const markSeen = input.markSeen !== false;
   await assertLocalRecord(conn, 'individuals', individualId, churchId);
   const byExternal = await conn.query(`SELECT id, individual_id FROM external_person_links
     WHERE church_id = ? AND provider = ? AND external_person_id = ?`, [churchId, provider, externalPersonId]);
@@ -81,17 +82,19 @@ async function upsertPersonLinkWithConnection(conn, input) {
     throw new Error('Person link collision for this church and provider');
   }
   if (byExternal[0]) {
-    await conn.query(`UPDATE external_person_links SET link_source = ?, last_seen_at = datetime('now'),
+    await conn.query(`UPDATE external_person_links SET link_source = ?,
+        last_seen_at = CASE WHEN ? THEN datetime('now') ELSE last_seen_at END,
         updated_at = datetime('now')
       WHERE id = ? AND church_id = ? AND provider = ? AND external_person_id = ? AND individual_id = ?`,
-    [linkSource, byExternal[0].id, churchId, provider, externalPersonId, individualId]);
+    [linkSource, markSeen ? 1 : 0, byExternal[0].id, churchId, provider, externalPersonId, individualId]);
     return (await conn.query(`SELECT id, church_id, provider, external_person_id, individual_id, link_source,
         linked_at, last_seen_at, review_declined FROM external_person_links
       WHERE id = ? AND church_id = ? AND provider = ?`, [byExternal[0].id, churchId, provider]))[0];
   }
   const result = await conn.query(`INSERT INTO external_person_links
     (church_id, provider, external_person_id, individual_id, link_source, last_seen_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))`, [churchId, provider, externalPersonId, individualId, linkSource]);
+    VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END)`,
+  [churchId, provider, externalPersonId, individualId, linkSource, markSeen ? 1 : 0]);
   return (await conn.query(`SELECT id, church_id, provider, external_person_id, individual_id, link_source,
       linked_at, last_seen_at, review_declined FROM external_person_links
     WHERE id = ? AND church_id = ? AND provider = ?`, [result.insertId, churchId, provider]))[0];
@@ -161,6 +164,7 @@ async function applyPersonLinkCorrectionsWithConnection(conn, { churchId, provid
 async function upsertFamilyLinkWithConnection(conn, input) {
   assertLinkInput(input, 'family');
   const { churchId, provider, externalFamilyId, familyId, linkSource } = input;
+  const markSeen = input.markSeen !== false;
   await assertLocalRecord(conn, 'families', familyId, churchId);
   const byExternal = await conn.query(`SELECT id, family_id FROM external_family_links
     WHERE church_id = ? AND provider = ? AND external_family_id = ?`, [churchId, provider, externalFamilyId]);
@@ -171,15 +175,18 @@ async function upsertFamilyLinkWithConnection(conn, input) {
     throw new Error('Family link collision for this church and provider');
   }
   if (byExternal[0]) {
-    await conn.query(`UPDATE external_family_links SET link_source = ?, last_seen_at = datetime('now'), updated_at = datetime('now')
+    await conn.query(`UPDATE external_family_links SET link_source = ?,
+        last_seen_at = CASE WHEN ? THEN datetime('now') ELSE last_seen_at END,
+        updated_at = datetime('now')
       WHERE id = ? AND church_id = ? AND provider = ? AND external_family_id = ? AND family_id = ?`,
-    [linkSource, byExternal[0].id, churchId, provider, externalFamilyId, familyId]);
+    [linkSource, markSeen ? 1 : 0, byExternal[0].id, churchId, provider, externalFamilyId, familyId]);
     return (await conn.query(`SELECT id, church_id, provider, external_family_id, family_id, link_source, linked_at, last_seen_at
       FROM external_family_links WHERE id = ? AND church_id = ? AND provider = ?`, [byExternal[0].id, churchId, provider]))[0];
   }
   const result = await conn.query(`INSERT INTO external_family_links
     (church_id, provider, external_family_id, family_id, link_source, last_seen_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))`, [churchId, provider, externalFamilyId, familyId, linkSource]);
+    VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END)`,
+  [churchId, provider, externalFamilyId, familyId, linkSource, markSeen ? 1 : 0]);
   return (await conn.query(`SELECT id, church_id, provider, external_family_id, family_id, link_source, linked_at, last_seen_at
     FROM external_family_links WHERE id = ? AND church_id = ? AND provider = ?`, [result.insertId, churchId, provider]))[0];
 }

@@ -8,6 +8,7 @@ const { digestPlan, digestReviewToken } = require('./planDigest');
 const { digestSourceIdentity } = require('./sourceModel');
 const {
   buildReview, applyReviewed, runUnattended, previewAuthoritySwitch, previewLinkCorrections, OrchestratorError,
+  isCompleteSourceSnapshot, sameSourceIdentity, snapshotDigestInput,
 } = require('./orchestrator');
 
 function emptyApplyResult(overrides = {}) {
@@ -90,6 +91,22 @@ function sourceSnapshot(selectedSource, overrides = {}) {
     ...overrides,
   };
 }
+
+test('exports the pure source snapshot validators used by import orchestration', () => {
+  const selected = source('group-1', 'Members');
+  const complete = sourceSnapshot(selected, {
+    people: [person('member')],
+    memberExternalIds: ['member'],
+    contextPeople: [person('context')],
+  });
+
+  assert.equal(isCompleteSourceSnapshot(complete, 'elvanto'), true);
+  assert.equal(isCompleteSourceSnapshot({ ...complete, complete: false }, 'elvanto'), false);
+  assert.equal(isCompleteSourceSnapshot({ ...complete, memberExternalIds: ['missing'] }, 'elvanto'), false);
+  assert.equal(sameSourceIdentity(complete.source, selected), true);
+  assert.equal(sameSourceIdentity(complete.source, source('other')), false);
+  assert.deepEqual(snapshotDigestInput(complete).context[0].name, 'Ada\u0000Lovelace');
+});
 
 function makeDeps({
   batches = [batch()],

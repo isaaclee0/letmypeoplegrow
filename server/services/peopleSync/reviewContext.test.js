@@ -126,6 +126,24 @@ test('signs every reviewable identity with deterministic selections and fresh cr
   });
 });
 
+test('signs the projected import people type instead of recomputing a regular creation', () => {
+  const context = buildReviewContext({
+    plan: {
+      operationKind: 'people_import',
+      linkPeople: [], ambiguousPeople: [],
+      addPeople: [{ externalPersonId: 'ext-1', peopleType: 'local_visitor' }],
+    },
+    externalPeople: [
+      { id: 'ext-1', firstName: 'Ada', lastName: 'Lovelace', child: false, familyId: null, state: 'active' },
+    ],
+    localPeople: [],
+    batches: [],
+    eligibleByBatch: new Map(),
+  });
+
+  assert.equal(context.identities['ext-1'].createPerson.peopleType, 'local_visitor');
+});
+
 test('builds a lean family directory with explicit household availability and match eligibility', () => {
   const directory = buildReviewDirectory({
     externalPeople: [
