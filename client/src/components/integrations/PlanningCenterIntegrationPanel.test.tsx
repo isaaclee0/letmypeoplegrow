@@ -159,14 +159,38 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument();
   });
 
-  it('opens review immediately after creating a batch', async () => {
+  it('opens one combined authority review after creating the first batch with no source of truth', async () => {
     renderPanel();
     await screen.findByText('Members');
 
     fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+    expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
+  });
+
+  it('opens ordinary batch review after creating another batch for the active authority', async () => {
+    renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' } });
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/48/review');
+  });
+
+  it('keeps a new batch prepared with switch guidance when another provider is authoritative', async () => {
+    renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'elvanto' } });
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(await screen.findByText('Batch prepared. Switch source of truth to review and activate it.')).toBeInTheDocument();
+    expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
   });
 
   it('keeps the existing reload behavior after editing a batch', async () => {

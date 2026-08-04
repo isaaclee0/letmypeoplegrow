@@ -236,6 +236,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [batchNotice, setBatchNotice] = useState<string | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const connectedRef = useRef(status.connected);
   const connectedDataGeneration = useRef(0);
@@ -351,7 +352,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                 <h5 className="text-sm font-medium">Elvanto sync batches</h5>
                 <p className="text-xs text-gray-500">Review every change before anything is applied.</p>
               </div>
-              {editingBatch === null && <button type="button" onClick={() => setEditingBatch('new')} className="rounded bg-green-600 px-3 py-2 text-sm text-white">New batch</button>}
+              {editingBatch === null && <button type="button" onClick={() => { setBatchNotice(null); setEditingBatch('new'); }} className="rounded bg-green-600 px-3 py-2 text-sm text-white">New batch</button>}
             </div>
             {loading && <p className="text-sm text-gray-500">Loading Elvanto sync data…</p>}
             {editingBatch && (
@@ -360,7 +361,17 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                 gatherings={gatherings}
                 onSaved={(savedBatch) => {
                   if (editingBatch === 'new') {
-                    navigate(`/app/settings/integrations/elvanto/batches/${savedBatch.id}/review`);
+                    if (peopleSyncSettings.authorityProvider === 'none') {
+                      navigate('/app/settings/integrations/elvanto/authority-review?reason=first-batch');
+                      return;
+                    }
+                    if (peopleSyncSettings.authorityProvider === 'elvanto') {
+                      navigate(`/app/settings/integrations/elvanto/batches/${savedBatch.id}/review`);
+                      return;
+                    }
+                    setEditingBatch(null);
+                    setBatchNotice('Batch prepared. Switch source of truth to review and activate it.');
+                    void reloadAfterBatchMutation();
                     return;
                   }
                   setEditingBatch(null);
@@ -394,6 +405,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
               ))}
             </ul>
             {!loading && batches.length === 0 && <p className="text-sm text-gray-500">No Elvanto batches yet.</p>}
+            {batchNotice && <p role="status" className="text-sm text-green-700 dark:text-green-300">{batchNotice}</p>}
             {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           </section>
 

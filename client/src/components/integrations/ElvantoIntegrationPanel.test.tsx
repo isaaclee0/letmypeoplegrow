@@ -46,10 +46,10 @@ const batch = {
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, legacyProviderBatchId: null,
   lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
 } as PeopleSyncBatch;
-function renderPanel() {
+function renderPanel(peopleSyncSettings: PeopleSyncSettings = settings) {
   return render(<ElvantoIntegrationPanel
     status={{ connected: true, loading: false, elvantoAccount: 'Example church' }} refreshStatus={vi.fn()} onBack={vi.fn()}
-    peopleSyncSettings={settings} peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }}
+    peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }}
     refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
   />);
 }
@@ -131,14 +131,38 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument();
   });
 
-  it('opens review immediately after creating a batch', async () => {
+  it('opens one combined authority review after creating the first batch with no source of truth', async () => {
     renderPanel();
     await screen.findByText('Members');
 
     fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/authority-review?reason=first-batch');
+    expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
+  });
+
+  it('opens ordinary batch review after creating another batch for the active authority', async () => {
+    renderPanel({ ...settings, authorityProvider: 'elvanto' });
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/batches/27/review');
+  });
+
+  it('keeps a new batch prepared with switch guidance when another provider is authoritative', async () => {
+    renderPanel({ ...settings, authorityProvider: 'planning_center' });
+    await screen.findByText('Members');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(await screen.findByText('Batch prepared. Switch source of truth to review and activate it.')).toBeInTheDocument();
+    expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
+    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
   });
 
   it('keeps the existing reload behavior after editing a batch', async () => {

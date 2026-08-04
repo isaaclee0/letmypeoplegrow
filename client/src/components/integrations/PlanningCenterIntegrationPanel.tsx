@@ -83,6 +83,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchesError, setBatchesError] = useState<string | null>(null);
+  const [batchNotice, setBatchNotice] = useState<string | null>(null);
   const [syncStats, setSyncStats] = useState<{ totalPeople: number; syncedPeople: number } | null>(null);
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
   const [legacyBatchPendingDelete, setLegacyBatchPendingDelete] = useState<PeopleSyncBatch | null>(null);
@@ -502,7 +503,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 <div className="mt-4 flex items-center justify-between">
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Sync batches</p>
                   {editingBatch === null && (
-                    <button type="button" onClick={() => setEditingBatch('new')}
+                    <button type="button" onClick={() => { setBatchNotice(null); setEditingBatch('new'); }}
                       className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
                       New batch
                     </button>
@@ -510,6 +511,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 </div>
 
                 {batchesError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{batchesError}</p>}
+                {batchNotice && <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-300">{batchNotice}</p>}
                 {batchesLoading && <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading batches…</p>}
 
                 {editingBatch !== null && (
@@ -518,7 +520,17 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                       batch={editingBatch === 'new' ? null : editingBatch}
                       onSaved={(savedBatch) => {
                         if (editingBatch === 'new') {
-                          navigate(`/app/settings/integrations/planning-center/batches/${savedBatch.id}/review`);
+                          if (peopleSyncSettings.authorityProvider === 'none') {
+                            navigate('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+                            return;
+                          }
+                          if (peopleSyncSettings.authorityProvider === 'planning_center') {
+                            navigate(`/app/settings/integrations/planning-center/batches/${savedBatch.id}/review`);
+                            return;
+                          }
+                          setEditingBatch(null);
+                          setBatchNotice('Batch prepared. Switch source of truth to review and activate it.');
+                          void reloadAfterBatchMutation();
                           return;
                         }
                         setEditingBatch(null);

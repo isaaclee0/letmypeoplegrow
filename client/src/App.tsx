@@ -25,6 +25,7 @@ import WebSocketTestPage from './pages/WebSocketTestPage';
 import AiInsightsPage from './pages/AiInsightsPage';
 import CheckInsPage from './pages/CheckInsPage';
 import PeopleSyncBatchReviewPage from './pages/PeopleSyncBatchReviewPage';
+import PeopleSyncAuthorityReviewPage from './pages/PeopleSyncAuthorityReviewPage';
 import PendingApprovalPage from './pages/PendingApprovalPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
@@ -196,6 +197,14 @@ function App() {
                     } 
                   />
                   <Route path="settings" element={<SettingsPage />} />
+                  <Route
+                    path="settings/integrations/:provider/authority-review"
+                    element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <PeopleSyncAuthorityReviewPage />
+                      </RoleProtectedRoute>
+                    }
+                  />
                   <Route
                     path="settings/integrations/:provider/batches/:batchId/review"
                     element={
