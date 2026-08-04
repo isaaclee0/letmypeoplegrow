@@ -19,7 +19,7 @@ import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
-import type { PeopleSyncBatch } from '../peopleSync/types';
+import type { BatchOperationalState, PeopleSyncBatch } from '../peopleSync/types';
 import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
 
 const PCO_SYNC_RESULT_LABELS: Record<string, [string, string]> = {
@@ -32,6 +32,13 @@ const PCO_SYNC_RESULT_LABELS: Record<string, [string, string]> = {
   linkFamilies: ['family linked', 'families linked'],
   gatheringAssigned: ['gathering assignment added', 'gathering assignments added'],
   gatheringRemoved: ['gathering assignment removed', 'gathering assignments removed'],
+};
+
+const BATCH_OPERATIONAL_STATE_LABELS: Record<BatchOperationalState, string> = {
+  active: 'Active',
+  prepared: 'Prepared for source switch',
+  disabled: 'Disabled',
+  source_review_required: 'Source review required',
 };
 
 function formatLastSyncResult(result: PeopleSyncBatch['lastSyncResult']): string | null {
@@ -548,18 +555,22 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'planning_center_list' ? 'Planning Center List' : batch.source.kind}: {batch.source.name}</p>}
                           {batch.sourceStatus === 'missing' && <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">Source missing</p>}
                           {batch.sourceStatus === 'error' && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Source check failed{batch.sourceStatusErrorCode ? ` · ${batch.sourceStatusErrorCode}` : ''}</p>}
+                          <p className="mt-1 text-xs font-medium text-gray-700 dark:text-gray-300">{BATCH_OPERATIONAL_STATE_LABELS[batch.operationalState]}</p>
+                          {batch.operationalState === 'prepared' && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Switch source of truth to activate this batch.</p>}
                           {batch.needsSourceReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · the selected people source will not run until reviewed.</p>}
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/app/settings/integrations/planning-center/batches/${batch.id}/review`)}
-                            aria-label={`Review & sync ${batch.name}`}
-                            className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-                          >
-                            Review & sync
-                          </button>
+                          {batch.reviewable && (
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/app/settings/integrations/planning-center/batches/${batch.id}/review`)}
+                              aria-label={`${batch.operationalState === 'source_review_required' ? 'Review source & sync' : 'Review & sync'} ${batch.name}`}
+                              className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                            >
+                              {batch.operationalState === 'source_review_required' ? 'Review source & sync' : 'Review & sync'}
+                            </button>
+                          )}
                           {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard source draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>

@@ -8,7 +8,7 @@ import type { PeopleSyncBatch } from '../peopleSync/types';
 vi.mock('../../services/api', () => ({ gatheringsAPI: { getAll: vi.fn(), create: vi.fn() }, integrationsAPI: { createPlanningCenterSyncBatch: vi.fn(), updatePlanningCenterSyncBatch: vi.fn() }, peopleSyncAPI: { saveSourceDraft: vi.fn() } }));
 vi.mock('../peopleSync/BatchSourceControls', () => ({ default: ({ value, onChange }: { value: { sourceKind: 'planning_center_list'; sourceExternalId: string } | null; onChange: (value: { sourceKind: 'planning_center_list'; sourceExternalId: string }) => void }) => <label>People source<select aria-label="People source" value={value?.sourceExternalId ?? ''} onChange={e => onChange({ sourceKind: 'planning_center_list', sourceExternalId: e.target.value })}><option value="">Choose</option><option value="list-1">Members</option><option value="list-2">New members</option></select></label> }));
 
-const batch = { id: 4, provider: 'planning_center', name: 'Members', enabled: true, source: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members', memberCount: 10, providerRefreshedAt: null }, sourceRevision: 2, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false, initialSourceReviewPending: false, sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null, defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null } as PeopleSyncBatch;
+const batch = { id: 4, provider: 'planning_center', name: 'Members', enabled: true, source: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members', memberCount: 10, providerRefreshedAt: null }, sourceRevision: 2, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false, initialSourceReviewPending: false, sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null, operationalState: 'active', reviewable: true, runnable: true, defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null } as PeopleSyncBatch;
 function renderEditor(current: PeopleSyncBatch | null = batch, onSaved = vi.fn()) { return render(<PlanningCenterBatchEditor batch={current} onSaved={onSaved} onCancel={vi.fn()} />); }
 describe('PlanningCenterBatchEditor', () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: [] }); });
@@ -56,10 +56,15 @@ describe('PlanningCenterBatchEditor', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('This legacy batch has been retired. Reload the page to view or delete it.');
   });
   it('blocks schedule changes while a source review is pending', async () => {
-    renderEditor({ ...batch, draftSource: { ...batch.source!, externalId: 'list-2' }, needsSourceReview: true });
+    renderEditor({ ...batch, draftSource: { ...batch.source!, externalId: 'list-2' }, needsSourceReview: true, operationalState: 'source_review_required', reviewable: true, runnable: false });
     await waitFor(() => expect(gatheringsAPI.getAll).toHaveBeenCalled());
     expect(screen.getByLabelText('Runs automatically')).toBeDisabled();
     expect(screen.getByText('Scheduled runs are blocked until you complete a full review.')).toBeInTheDocument();
+  });
+  it('explains that a prepared schedule starts after authority activation', async () => {
+    renderEditor({ ...batch, operationalState: 'prepared', reviewable: false, runnable: false });
+    await waitFor(() => expect(gatheringsAPI.getAll).toHaveBeenCalled());
+    expect(screen.getByText('Scheduled runs start only after authority activation.')).toBeInTheDocument();
   });
   it('presents automatic gathering removal as a styled switch with a warning dialog', async () => {
     renderEditor();

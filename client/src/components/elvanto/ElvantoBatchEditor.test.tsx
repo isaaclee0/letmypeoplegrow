@@ -24,6 +24,7 @@ const batch = {
   source: { kind: 'elvanto_category', externalId: 'category-1', name: 'Members', memberCount: 5, providerRefreshedAt: null },
   sourceRevision: 1, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null,
   needsSourceReview: false, initialSourceReviewPending: false, sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null,
+  operationalState: 'active', reviewable: true, runnable: true,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
@@ -70,13 +71,18 @@ describe('ElvantoBatchEditor source drafts', () => {
   });
 
   it('keeps an existing source draft and blocks its schedule', async () => {
-    const pending = { ...batch, draftSource: { ...batch.source!, externalId: 'category-2', name: 'Visitors' }, needsSourceReview: true };
+    const pending = { ...batch, draftSource: { ...batch.source!, externalId: 'category-2', name: 'Visitors' }, needsSourceReview: true, operationalState: 'source_review_required' as const, reviewable: true, runnable: false };
     vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch: pending } });
     renderEditor(pending);
     expect(screen.getByLabelText('Runs automatically')).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
     await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalled());
     expect(peopleSyncAPI.saveSourceDraft).not.toHaveBeenCalled();
+  });
+
+  it('explains that a prepared schedule starts after authority activation', () => {
+    renderEditor({ ...batch, operationalState: 'prepared', reviewable: false, runnable: false });
+    expect(screen.getByText('Scheduled runs start only after authority activation.')).toBeInTheDocument();
   });
 
   it('presents automatic gathering removal as a styled switch with a warning dialog', () => {

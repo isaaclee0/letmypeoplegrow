@@ -6,6 +6,7 @@ import ElvantoBatchEditor, { type ElvantoGatheringOption } from '../elvanto/Elva
 import ElvantoGatheringImport from '../elvanto/ElvantoGatheringImport';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import type {
+  BatchOperationalState,
   PeopleSyncBatch,
   PeopleSyncRun,
   PeopleSyncSettings,
@@ -13,6 +14,13 @@ import type {
 import type { ElvantoStatus, PanelProps, PeopleSyncPanelProps } from './types';
 
 type Props = PanelProps<ElvantoStatus> & PeopleSyncPanelProps & { initialAction?: 'disconnect' };
+
+const BATCH_OPERATIONAL_STATE_LABELS: Record<BatchOperationalState, string> = {
+  active: 'Active',
+  prepared: 'Prepared for source switch',
+  disabled: 'Disabled',
+  source_review_required: 'Source review required',
+};
 
 function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === 'object' && error !== null) {
@@ -371,11 +379,13 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                       {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'elvanto_group' ? 'Elvanto Group' : 'Elvanto Category'}: {batch.source.name}</p>}
                       {batch.sourceStatus === 'missing' && <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">Source missing</p>}
                       {batch.sourceStatus === 'error' && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Source check failed{batch.sourceStatusErrorCode ? ` · ${batch.sourceStatusErrorCode}` : ''}</p>}
+                      <p className="mt-1 text-xs font-medium text-gray-700 dark:text-gray-300">{BATCH_OPERATIONAL_STATE_LABELS[batch.operationalState]}</p>
+                      {batch.operationalState === 'prepared' && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Switch source of truth to activate this batch.</p>}
                       {batch.needsSourceReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · the selected people source will not run until reviewed.</p>}
                     </div>
                     <div className="flex flex-wrap gap-3 text-sm">
                       <button type="button" onClick={() => setEditingBatch(batch)} className="underline">Edit</button>
-                      <button type="button" aria-label={`Review & sync ${batch.name}`} onClick={() => navigate(`/app/settings/integrations/elvanto/batches/${batch.id}/review`)} className="rounded-md bg-green-600 px-3 py-2 font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">Review & sync</button>
+                      {batch.reviewable && <button type="button" aria-label={`${batch.operationalState === 'source_review_required' ? 'Review source & sync' : 'Review & sync'} ${batch.name}`} onClick={() => navigate(`/app/settings/integrations/elvanto/batches/${batch.id}/review`)} className="rounded-md bg-green-600 px-3 py-2 font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">{batch.operationalState === 'source_review_required' ? 'Review source & sync' : 'Review & sync'}</button>}
                       {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch)} className="underline">Discard source draft</button>}
                       <button type="button" onClick={() => void deleteBatch(batch)} className="text-red-600 underline">Delete</button>
                     </div>

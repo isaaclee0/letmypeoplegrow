@@ -47,6 +47,7 @@ export interface PlanningCenterStatus {
 
 export type SourceKind = 'planning_center_list' | 'elvanto_category' | 'elvanto_group';
 export type SourceStatus = 'unknown' | 'available' | 'missing' | 'error';
+export type BatchOperationalState = 'active' | 'prepared' | 'disabled' | 'source_review_required';
 
 export interface ProviderSource {
   kind: SourceKind;
@@ -101,6 +102,9 @@ export interface PeopleSyncBatch {
   sourceStatus: SourceStatus;
   sourceStatusCheckedAt: string | null;
   sourceStatusErrorCode: string | null;
+  operationalState: BatchOperationalState;
+  reviewable: boolean;
+  runnable: boolean;
   defaultPeopleType: PeopleType;
   gatheringTypeId: number | null;
   gatheringAutoRemoveEnabled: boolean;

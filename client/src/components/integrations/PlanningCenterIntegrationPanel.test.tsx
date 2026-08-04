@@ -46,6 +46,7 @@ const batch = {
   draftSource: { kind: 'planning_center_list', externalId: 'list-2', name: 'New members', memberCount: 8, providerRefreshedAt: null },
   draftSourceBaseRevision: 2, draftSourceUpdatedAt: '2026-07-29T00:00:00.000Z', needsSourceReview: true,
   initialSourceReviewPending: false, sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null,
+  operationalState: 'source_review_required', reviewable: true, runnable: false,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, legacyProviderBatchId: null,
   lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
@@ -91,7 +92,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
       data: { planningCenterSyncEnabled: false, planningCenterTrackBackgroundChecks: false },
     });
     renderPanel();
-    const reviewButton = await screen.findByRole('button', { name: 'Review & sync Members' });
+    const reviewButton = await screen.findByRole('button', { name: 'Review source & sync Members' });
     expect(reviewButton).toHaveClass('rounded-md', 'bg-green-600', 'text-white');
 
     await user.click(reviewButton);
@@ -99,6 +100,52 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/12/review');
     expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Planning Center batch sync review' })).not.toBeInTheDocument();
+  });
+
+  it('keeps active batches reviewable using the server-provided controls', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false, operationalState: 'active', reviewable: true, runnable: true }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review & sync Members' })).toBeInTheDocument();
+  });
+
+  it('keeps prepared batches editable while waiting for an authority switch', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, operationalState: 'prepared', reviewable: false, runnable: false }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Prepared for source switch')).toBeInTheDocument();
+    expect(screen.getByText('Switch source of truth to activate this batch.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard source draft' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review & sync Members' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+  });
+
+  it('uses the server reviewability flag for source review batches', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, operationalState: 'source_review_required', reviewable: true, runnable: false }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Source review required')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review source & sync Members' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+  });
+
+  it('shows the server-provided disabled state without review controls', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, enabled: false, operationalState: 'disabled', reviewable: false, runnable: false }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Disabled')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review & sync Members' })).not.toBeInTheDocument();
   });
 
   it('opens review immediately after creating a batch', async () => {
@@ -200,7 +247,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.getByText(/no longer runs/i)).toBeInTheDocument();
     expect(screen.getByText(/Prior settings: scheduled monthly \(day 15\)/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
-    expect(screen.getAllByRole('button', { name: 'Review & sync Members' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Review source & sync Members' })).toHaveLength(1);
 
     const legacyCard = screen.getByText('Old membership filters').closest('li');
     expect(legacyCard).not.toBeNull();
