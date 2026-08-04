@@ -575,8 +575,41 @@ function computePeopleSyncPlan(input = {}) {
   return plan;
 }
 
+function projectAdditiveImportPlan(syncPlan, authorityProvider) {
+  const plan = clone(syncPlan);
+  for (const bucket of BUCKETS) {
+    if (!Array.isArray(plan[bucket])) throw new TypeError(`Plan bucket ${bucket} must be an array`);
+  }
+
+  const additiveBuckets = new Set([
+    'linkPeople', 'linkFamilies', 'addPeople', 'addFamilies', 'ambiguousPeople',
+    'familyConflicts', 'skipped',
+  ]);
+  for (const bucket of BUCKETS) {
+    if (!additiveBuckets.has(bucket)) plan[bucket] = [];
+  }
+
+  const authorityIsActive = authorityProvider && authorityProvider !== 'none';
+  if (authorityIsActive) {
+    plan.addPeople = plan.addPeople.map((action) => ({
+      ...action,
+      peopleType: 'local_visitor',
+      reason: 'authority_requires_visitor',
+    }));
+  }
+  plan.operationKind = 'people_import';
+  plan.authoritative = false;
+  return plan;
+}
+
 function summarizePlan(plan) {
   return Object.fromEntries(BUCKETS.map((bucket) => [bucket, Array.isArray(plan?.[bucket]) ? plan[bucket].length : 0]));
 }
 
-module.exports = { BUCKETS, computePeopleSyncPlan, summarizePlan, desiredPeopleType };
+module.exports = {
+  BUCKETS,
+  computePeopleSyncPlan,
+  summarizePlan,
+  desiredPeopleType,
+  projectAdditiveImportPlan,
+};

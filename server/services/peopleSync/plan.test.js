@@ -1,7 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { computePeopleSyncPlan, summarizePlan, desiredPeopleType } = require('./plan');
+const {
+  computePeopleSyncPlan, summarizePlan, desiredPeopleType, projectAdditiveImportPlan,
+} = require('./plan');
 
 function person(overrides = {}) {
   return { id: 'ext-1', firstName: 'Ada', lastName: 'Lovelace', child: false,
@@ -670,4 +672,29 @@ test('action IDs remain distinct when external IDs and reasons contain separator
 
   assert.equal(plan.ambiguousPeople.length, 2);
   assert.equal(new Set(plan.ambiguousPeople.map((action) => action.id)).size, 2);
+});
+
+test('projects a sync plan into an additive import review without mutating the source plan', () => {
+  const syncPlan = computePeopleSyncPlan(input({
+    externalPeople: [person({ id: 'new-person' }), person({ id: 'linked-person', state: 'archived' })],
+    localPeople: [local({ id: 2, firstName: 'Old', isActive: true })],
+    batches: [batch({ id: 1, gatheringTypeId: 99, eligibleExternalPersonIds: ['new-person', 'linked-person'] })],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'linked-person', individualId: 2, reason: 'existing_link' }],
+      unmatchedExternalIds: ['new-person'],
+    }),
+  }));
+  const original = structuredClone(syncPlan);
+
+  const projected = projectAdditiveImportPlan(syncPlan, 'planning_center');
+
+  assert.deepEqual(syncPlan, original);
+  assert.equal(projected.operationKind, 'people_import');
+  assert.equal(projected.authoritative, false);
+  assert.deepEqual(projected.addPeople.map((action) => ({ peopleType: action.peopleType, reason: action.reason })), [{
+    peopleType: 'local_visitor', reason: 'authority_requires_visitor',
+  }]);
+  assert.deepEqual(projected.archive, []);
+  assert.deepEqual(projected.updateManagedFields, []);
+  assert.deepEqual(projected.addToGathering, []);
 });
