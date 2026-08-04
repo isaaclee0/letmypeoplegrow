@@ -56,7 +56,7 @@ const loadRoutes = () => {
   const routeFiles = [
     'auth', 'users', 'gatherings', 'families', 'individuals',
     'attendance', 'reports', 'notifications', 'onboarding',
-    'invitations', 'csv-import', 'test',
+    'invitations', 'csv-import', 'people-imports', 'test',
     'notification_rules', 'contacts',
     // 'importrange', // Disabled - external data access feature
     'settings', 'activities', 'visitor-config', 'integrations', 'ai', 'kiosk', 'takeout'
@@ -343,6 +343,8 @@ app.use(cors({
 // requests without changing unrelated API upload limits.
 const { createSourceBuilderJsonParser } = require('./routes/integrations/sourceBuilder');
 app.use('/api/integrations/people-sync/providers', createSourceBuilderJsonParser());
+const { createPeopleImportsJsonParser } = require('./routes/people-imports');
+app.use('/api/people-imports', createPeopleImportsJsonParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
