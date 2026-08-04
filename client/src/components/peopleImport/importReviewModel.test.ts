@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import SyncReview from '../peopleSync/SyncReview';
 import type { PeopleImportReview } from './types';
@@ -122,6 +123,91 @@ describe('people import review model', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
     expect(screen.getByRole('button', { name: 'Apply import' })).toBeDisabled();
     expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/sync|archive|managed fields|correction/i);
+  });
+
+  it.each([
+    ['missing top-level marker', (review: PeopleImportReview) => {
+      delete (review as Partial<PeopleImportReview>).operationKind;
+    }],
+    ['missing plan marker', (review: PeopleImportReview) => {
+      delete (review.plan as Partial<PeopleImportReview['plan']>).operationKind;
+    }],
+    ['wrong top-level marker', (review: PeopleImportReview) => {
+      (review as { operationKind: string }).operationKind = 'people_sync';
+    }],
+    ['wrong plan marker', (review: PeopleImportReview) => {
+      (review.plan as { operationKind: string }).operationKind = 'authority_switch';
+    }],
+  ] as const)('fails closed for an import review with a %s', (_label, mutate) => {
+    const review = reviewFixture();
+    mutate(review);
+    const { container } = render(React.createElement(SyncReview, {
+      operationKind: 'people_import',
+      provider: 'elvanto',
+      review,
+      ...handlers,
+    } as never));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    expect(screen.getByRole('button', { name: 'Apply import' })).toBeDisabled();
+    expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/sync|archive|managed fields|correction/i);
+  });
+
+  it.each(['people_sync', 'authority_switch'] as const)(
+    'rejects an import-marked review rendered as %s',
+    (operationKind) => {
+      const review = reviewFixture();
+      render(React.createElement(SyncReview, {
+        operationKind,
+        provider: 'elvanto',
+        review,
+        ...handlers,
+      } as never));
+
+      expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+      expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
+      expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ['SYNC_PLAN_STALE', 'This import review is out of date.'],
+    ['SYNC_REVIEW_EXPIRED', 'This import review has expired.'],
+  ] as const)('uses curated import copy for refresh-only %s errors', async (code, expected) => {
+    const user = userEvent.setup();
+    const raw = 'Refresh before applying another sync correction with archive managed fields.';
+    const onApply = vi.fn().mockRejectedValue({ response: { data: { code, error: raw } } });
+    const { container } = render(React.createElement(SyncReview, {
+      operationKind: 'people_import',
+      provider: 'elvanto',
+      review: reviewFixture(),
+      ...handlers,
+      onApply,
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Apply import' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+    expect(container).not.toHaveTextContent(/sync|archive|managed fields|correction/i);
+  });
+
+  it('uses curated import copy for an unexpected apply error', async () => {
+    const user = userEvent.setup();
+    const raw = 'Sync correction failed while trying to archive managed fields.';
+    const onApply = vi.fn().mockRejectedValue(new Error(raw));
+    const { container } = render(React.createElement(SyncReview, {
+      operationKind: 'people_import',
+      provider: 'elvanto',
+      review: reviewFixture(),
+      ...handlers,
+      onApply,
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Apply import' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The import could not be applied. Try again.');
     expect(container).not.toHaveTextContent(/sync|archive|managed fields|correction/i);
   });
 });

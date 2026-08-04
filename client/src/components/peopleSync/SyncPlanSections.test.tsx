@@ -81,6 +81,7 @@ function SectionsHarness({ review, initialState }: { review: PeopleSyncReview; i
   const archiveActions = review.plan.archive;
   return (
     <SyncPlanSections
+      operationKind="people_sync"
       review={review}
       state={state}
       archiveActions={archiveActions}
@@ -97,6 +98,27 @@ function SectionsHarness({ review, initialState }: { review: PeopleSyncReview; i
 }
 
 describe('SyncPlanSections', () => {
+  it('fails closed at runtime when an untyped caller omits the operation kind', () => {
+    const review = reviewFixture({
+      updateManagedFields: [{
+        id: 'update:7', externalPersonId: 'ext-match', individualId: 7,
+        changes: [{ field: 'firstName', localValue: 'Old', externalValue: 'Local' }],
+        reason: 'provider_managed_fields', reviewRequired: false,
+      }],
+    });
+    const state = initializeSyncSelectionState(review);
+
+    render(React.createElement(SyncPlanSections, {
+      review,
+      state,
+      archiveActions: [],
+      onStateChange: () => {},
+      onAcceptAllArchives: () => {},
+    } as never));
+
+    expect(screen.queryByLabelText('Planned non-identity changes')).not.toBeInTheDocument();
+  });
+
   it('hides shared sync sections during a people import', () => {
     const review = reviewFixture({
       addFamilies: [{
@@ -256,6 +278,7 @@ describe('SyncPlanSections', () => {
             Add source match instead
           </button>
           <SyncPlanSections
+            operationKind="people_sync"
             review={review}
             state={state}
             archiveActions={review.plan.archive}
@@ -305,6 +328,7 @@ describe('SyncPlanSections', () => {
             Decide later
           </button>
           <SyncPlanSections
+            operationKind="people_sync"
             review={review}
             state={state}
             archiveActions={review.plan.archive}

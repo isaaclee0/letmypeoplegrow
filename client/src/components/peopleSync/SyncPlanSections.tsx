@@ -122,7 +122,7 @@ function DenseChangeList({ children }: { children: React.ReactNode }) {
 }
 
 export interface SyncPlanSectionsProps {
-  operationKind?: PeopleReviewOperationKind;
+  operationKind: PeopleReviewOperationKind;
   review: PeopleSyncReview;
   state: SyncSelectionState;
   archiveActions: ArchiveAction[];
@@ -131,14 +131,14 @@ export interface SyncPlanSectionsProps {
 }
 
 export default function SyncPlanSections({
-  operationKind = 'people_sync',
+  operationKind,
   review,
   state,
   archiveActions,
   onStateChange,
   onAcceptAllArchives,
 }: SyncPlanSectionsProps) {
-  if (operationKind === 'people_import') return null;
+  if (operationKind !== 'people_sync' && operationKind !== 'authority_switch') return null;
   const view = deriveSyncPlanView(review, state);
   const directory = review.plan.people || { external: {}, local: {} };
   const terminalArchiveActions = archiveActions.filter(isTerminalArchive);

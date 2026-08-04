@@ -18,6 +18,7 @@ import {
 } from './syncSelections';
 import { isReviewDirty, selectedChangeCount } from './syncReviewModel';
 import { hasForbiddenImportMutations } from '../peopleImport/types';
+import type { PeopleImportReview } from '../peopleImport/types';
 import type {
   AmbiguousPersonAction,
   EstablishedLinkCorrection,
@@ -50,10 +51,8 @@ export interface CandidateSearchRenderProps {
   selectCandidate: (candidateId: number) => void;
 }
 
-export interface SyncReviewProps {
-  operationKind: PeopleReviewOperationKind;
+interface SyncReviewCommonProps {
   provider: SyncProvider;
-  review: PeopleSyncReview;
   batchName?: string;
   sourceName?: string;
   onRefresh: () => void | Promise<void>;
@@ -71,8 +70,31 @@ export interface SyncReviewProps {
   requireAllPlannedArchivesAccepted?: boolean;
 }
 
+export type SyncReviewProps = SyncReviewCommonProps & (
+  | { operationKind: 'people_import'; review: PeopleImportReview }
+  | { operationKind: Exclude<PeopleReviewOperationKind, 'people_import'>; review: PeopleSyncReview }
+);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function operationKindMatchesReview(
+  operationKind: PeopleReviewOperationKind,
+  review: PeopleSyncReview,
+): boolean {
+  const reviewOperationKind = (review as PeopleSyncReview & { operationKind?: unknown }).operationKind;
+  const planOperationKind = (review.plan as PeopleSyncReview['plan'] & { operationKind?: unknown }).operationKind;
+  if (operationKind === 'people_import') {
+    return reviewOperationKind === 'people_import' && planOperationKind === 'people_import';
+  }
+  return reviewOperationKind !== 'people_import' && planOperationKind !== 'people_import';
+}
+
+function peopleImportRefreshErrorTitle(code: string | undefined): string {
+  if (code === 'SYNC_REVIEW_EXPIRED') return 'This import review has expired.';
+  if (code === 'SYNC_REVIEW_ALREADY_APPLIED') return 'This import review has already been applied.';
+  return 'This import review is out of date.';
 }
 
 function isPositiveIntegerArray(value: unknown): value is number[] {
@@ -415,7 +437,7 @@ export default function SyncReview({
   requireAllPlannedArchivesAccepted = false,
 }: SyncReviewProps) {
   const initialState = stateForReview(review, operationKind);
-  const [effectiveReview, setEffectiveReview] = useState(review);
+  const [effectiveReview, setEffectiveReview] = useState<PeopleSyncReview>(review);
   const [state, setState] = useState<SyncSelectionState>(initialState);
   const [confirmedDestructiveChanges, setConfirmedDestructiveChanges] = useState(false);
   const [applyError, setApplyError] = useState<unknown>(null);
@@ -465,7 +487,8 @@ export default function SyncReview({
   const malformedV2 = declaresV2 && !validV2Context;
   const isPeopleImport = operationKind === 'people_import';
   const malformedImport = isPeopleImport && hasForbiddenImportMutations(effectiveReview);
-  const unsafeReview = malformedV2 || malformedImport;
+  const operationKindMismatch = !operationKindMatchesReview(operationKind, effectiveReview);
+  const unsafeReview = malformedV2 || malformedImport || operationKindMismatch;
   const reviewContext = validV2Context ? plan.reviewContext : undefined;
   const isV2 = declaresV2 && validV2Context;
   const establishedLinksReadOnly = isV2 && !onPreviewCorrections;
@@ -814,7 +837,13 @@ export default function SyncReview({
 
         {applyError && (
           <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
-            {refreshOnlyError ? (
+            {isPeopleImport && refreshOnlyError ? (
+              <>
+                <p className="font-medium">{peopleImportRefreshErrorTitle(refreshOnlyCode)}</p>
+                <p className="mt-1">Refresh the plan and review your choices again.</p>
+                <button type="button" className="mt-3 font-semibold underline underline-offset-2" onClick={() => void guardedRefresh()}>Refresh plan</button>
+              </>
+            ) : refreshOnlyError ? (
               <>
                 <p className="font-medium">
                   {reviewExpired
@@ -832,7 +861,9 @@ export default function SyncReview({
                 )}
                 <button type="button" className="mt-3 font-semibold underline underline-offset-2" onClick={() => void guardedRefresh()}>Refresh plan</button>
               </>
-            ) : peopleSyncErrorMessage(applyError, isPeopleImport ? 'Failed to apply import.' : 'Failed to apply sync.')}
+            ) : isPeopleImport
+              ? 'The import could not be applied. Try again.'
+              : peopleSyncErrorMessage(applyError, 'Failed to apply sync.')}
           </div>
         )}
 
