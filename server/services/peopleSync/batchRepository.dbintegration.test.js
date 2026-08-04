@@ -6,7 +6,8 @@ const { digestSourceIdentity } = require('./sourceModel');
 const {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, promoteSourceDraftsWithConnection, recordActiveSourceHealthWithConnection,
-  assertSourceExpectationsWithConnection,
+  assertSourceExpectationsWithConnection, buildPlanAffectingBatchConfigurationExpectation,
+  assertPlanAffectingBatchConfigurationWithConnection,
 } = require('./batchRepository');
 
 const PCO_SOURCE = { kind: 'planning_center_list', externalId: '42', name: 'Sunday Attendance' };
@@ -215,6 +216,75 @@ test('provider-wide source expectations reject an extra enabled batch while ordi
         churchId, provider: 'elvanto', expectations, requireExactSet: true,
       }), (error) => error?.code === 'SYNC_PLAN_STALE');
     });
+  });
+});
+
+test('plan-affecting batch configuration expectations bind lifecycle and gathering behavior but ignore scheduling', async () => {
+  const cases = [
+    { label: 'enabled scope', patch: { enabled: false } },
+    { label: 'default people type', patch: { defaultPeopleType: 'local_visitor' } },
+    { label: 'gathering target', patch: { gatheringTypeId: null } },
+    { label: 'destructive gathering removal', patch: { gatheringAutoRemoveEnabled: false } },
+    { label: 'legacy retired scope', patch: { legacyProviderBatchId: 99 }, provider: 'planning_center' },
+  ];
+
+  for (const { label, patch, provider = 'elvanto' } of cases) {
+    await withTestChurchDb(async (churchId) => {
+      const gatheringTypeId = await seedGathering(churchId);
+      const created = await createBatch({
+        churchId,
+        provider,
+        name: `Members ${label}`,
+        initialDraftSource: provider === 'planning_center' ? PCO_SOURCE : ELVANTO_SOURCE,
+        defaultPeopleType: 'regular',
+        gatheringTypeId,
+        gatheringAutoRemoveEnabled: true,
+        scheduleEnabled: false,
+      });
+      const expectation = buildPlanAffectingBatchConfigurationExpectation([created]);
+
+      await updateBatch({
+        churchId, provider, batchId: created.id,
+        scheduleEnabled: true, scheduleFrequency: 'monthly', scheduleDay: 3,
+      });
+      await Database.transactionForChurch(churchId, (conn) =>
+        assert.doesNotReject(assertPlanAffectingBatchConfigurationWithConnection(conn, {
+          churchId, provider, expectation,
+        }))
+      );
+
+      await updateBatch({ churchId, provider, batchId: created.id, ...patch });
+      await Database.transactionForChurch(churchId, (conn) =>
+        assert.rejects(assertPlanAffectingBatchConfigurationWithConnection(conn, {
+          churchId, provider, expectation,
+        }), (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409)
+      );
+    });
+  }
+});
+
+test('plan-affecting configuration digest is deterministic and authority exact-set validation rejects added scope', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const first = await createBatch({
+      churchId, provider: 'elvanto', name: 'First', initialDraftSource: ELVANTO_SOURCE,
+    });
+    const expectation = buildPlanAffectingBatchConfigurationExpectation([first], { requireExactSet: true });
+    assert.deepEqual(
+      expectation,
+      buildPlanAffectingBatchConfigurationExpectation([{ ...first }], { requireExactSet: true })
+    );
+
+    await createBatch({
+      churchId,
+      provider: 'elvanto',
+      name: 'Second',
+      initialDraftSource: { kind: 'elvanto_group', externalId: 'second', name: 'Second' },
+    });
+    await Database.transactionForChurch(churchId, (conn) =>
+      assert.rejects(assertPlanAffectingBatchConfigurationWithConnection(conn, {
+        churchId, provider: 'elvanto', expectation,
+      }), (error) => error?.code === 'SYNC_PLAN_STALE')
+    );
   });
 });
 

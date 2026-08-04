@@ -420,6 +420,7 @@ async function applyPeopleSyncPlan({
   reviewedApply = null,
   authorityExpectation = null,
   sourceExpectations = null,
+  batchConfigurationExpectation = null,
   connectionExpectation = null,
   requireConnection = false,
   allowedMutationBuckets = null,
@@ -446,6 +447,21 @@ async function applyPeopleSyncPlan({
       await batchRepository.assertSourceExpectationsWithConnection(conn, {
         churchId, provider, expectations: sourceExpectations,
         requireExactSet: activateAuthority === true,
+      });
+    }
+    if (batchConfigurationExpectation) {
+      const signedConfigurationDigest = plan.sourceContext?.batchConfigurationDigest;
+      if (signedConfigurationDigest !== batchConfigurationExpectation.configurationDigest ||
+          batchConfigurationExpectation.requireExactSet !== (activateAuthority === true)) {
+        throw reviewedApplyError(
+          'SYNC_PLAN_STALE',
+          'The reviewed sync batch configuration changed before apply.'
+        );
+      }
+      await batchRepository.assertPlanAffectingBatchConfigurationWithConnection(conn, {
+        churchId,
+        provider,
+        expectation: batchConfigurationExpectation,
       });
     }
     if (connectionExpectation) {

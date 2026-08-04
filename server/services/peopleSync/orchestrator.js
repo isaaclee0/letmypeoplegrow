@@ -168,7 +168,8 @@ function effectiveReviewBatches(batches, batchId) {
 }
 
 function connectionExpectationFor(provider, connectionGeneration) {
-  return provider === 'elvanto' ? { generation: connectionGeneration } : null;
+  void provider;
+  return { generation: connectionGeneration };
 }
 
 function reviewedSourceContext(
@@ -178,11 +179,12 @@ function reviewedSourceContext(
   sourceProvenance,
   connectionGeneration,
   authoritySourceSet = null,
+  batchConfigurationExpectation = null,
 ) {
   const batch = batchId === null || batchId === undefined ? null
     : batches.find((candidate) => String(candidate.id) === String(batchId));
   return {
-    ...(provider === 'elvanto' ? { connectionGeneration } : {}),
+    connectionGeneration,
     activeRevision: batch ? batch.sourceRevision : null,
     draftDigest: batch?.draftSource ? digestSourceIdentity(batch.draftSource) : null,
     snapshots: sourceProvenance.map(({ batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest }) => {
@@ -195,6 +197,9 @@ function reviewedSourceContext(
     ...(authoritySourceSet ? {
       promotions: authoritySourceSet.promotions,
       participatingBatchSourceDigest: authoritySourceSet.participatingBatchSourceDigest,
+    } : {}),
+    ...(batchConfigurationExpectation ? {
+      batchConfigurationDigest: batchConfigurationExpectation.configurationDigest,
     } : {}),
   };
 }
@@ -471,9 +476,7 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   // This durable generation must be observed before credentials. If a
   // reconnect lands between the reads, the older generation is retained and
   // the apply-time CAS fails closed instead of pairing old/new account state.
-  const connectionGeneration = provider === 'elvanto'
-    ? await deps.getConnectionGeneration(churchId, provider)
-    : null;
+  const connectionGeneration = await deps.getConnectionGeneration(churchId, provider);
   const credentials = await deps.getCredentials(churchId, provider);
   if (!credentials) throw new OrchestratorError('SYNC_NOT_CONNECTED', `No ${provider} credentials for this church`, 400);
 
@@ -535,6 +538,17 @@ function staleConnectionGeneration() {
     'The provider connection changed after this reconciliation started. Refresh and try again.',
     409
   );
+}
+
+async function assertConnectionExpectationCurrent({
+  churchId, provider, connectionExpectation, deps,
+}) {
+  if (!connectionExpectation) return;
+  const currentGeneration = await deps.getConnectionGeneration(churchId, provider);
+  if (!Number.isSafeInteger(connectionExpectation.generation) || connectionExpectation.generation < 0 ||
+      currentGeneration !== connectionExpectation.generation) {
+    throw staleConnectionGeneration();
+  }
 }
 
 function personId(person) {
@@ -628,6 +642,9 @@ async function acquireCompleteProviderSources({
 
   for (const batch of batches) {
     assertAuthorityPreviewActive(signal);
+    await assertConnectionExpectationCurrent({
+      churchId, provider, connectionExpectation, deps,
+    });
     const selectedSource = batch.effectiveSource ?? batch.source;
     if (!selectedSource) {
       throw new OrchestratorError('SYNC_SOURCE_SELECTION_REQUIRED', `Batch ${batch.id} needs a sync source selection`, 409);
@@ -643,6 +660,9 @@ async function acquireCompleteProviderSources({
         signal,
       });
       assertAuthorityPreviewActive(signal);
+      await assertConnectionExpectationCurrent({
+        churchId, provider, connectionExpectation, deps,
+      });
       const providerRefreshedAt = sourceSnapshot?.providerRefreshedAt ?? sourceSnapshot?.source?.providerRefreshedAt ?? null;
       if (!sourceSnapshot || sourceSnapshot.provider !== provider ||
           !sourceSnapshot.source || typeof sourceSnapshot.source !== 'object' || Array.isArray(sourceSnapshot.source)) {
@@ -978,6 +998,7 @@ async function buildReview({
   assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
+  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(reviewBatches);
   const authoritative = true;
   const activeAuthority = provider;
 
@@ -989,7 +1010,8 @@ async function buildReview({
     }), { linkCorrections });
 
     body.plan.sourceContext = reviewedSourceContext(
-      provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
+      provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration,
+      null, batchConfigurationExpectation,
     );
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
@@ -1036,7 +1058,8 @@ async function previewLinkCorrections({
     authoritative: true, activeAuthority: provider,
   }));
   const sourceContext = reviewedSourceContext(
-    provider, pre.batches, batchId, acquired.sourceProvenance, pre.connectionGeneration
+    provider, pre.batches, batchId, acquired.sourceProvenance, pre.connectionGeneration,
+    null, batchRepository.buildPlanAffectingBatchConfigurationExpectation(acquired.batches),
   );
 
   const base = computePipelineProjection(acquired, { linkCorrections: {} });
@@ -1134,6 +1157,10 @@ async function previewAuthoritySwitch({
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveAuthorityReviewBatches(pre.batches);
   const authoritySourceSet = authoritySourceSetFor(reviewBatches);
+  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(
+    reviewBatches,
+    { requireExactSet: true }
+  );
   // beginAuthoritySwitch is the source of truth for the resulting pending
   // state — it does NOT always set pending to `provider` (e.g. re-previewing
   // the CURRENT active authority clears pending back to null; see
@@ -1161,7 +1188,7 @@ async function previewAuthoritySwitch({
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, reviewBatches, null, body.sourceProvenance, pre.connectionGeneration,
-      authoritySourceSet,
+      authoritySourceSet, batchConfigurationExpectation,
     );
     if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
@@ -1272,6 +1299,10 @@ async function applyReviewed({
     ...(isAuthoritySwitch ? { authorityPreviewId } : {}),
   };
   const sourceExpectations = sourceExpectationsFor(reviewBatches);
+  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(
+    reviewBatches,
+    { requireExactSet: isAuthoritySwitch }
+  );
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
 
   // Everything that can still legitimately fail THIS run (fetch,
@@ -1294,7 +1325,7 @@ async function applyReviewed({
       const base = computePipelineProjection(acquired, { linkCorrections: {} });
       base.plan.sourceContext = reviewedSourceContext(
         provider, reviewBatches, batchId, base.sourceProvenance, pre.connectionGeneration,
-        authoritySourceSet,
+        authoritySourceSet, batchConfigurationExpectation,
       );
       if (isAuthoritySwitch && authorityPreviewId) base.plan.authorityPreviewId = authorityPreviewId;
       const lineageVerification = deps.verifyReviewTokenLineage(reviewToken, {
@@ -1318,7 +1349,7 @@ async function applyReviewed({
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, reviewBatches, batchId, body.sourceProvenance, pre.connectionGeneration,
-      authoritySourceSet,
+      authoritySourceSet, batchConfigurationExpectation,
     );
     if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
@@ -1351,6 +1382,7 @@ async function applyReviewed({
       sourcePromotions,
       authorityExpectation,
       sourceExpectations,
+      batchConfigurationExpectation,
       connectionExpectation,
       requireConnection: true,
     });
@@ -1463,6 +1495,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   const unattendedBatches = effectiveReviewBatches(pre.batches, null);
   const authorityExpectation = { active: pre.authorityState.active, pending: pre.authorityState.pending };
   const sourceExpectations = sourceExpectationsFor(unattendedBatches);
+  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(unattendedBatches);
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
 
@@ -1480,7 +1513,8 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     }));
 
     body.plan.sourceContext = reviewedSourceContext(
-      provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
+      provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration,
+      null, batchConfigurationExpectation,
     );
 
     // 8. apply safe unattended actions (no selections — archive/ambiguous/
@@ -1489,6 +1523,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections: {}, userId: null,
       authorityExpectation, sourceExpectations,
+      batchConfigurationExpectation,
       connectionExpectation,
       requireConnection: true,
     });

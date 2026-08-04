@@ -104,6 +104,26 @@ async function getConnectionGeneration(churchId, provider) {
   return Number(rows[0]?.generation || 0);
 }
 
+async function advanceConnectionGenerationWithConnection(conn, { churchId, provider }) {
+  await conn.query(
+    `INSERT INTO integration_connection_generations
+       (church_id, provider, generation)
+     VALUES (?, ?, 1)
+     ON CONFLICT(church_id, provider) DO UPDATE SET
+       generation = integration_connection_generations.generation + 1,
+       updated_at = datetime('now')`,
+    [churchId, provider]
+  );
+  const rows = await conn.query(
+    `SELECT generation
+       FROM integration_connection_generations
+      WHERE church_id = ? AND provider = ?
+      LIMIT 1`,
+    [churchId, provider]
+  );
+  return Number(rows[0]?.generation || 0);
+}
+
 async function assertConnectionGenerationWithConnection(conn, {
   churchId,
   provider,
@@ -173,6 +193,7 @@ module.exports = {
   getConnection,
   getCredentials,
   getConnectionGeneration,
+  advanceConnectionGenerationWithConnection,
   assertConnectionGenerationWithConnection,
   markValidated,
   updateMetadataCache,

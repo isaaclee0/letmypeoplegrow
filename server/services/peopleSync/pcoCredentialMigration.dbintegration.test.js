@@ -62,6 +62,10 @@ async function countConnectionRows(churchId) {
   return rows[0].n;
 }
 
+async function connectionGeneration(churchId) {
+  return connectionStore.getConnectionGeneration(churchId, 'planning_center');
+}
+
 test('one distinct legacy credential is encrypted and migrated at first access', async () => {
   await withCredentialKey(() => withTestChurchDb(async (churchId) => {
     const adminId = await insertAdmin(churchId, 'admin@example.test');
@@ -80,6 +84,7 @@ test('one distinct legacy credential is encrypted and migrated at first access',
     assert.equal(JSON.stringify(rawRows[0]).includes('at-1'), false);
     assert.equal(JSON.stringify(rawRows[0]).includes('rt-1'), false);
     assert.equal(rawRows[0].connected_by, adminId);
+    assert.equal(await connectionGeneration(churchId), 1, 'legacy migration establishes a durable connection generation');
 
     // Legacy row cleaned up so a later disconnect can't be "resurrected" by it.
     assert.equal(await countLegacyRows(churchId), 0);
@@ -148,6 +153,7 @@ test('refresh writes exactly one church connection row and never touches user_pr
     };
 
     const stored = await getOrMigrateCredentials(churchId); // reads the connection row directly, no migration needed
+    const generationBeforeRefresh = await connectionGeneration(churchId);
     const refreshed = await ensureFreshCredentials(churchId, stored, requestRefresh);
 
     assert.equal(refreshCalls, 1);
@@ -156,6 +162,11 @@ test('refresh writes exactly one church connection row and never touches user_pr
     // Exactly one connection row, holding the refreshed token.
     assert.equal(await countConnectionRows(churchId), 1);
     assert.deepEqual(await connectionStore.getCredentials(churchId, 'planning_center'), refreshed);
+    assert.equal(
+      await connectionGeneration(churchId),
+      generationBeforeRefresh,
+      'routine OAuth refresh must preserve the logical Planning Center connection generation'
+    );
 
     // connected_by/metadata preserved across the refresh.
     const connection = await connectionStore.getConnection(churchId, 'planning_center');
@@ -171,6 +182,28 @@ test('refresh writes exactly one church connection row and never touches user_pr
     const legacyTokens = JSON.parse(legacyRows[0].preference_value);
     assert.equal(legacyTokens.access_token, 'legacy-at');
     assert.equal(legacyTokens.refresh_token, 'legacy-rt');
+  }));
+});
+
+test('OAuth replacement advances the durable Planning Center connection generation', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    assert.equal(await connectionGeneration(churchId), 0);
+
+    await replaceConnection({
+      churchId,
+      credentials: { accessToken: 'first-access', refreshToken: 'first-refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+      metadata: { accountName: 'First account' },
+    });
+    assert.equal(await connectionGeneration(churchId), 1);
+
+    await replaceConnection({
+      churchId,
+      credentials: { accessToken: 'second-access', refreshToken: 'second-refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+      metadata: { accountName: 'Second account' },
+    });
+    assert.equal(await connectionGeneration(churchId), 2);
   }));
 });
 
@@ -404,6 +437,7 @@ test('a deferred old refresh cannot resurrect credentials after disconnect', asy
 
     assert.equal(await connectionStore.getConnection(churchId, 'planning_center'), null);
     assert.equal(await countLegacyRows(churchId), 0);
+    assert.equal(await connectionGeneration(churchId), 1, 'disconnect advances the durable connection generation');
   }));
 });
 

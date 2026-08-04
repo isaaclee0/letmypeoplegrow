@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const Database = require('../../config/database');
 const { assertSourceForProvider, normalizeProviderSource, digestSourceIdentity } = require('./sourceModel');
 const { assertPlanningCenterBatchOperational } = require('./legacyBatch');
@@ -56,6 +57,89 @@ function staleSourceExpectation(message = 'A sync source changed after this reco
   error.code = 'SYNC_PLAN_STALE';
   error.status = 409;
   return error;
+}
+
+function planAffectingBatchConfiguration(batch) {
+  const batchId = Number(batch?.id);
+  const gatheringTypeId = batch?.gatheringTypeId === null || batch?.gatheringTypeId === undefined
+    ? null
+    : Number(batch.gatheringTypeId);
+  const legacyProviderBatchId = batch?.provider !== 'planning_center' ||
+    batch?.legacyProviderBatchId === null || batch?.legacyProviderBatchId === undefined
+    ? null
+    : Number(batch.legacyProviderBatchId);
+  if (!Number.isSafeInteger(batchId) || batchId <= 0 ||
+      !PEOPLE_TYPES.has(batch?.defaultPeopleType) ||
+      (gatheringTypeId !== null && (!Number.isSafeInteger(gatheringTypeId) || gatheringTypeId <= 0)) ||
+      (legacyProviderBatchId !== null && (!Number.isSafeInteger(legacyProviderBatchId) || legacyProviderBatchId <= 0))) {
+    throw new Error('Invalid plan-affecting batch configuration');
+  }
+  return {
+    batchId,
+    enabled: Boolean(batch.enabled),
+    defaultPeopleType: batch.defaultPeopleType,
+    gatheringTypeId,
+    gatheringAutoRemoveEnabled: Boolean(batch.gatheringAutoRemoveEnabled),
+    legacyProviderBatchId,
+  };
+}
+
+function buildPlanAffectingBatchConfigurationExpectation(batches, { requireExactSet = false } = {}) {
+  if (!Array.isArray(batches) || batches.length === 0 || typeof requireExactSet !== 'boolean') {
+    throw new Error('At least one plan-affecting batch configuration is required');
+  }
+  const configurations = batches
+    .map(planAffectingBatchConfiguration)
+    .sort((left, right) => left.batchId - right.batchId);
+  const batchIds = configurations.map(({ batchId }) => batchId);
+  if (new Set(batchIds).size !== batchIds.length) {
+    throw new Error('Plan-affecting batch configurations must have unique batch IDs');
+  }
+  const configurationDigest = crypto.createHash('sha256')
+    .update(JSON.stringify({ requireExactSet, configurations }))
+    .digest('hex');
+  return { version: 1, batchIds, configurationDigest, requireExactSet };
+}
+
+async function assertPlanAffectingBatchConfigurationWithConnection(conn, {
+  churchId, provider, expectation,
+}) {
+  assertProvider(provider);
+  if (expectation?.version !== 1 || !Array.isArray(expectation.batchIds) || expectation.batchIds.length === 0 ||
+      typeof expectation.configurationDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectation.configurationDigest) ||
+      typeof expectation.requireExactSet !== 'boolean') {
+    throw new Error('Invalid plan-affecting batch configuration expectation');
+  }
+  const rows = await conn.query(
+    `SELECT * FROM people_sync_batches
+      WHERE church_id = ? AND provider = ?
+      ORDER BY id`,
+    [churchId, provider]
+  );
+  const rowsById = new Map(rows.map((row) => [Number(row.id), row]));
+  const expectedIds = expectation.batchIds.map(Number);
+  if (expectedIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+      new Set(expectedIds).size !== expectedIds.length) {
+    throw new Error('Invalid plan-affecting batch configuration expectation IDs');
+  }
+  const currentBatches = expectedIds.map((batchId) => toBatch(rowsById.get(batchId))).filter(Boolean);
+  if (currentBatches.length !== expectedIds.length) throw staleSourceExpectation('Sync batch configuration changed after this reconciliation started. Refresh and try again.');
+
+  if (expectation.requireExactSet) {
+    const currentEnabledIds = rows.filter((row) => Boolean(row.enabled)).map((row) => Number(row.id));
+    const sortedExpectedIds = [...expectedIds].sort((a, b) => a - b);
+    if (currentEnabledIds.length !== expectedIds.length ||
+        currentEnabledIds.some((batchId, index) => batchId !== sortedExpectedIds[index])) {
+      throw staleSourceExpectation('Sync batch configuration changed after this reconciliation started. Refresh and try again.');
+    }
+  }
+
+  const currentExpectation = buildPlanAffectingBatchConfigurationExpectation(currentBatches, {
+    requireExactSet: expectation.requireExactSet,
+  });
+  if (currentExpectation.configurationDigest !== expectation.configurationDigest) {
+    throw staleSourceExpectation('Sync batch configuration changed after this reconciliation started. Refresh and try again.');
+  }
 }
 
 async function assertSourceExpectationsWithConnection(conn, {
@@ -389,5 +473,6 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, promoteSourceDraftsWithConnection, recordActiveSourceHealthWithConnection,
-  assertSourceExpectationsWithConnection,
+  assertSourceExpectationsWithConnection, buildPlanAffectingBatchConfigurationExpectation,
+  assertPlanAffectingBatchConfigurationWithConnection,
 };

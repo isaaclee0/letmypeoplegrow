@@ -867,11 +867,46 @@ test('enabled sources are fetched sequentially', async () => {
   assert.deepEqual(order, ['start:one', 'end:one', 'start:two', 'end:two', 'start:three', 'end:three']);
 });
 
-test('Elvanto reconciliation snapshots the durable connection generation before reading credentials', async () => {
+test('Planning Center generation change between sources aborts before a mixed-account second read', async () => {
+  const reads = [];
+  let generationReads = 0;
+  const pcoSource = (externalId) => ({ kind: 'planning_center_list', externalId, name: externalId });
+  const { deps, plans } = makeDeps({
+    batches: [
+      batch({ id: 1, provider: 'planning_center', source: pcoSource('one') }),
+      batch({ id: 2, provider: 'planning_center', source: pcoSource('two') }),
+    ],
+    authorityState: { active: 'planning_center', pending: null },
+    fetchSourceSnapshot: async ({ sourceExternalId }) => {
+      reads.push(sourceExternalId);
+      return sourceSnapshot(pcoSource(sourceExternalId), { provider: 'planning_center' });
+    },
+    extra: {
+      getConnectionGeneration: async () => {
+        generationReads += 1;
+        return generationReads <= 3 ? 7 : 8;
+      },
+    },
+  });
+
+  await assert.rejects(
+    buildReview({ churchId: 'church-a', provider: 'planning_center', trigger: 'manual' }, deps),
+    (error) => error instanceof OrchestratorError && error.code === 'SYNC_PLAN_STALE'
+  );
+
+  assert.deepEqual(reads, ['one']);
+  assert.equal(plans.length, 0);
+});
+
+test('reconciliation snapshots the durable connection generation before credentials and around provider reads', async () => {
   // Reading in this order prevents old credentials from ever being paired
   // with a newer generation when a reconnect commits between the two reads.
   const reads = [];
   const { deps } = makeDeps({
+    fetchSourceSnapshot: async ({ sourceKind, sourceExternalId }) => {
+      reads.push('fetch');
+      return sourceSnapshot({ kind: sourceKind, externalId: sourceExternalId, name: sourceExternalId });
+    },
     extra: {
       getConnectionGeneration: async () => { reads.push('generation'); return 23; },
       getCredentials: async () => { reads.push('credentials'); return { apiKey: 'test-key' }; },
@@ -880,7 +915,7 @@ test('Elvanto reconciliation snapshots the durable connection generation before 
 
   await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
 
-  assert.deepEqual(reads, ['generation', 'credentials']);
+  assert.deepEqual(reads, ['generation', 'credentials', 'generation', 'fetch', 'generation']);
 });
 
 test('duplicate members are normalized once while each batch retains its own member set', async () => {
@@ -1741,6 +1776,7 @@ test('review digest binds sorted source identity, revision, draft identity, and 
 
   assert.equal(digested.filterContext, undefined);
   assert.equal(digested.sourceContext.connectionGeneration, 17);
+  assert.match(digested.sourceContext.batchConfigurationDigest, /^[a-f0-9]{64}$/);
   assert.equal(digested.sourceContext.activeRevision, 9);
   assert.equal(digested.sourceContext.draftDigest, digestSourceIdentity(draft));
   assert.deepEqual(digested.sourceContext.snapshots.map((item) => item.batchId), [3, 20]);
@@ -1751,7 +1787,7 @@ test('review digest binds sorted source identity, revision, draft identity, and 
   assert.ok(digested.sourceContext.snapshots.every((item) => /^[a-f0-9]{64}$/.test(item.snapshotDigest)));
 });
 
-test('Planning Center review source context omits the Elvanto-only connection generation', async () => {
+test('Planning Center review source context binds its durable connection generation', async () => {
   let digested;
   const planningCenterSource = { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' };
   const { deps } = makeDeps({
@@ -1759,7 +1795,7 @@ test('Planning Center review source context omits the Elvanto-only connection ge
     authorityState: { active: 'planning_center', pending: null },
     fetchSourceSnapshot: async () => sourceSnapshot(planningCenterSource, { provider: 'planning_center' }),
     extra: {
-      getConnectionGeneration: async () => { throw new Error('Planning Center must not read an Elvanto generation'); },
+      getConnectionGeneration: async () => 29,
       digestPlan: (plan) => { digested = structuredClone(plan); return 'a'.repeat(64); },
     },
   });
@@ -1768,7 +1804,8 @@ test('Planning Center review source context omits the Elvanto-only connection ge
     churchId: 'church-a', provider: 'planning_center', batchId: 1, trigger: 'manual',
   }, deps);
 
-  assert.equal(Object.hasOwn(digested.sourceContext, 'connectionGeneration'), false);
+  assert.equal(digested.sourceContext.connectionGeneration, 29);
+  assert.match(digested.sourceContext.batchConfigurationDigest, /^[a-f0-9]{64}$/);
 });
 
 test('reviewed apply sends source promotion CAS data without scheduling a presence write', async () => {
@@ -1792,6 +1829,13 @@ test('reviewed apply sends source promotion CAS data without scheduling a presen
     draftSourceBaseRevision: 6,
     selectedSource: 'draft',
   }]);
+  assert.equal(applied[0].batchConfigurationExpectation.version, 1);
+  assert.deepEqual(applied[0].batchConfigurationExpectation.batchIds, [1]);
+  assert.equal(applied[0].batchConfigurationExpectation.requireExactSet, false);
+  assert.equal(
+    applied[0].plan.sourceContext.batchConfigurationDigest,
+    applied[0].batchConfigurationExpectation.configurationDigest
+  );
   assert.equal(applied[0].requireConnection, true);
   assert.deepEqual(applied[0].connectionExpectation, { generation: 17 });
   assert.equal(Object.hasOwn(applied[0], 'filterPromotion'), false);
@@ -1854,6 +1898,12 @@ test('authority apply rebuilds every draft-aware candidate and sends all signed 
   assert.deepEqual(applied[0].plan.sourceContext.promotions, applied[0].sourcePromotions);
   assert.equal(applied[0].plan.authorityPreviewId, 'authority-preview-1');
   assert.equal(applied[0].activateAuthority, true);
+  assert.deepEqual(applied[0].batchConfigurationExpectation.batchIds, [3, 20]);
+  assert.equal(applied[0].batchConfigurationExpectation.requireExactSet, true);
+  assert.equal(
+    applied[0].plan.sourceContext.batchConfigurationDigest,
+    applied[0].batchConfigurationExpectation.configurationDigest
+  );
 });
 
 test('a one-time review replay remains a typed refreshable failure and is recorded on the run', async () => {
@@ -1918,6 +1968,8 @@ test('scheduled source sync is full-only, persists provenance, and does not sche
     draftSourceBaseRevision: null,
     selectedSource: 'active',
   }]);
+  assert.deepEqual(applied[0].batchConfigurationExpectation.batchIds, [1]);
+  assert.equal(applied[0].batchConfigurationExpectation.requireExactSet, false);
   assert.equal(events.includes('presence'), false);
   assert.equal(finished[0].externalWatermark, null);
   assert.equal(finished[0].sourceProvenance.length, 1);

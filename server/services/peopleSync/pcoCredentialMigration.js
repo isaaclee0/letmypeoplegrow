@@ -114,7 +114,7 @@ function credentialFingerprint(credentials) {
 // nothing is written or deleted in that case, leaving the ambiguous legacy
 // data intact for a human (an explicit reconnect writes a definitive fresh
 // row directly, sidestepping the ambiguity).
-async function migrateLegacyCredentialsUnlocked(churchId) {
+async function migrateLegacyCredentialsUnlocked(churchId, conn) {
   // Another serialized mutation may have installed a definitive OAuth
   // connection while this migration was waiting. Never replace it with a
   // legacy per-user value.
@@ -155,13 +155,17 @@ async function migrateLegacyCredentialsUnlocked(churchId) {
     `DELETE FROM user_preferences WHERE church_id = ? AND preference_key = 'planning_center_tokens'`,
     [churchId]
   );
+  await connectionStore.advanceConnectionGenerationWithConnection(
+    conn,
+    { churchId, provider: 'planning_center' }
+  );
 
   return credentials;
 }
 
 async function migrateLegacyCredentials(churchId) {
   return withCredentialMutation(churchId, () =>
-    Database.transactionForChurch(churchId, () => migrateLegacyCredentialsUnlocked(churchId))
+    Database.transactionForChurch(churchId, (conn) => migrateLegacyCredentialsUnlocked(churchId, conn))
   );
 }
 
@@ -300,14 +304,21 @@ async function ensureFreshCredentials(churchId, credentials, requestRefresh, { f
 async function replaceConnection({ churchId, credentials, connectedBy, metadata = {} }) {
   return accountCoordinator.withCredentialMutation(churchId, () =>
     withCredentialMutation(churchId, () =>
-      Database.transactionForChurch(churchId, () => connectionStore.upsertConnection({
-        churchId,
-        provider: 'planning_center',
-        authType: 'oauth',
-        credentials,
-        connectedBy,
-        metadata,
-      }))
+      Database.transactionForChurch(churchId, async (conn) => {
+        const connection = await connectionStore.upsertConnection({
+          churchId,
+          provider: 'planning_center',
+          authType: 'oauth',
+          credentials,
+          connectedBy,
+          metadata,
+        });
+        await connectionStore.advanceConnectionGenerationWithConnection(conn, {
+          churchId,
+          provider: 'planning_center',
+        });
+        return connection;
+      })
     )
   );
 }
@@ -330,11 +341,17 @@ async function disconnectConnection(churchId) {
           WHERE church_id = ? AND provider = 'planning_center'`,
         [churchId]
       );
-      await conn.query(
+      const legacyResult = await conn.query(
         `DELETE FROM user_preferences
           WHERE church_id = ? AND preference_key = 'planning_center_tokens'`,
         [churchId]
       );
+      if (result.affectedRows > 0 || legacyResult.affectedRows > 0) {
+        await connectionStore.advanceConnectionGenerationWithConnection(conn, {
+          churchId,
+          provider: 'planning_center',
+        });
+      }
       return result.affectedRows > 0;
     }))
   );

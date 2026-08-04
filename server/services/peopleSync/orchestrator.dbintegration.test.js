@@ -9,12 +9,14 @@ const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
 const runRepository = require('./runRepository');
 const authority = require('./authority');
+const pcoCredentialMigration = require('./pcoCredentialMigration');
 const { digestSourceIdentity } = require('./sourceModel');
 
 process.env.SYNC_REVIEW_SECRET = process.env.SYNC_REVIEW_SECRET || 'test-secret-for-source-orchestrator';
 process.env.INTEGRATION_CREDENTIALS_KEY = process.env.INTEGRATION_CREDENTIALS_KEY || Buffer.alloc(32, 5).toString('base64');
 
 let scenarios = new Map();
+let pcoScenarios = new Map();
 let fetchCount = 0;
 
 function source(externalId, name = externalId) {
@@ -31,6 +33,26 @@ function snapshot(selectedSource, overrides = {}) {
   const people = overrides.people || [];
   return {
     provider: 'elvanto',
+    source: selectedSource,
+    complete: true,
+    fetchedAt: new Date().toISOString(),
+    providerRefreshedAt: null,
+    memberExternalIds: people.map((entry) => entry.id),
+    people,
+    contextPeople: [],
+    families: [],
+    ...overrides,
+  };
+}
+
+function pcoSource(externalId, name = externalId) {
+  return { kind: 'planning_center_list', externalId, name };
+}
+
+function pcoSnapshot(selectedSource, overrides = {}) {
+  const people = overrides.people || [];
+  return {
+    provider: 'planning_center',
     source: selectedSource,
     complete: true,
     fetchedAt: new Date().toISOString(),
@@ -63,6 +85,27 @@ providerRegistry.registerProvider('elvanto', {
   },
 });
 
+providerRegistry.registerProvider('planning_center', {
+  provider: 'planning_center',
+  async validateConnection() { return { ok: true, metadata: {} }; },
+  async listSources() { return [...pcoScenarios.keys()].map((externalId) => pcoSource(externalId)); },
+  async fetchSourceSnapshot({ churchId, sourceKind, sourceExternalId }) {
+    // Mirrors the production PCO adapter's per-source dynamic token
+    // resolution, which is the race this integration test protects.
+    const credentials = await connectionStore.getCredentials(churchId, 'planning_center');
+    const value = pcoScenarios.get(sourceExternalId);
+    if (value instanceof Error) throw value;
+    if (typeof value === 'function') {
+      return value({ sourceKind, sourceExternalId, accessToken: credentials?.accessToken });
+    }
+    return value || pcoSnapshot({ kind: sourceKind, externalId: sourceExternalId, name: sourceExternalId });
+  },
+  async fetchImportSnapshot() {
+    throw new Error('Import snapshots are not configured for sync orchestrator integration tests');
+  },
+  isLifecycleEligible(value) { return !!value && value.state === 'active'; },
+});
+
 const orchestrator = require('./orchestrator');
 
 async function seedConnection(churchId) {
@@ -86,6 +129,12 @@ async function reviewedBatch(churchId, selectedSource = source('members', 'Membe
     churchId, provider: 'elvanto', name: 'Members', initialDraftSource: selectedSource, ...overrides,
   });
   return promoteInitialSource(churchId, created);
+}
+
+async function pcoDraftBatch(churchId, selectedSource = pcoSource('members', 'Members'), overrides = {}) {
+  return batchRepository.createBatch({
+    churchId, provider: 'planning_center', name: selectedSource.name, initialDraftSource: selectedSource, ...overrides,
+  });
 }
 
 async function setAuthority(churchId, provider = 'elvanto') {
@@ -734,6 +783,54 @@ test('an enabled batch added during authority fetch rolls back people, promotion
   });
 });
 
+test('authority apply rejects plan-affecting batch configuration changed during provider acquisition', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const reviewedSource = source('authority-config-race', 'Authority config race');
+    const reviewed = await batchRepository.createBatch({
+      churchId,
+      provider: 'elvanto',
+      name: 'Authority config race',
+      initialDraftSource: reviewedSource,
+      defaultPeopleType: 'local_visitor',
+    });
+    const reviewedSnapshot = snapshot(reviewedSource, {
+      people: [person('authority-config-person', { state: 'other' })],
+      memberExternalIds: ['authority-config-person'],
+    });
+    scenarios = new Map([['authority-config-race', reviewedSnapshot]]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios.set('authority-config-race', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return reviewedSnapshot;
+    });
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    });
+    await fetchEntered.promise;
+    await batchRepository.updateBatch({
+      churchId,
+      provider: 'elvanto',
+      batchId: reviewed.id,
+      defaultPeopleType: 'regular',
+    });
+    releaseFetch.resolve();
+
+    await assert.rejects(
+      applying,
+      (error) => error instanceof orchestrator.OrchestratorError &&
+        error.code === 'SYNC_PLAN_STALE' && error.status === 409
+    );
+    await assertNoAuthorityApplyPartialCommits(churchId, [reviewed.id]);
+    assert.equal((await batchRepository.getBatch(churchId, 'elvanto', reviewed.id)).defaultPeopleType, 'regular');
+  });
+});
+
 test('authority apply rejects a changed enabled batch set without partial commits', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
@@ -941,6 +1038,91 @@ test('reviewed apply rejects an active-source generation promoted during the pro
   });
 });
 
+test('ordinary reviewed apply rejects destructive batch configuration edited during its provider read', async () => {
+  // Catches a reviewed auto-removal plan committing after the owning batch
+  // has disabled auto-removal, including rollback of the same transaction's
+  // person/link creation, source promotion, and review-token claim.
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId);
+    const gathering = await Database.query(
+      'INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Sunday']
+    );
+    const gatheringTypeId = Number(gathering.insertId);
+    const activeSource = source('config-active', 'Config active');
+    const draftSource = source('config-draft', 'Config draft');
+    const activeBatch = await reviewedBatch(churchId, activeSource, {
+      gatheringTypeId,
+      gatheringAutoRemoveEnabled: true,
+    });
+    const pendingBatch = await batchRepository.saveSourceDraft({
+      churchId, provider: 'elvanto', batchId: activeBatch.id, source: draftSource,
+    });
+    const existingId = await seedIndividual(churchId, { firstName: 'Existing', lastName: 'Member' });
+    await linkPerson(churchId, 'missing-person', existingId);
+    await Database.query(
+      `INSERT INTO gathering_lists
+        (church_id, gathering_type_id, individual_id, added_by_sync_batch_id)
+       VALUES (?, ?, ?, ?)`,
+      [churchId, gatheringTypeId, existingId, pendingBatch.id]
+    );
+    const reviewedSnapshot = snapshot(draftSource, {
+      people: [person('new-person')],
+      memberExternalIds: ['new-person'],
+    });
+    scenarios = new Map([['config-draft', reviewedSnapshot]]);
+    const review = await orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: pendingBatch.id, trigger: 'manual',
+    });
+    assert.deepEqual(review.plan.removeFromGathering.map((action) => action.individualId), [existingId]);
+
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios.set('config-draft', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return reviewedSnapshot;
+    });
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: pendingBatch.id, reviewToken: review.reviewToken,
+      selections: selectionsForReview(review),
+    });
+    await fetchEntered.promise;
+    await batchRepository.updateBatch({
+      churchId,
+      provider: 'elvanto',
+      batchId: pendingBatch.id,
+      gatheringAutoRemoveEnabled: false,
+    });
+    releaseFetch.resolve();
+
+    await assert.rejects(
+      applying,
+      (error) => error instanceof orchestrator.OrchestratorError &&
+        error.code === 'SYNC_PLAN_STALE' && error.status === 409
+    );
+    assert.equal(await countPeople(churchId), 1);
+    assert.equal(await countReviewApplications(churchId), 0);
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'elvanto', pending: null });
+    const current = await batchRepository.getBatch(churchId, 'elvanto', pendingBatch.id);
+    assert.deepEqual(current.source, activeSource);
+    assert.deepEqual(current.draftSource, draftSource);
+    assert.equal(current.gatheringAutoRemoveEnabled, false);
+    const links = await Database.query(
+      `SELECT external_person_id FROM external_person_links
+        WHERE church_id = ? AND provider = 'elvanto' ORDER BY external_person_id`,
+      [churchId]
+    );
+    assert.deepEqual(links.map((row) => row.external_person_id), ['missing-person']);
+    const [membership] = await Database.query(
+      `SELECT COUNT(*) AS count FROM gathering_lists
+        WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ? AND added_by_sync_batch_id = ?`,
+      [churchId, gatheringTypeId, existingId, pendingBatch.id]
+    );
+    assert.equal(Number(membership.count), 1);
+  });
+});
+
 test('reviewed apply rejects an Elvanto account replacement during its provider read', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
@@ -984,6 +1166,69 @@ test('reviewed apply rejects an Elvanto account replacement during its provider 
     const health = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
     assert.equal(health.sourceStatus, 'error');
     assert.equal(health.sourceStatusErrorCode, 'SYNC_SOURCE_INCOMPLETE');
+  });
+});
+
+test('Planning Center reconnect during an authority provider read leaves the reviewed apply entirely stale', async () => {
+  // Catches an old-account PCO roster being committed after a new OAuth
+  // account becomes active while the production adapter is resolving a
+  // source token dynamically.
+  await withTestChurchDb(async (churchId) => {
+    await pcoCredentialMigration.replaceConnection({
+      churchId,
+      credentials: { accessToken: 'old-account-access', refreshToken: 'old-account-refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+      metadata: { accountName: 'Old account' },
+    });
+    const selected = pcoSource('pco-members', 'PCO members');
+    const batch = await pcoDraftBatch(churchId, selected);
+    const oldAccountSnapshot = pcoSnapshot(selected, {
+      people: [person('old-account-person')],
+      memberExternalIds: ['old-account-person'],
+    });
+    pcoScenarios = new Map([['pco-members', oldAccountSnapshot]]);
+    const preview = await orchestrator.previewAuthoritySwitch({
+      churchId, provider: 'planning_center',
+    });
+
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    pcoScenarios.set('pco-members', async ({ accessToken }) => {
+      assert.equal(accessToken, 'old-account-access');
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return oldAccountSnapshot;
+    });
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'planning_center', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    });
+    await fetchEntered.promise;
+    await pcoCredentialMigration.replaceConnection({
+      churchId,
+      credentials: { accessToken: 'new-account-access', refreshToken: 'new-account-refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+      metadata: { accountName: 'New account' },
+    });
+    releaseFetch.resolve();
+
+    await assert.rejects(
+      applying,
+      (error) => error instanceof orchestrator.OrchestratorError &&
+        error.code === 'SYNC_PLAN_STALE' && error.status === 409
+    );
+    assert.equal(await countPeople(churchId), 0);
+    assert.equal(await countReviewApplications(churchId), 0);
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'planning_center' });
+    const current = await batchRepository.getBatch(churchId, 'planning_center', batch.id);
+    assert.equal(current.source, null);
+    assert.deepEqual(current.draftSource, selected);
+    const linkRows = await Database.query(
+      `SELECT id FROM external_person_links
+        WHERE church_id = ? AND provider = 'planning_center'`,
+      [churchId]
+    );
+    assert.equal(linkRows.length, 0);
   });
 });
 
