@@ -189,6 +189,35 @@ test('source generation expectations bind only sources used by a batch review', 
   });
 });
 
+test('provider-wide source expectations reject an extra enabled batch while ordinary subset expectations allow it', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const first = await createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE,
+    });
+    const secondSource = { kind: 'elvanto_group', externalId: 'youth', name: 'Youth' };
+    await createBatch({
+      churchId, provider: 'elvanto', name: 'Youth', initialDraftSource: secondSource,
+    });
+    const expectations = [{
+      batchId: first.id,
+      sourceRevision: first.sourceRevision,
+      activeSourceDigest: null,
+      draftSourceDigest: digestSourceIdentity(first.draftSource),
+      draftSourceBaseRevision: first.draftSourceBaseRevision,
+      selectedSource: 'draft',
+    }];
+
+    await Database.transactionForChurch(churchId, async (conn) => {
+      await assert.doesNotReject(assertSourceExpectationsWithConnection(conn, {
+        churchId, provider: 'elvanto', expectations,
+      }));
+      await assert.rejects(assertSourceExpectationsWithConnection(conn, {
+        churchId, provider: 'elvanto', expectations, requireExactSet: true,
+      }), (error) => error?.code === 'SYNC_PLAN_STALE');
+    });
+  });
+});
+
 test('replacing an Elvanto initial source draft derives the batch name from the replacement', async () => {
   await withTestChurchDb(async (churchId) => {
     const members = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };

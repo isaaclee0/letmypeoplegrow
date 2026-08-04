@@ -697,6 +697,43 @@ test('a stale second authority draft rolls back people, both promotions, authori
   });
 });
 
+test('an enabled batch added during authority fetch rolls back people, promotion, authority, and token consumption', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const reviewedSource = source('reviewed-race', 'Reviewed race');
+    const reviewed = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Reviewed race', initialDraftSource: reviewedSource,
+    });
+    scenarios = new Map([['reviewed-race', snapshot(reviewedSource, {
+      people: [person('must-roll-back')], memberExternalIds: ['must-roll-back'],
+    })]]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios.set('reviewed-race', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return snapshot(reviewedSource, {
+        people: [person('must-roll-back')], memberExternalIds: ['must-roll-back'],
+      });
+    });
+
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    });
+    await fetchEntered.promise;
+    const added = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Added during fetch',
+      initialDraftSource: source('added-race', 'Added during fetch'),
+    });
+    releaseFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    await assertNoAuthorityApplyPartialCommits(churchId, [reviewed.id, added.id]);
+  });
+});
+
 test('authority apply rejects a changed enabled batch set without partial commits', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);

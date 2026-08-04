@@ -59,11 +59,14 @@ function staleSourceExpectation(message = 'A sync source changed after this reco
 }
 
 async function assertSourceExpectationsWithConnection(conn, {
-  churchId, provider, expectations,
+  churchId, provider, expectations, requireExactSet = false,
 }) {
   assertProvider(provider);
   if (!Array.isArray(expectations) || expectations.length === 0) {
     throw new Error('At least one source expectation is required');
+  }
+  if (typeof requireExactSet !== 'boolean') {
+    throw new Error('requireExactSet must be a boolean');
   }
   const rows = await conn.query(
     `SELECT * FROM people_sync_batches
@@ -97,6 +100,9 @@ async function assertSourceExpectationsWithConnection(conn, {
         (expectation.selectedSource === 'draft' && !current.draftSource)) {
       throw staleSourceExpectation();
     }
+  }
+  if (requireExactSet && (rows.length !== seenBatchIds.size || rows.some((row) => !seenBatchIds.has(Number(row.id))))) {
+    throw staleSourceExpectation();
   }
 }
 

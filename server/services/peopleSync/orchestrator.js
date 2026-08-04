@@ -389,16 +389,19 @@ async function finishAppliedRun(deps, {
 }) {
   let status = 'applied';
   let counts = {};
+  let refreshRequired = false;
   try {
     counts = mergeAppliedCounts(applyResult, plan);
     if (reviewRequiredWhenHeld && hasHeldItems(plan)) status = 'review_required';
   } catch (classifyErr) {
+    refreshRequired = true;
     logger.error(`peopleSync orchestrator: failed to classify run outcome for church ${churchId} run ${runId}: ${classifyErr.message}`);
   }
 
   try {
     await deps.finishRun({ churchId, provider, runId, status, counts, externalWatermark, sourceProvenance });
   } catch (finishErr) {
+    refreshRequired = true;
     logger.error(
       `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${runId}: ${finishErr.message}`
     );
@@ -411,7 +414,7 @@ async function finishAppliedRun(deps, {
     }
   }
 
-  return { status, counts };
+  return { status, counts, refreshRequired };
 }
 
 // Same "must not throw" reasoning as finishAppliedRun above, for the
@@ -427,19 +430,20 @@ function safeSummarizePlan(logContext, plan) {
 
 async function safeSyncProviderExtras(deps, { churchId, provider, runId }) {
   if (provider !== 'planning_center') {
-    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 0 };
+    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 0, refreshRequired: false };
   }
   try {
     const result = await deps.refreshBackgroundCheckStatuses(churchId);
     return {
       backgroundCheckSynced: Number(result?.updated) || 0,
       backgroundCheckSyncFailed: 0,
+      refreshRequired: false,
     };
   } catch (error) {
     logger.warn(
       `peopleSync orchestrator: background-check refresh failed for church ${churchId} run ${runId}: ${safeErrorMessage(error)}`
     );
-    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 1 };
+    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 1, refreshRequired: true };
   }
 }
 
@@ -1377,23 +1381,27 @@ async function applyReviewed({
     }
   }
 
-  applyResult = {
-    ...applyResult,
-    ...(await safeSyncProviderExtras(deps, {
-      churchId, provider, runId: run.id,
-    })),
-  };
+  const {
+    refreshRequired: providerRefreshRequired,
+    ...providerExtraCounts
+  } = await safeSyncProviderExtras(deps, { churchId, provider, runId: run.id });
+  applyResult = { ...applyResult, ...providerExtraCounts };
 
   // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
   // mergeAppliedCounts()/finishRun() pair.
-  const { status } = await finishAppliedRun(deps, {
+  const { status, refreshRequired: auditRefreshRequired } = await finishAppliedRun(deps, {
     churchId, provider, runId: run.id, plan: body.plan, applyResult,
     externalWatermark: null, sourceProvenance: body.sourceProvenance, reviewRequiredWhenHeld: false,
   });
 
+  const refreshRequired = isAuthoritySwitch && (providerRefreshRequired || auditRefreshRequired);
   return {
     runId: run.id, status, applied: applyResult, summary: safeSummarizePlan({ churchId, runId: run.id }, body.plan),
+    ...(refreshRequired ? {
+      refreshRequired: true,
+      message: 'Authority applied; refresh status.',
+    } : {}),
   };
 }
 
@@ -1486,12 +1494,14 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     throw err;
   }
 
-  applyResult = {
-    ...applyResult,
-    ...(await safeSyncProviderExtras(deps, {
-      churchId, provider, runId: run.id,
-    })),
-  };
+  const {
+    refreshRequired: _providerRefreshRequired,
+    ...providerExtraCounts
+  } = await safeSyncProviderExtras(deps, { churchId, provider, runId: run.id });
+  // Scheduled callers have no stale Apply action to clear; their durable run
+  // counts retain the provider-refresh failure for later administrator review.
+  void _providerRefreshRequired;
+  applyResult = { ...applyResult, ...providerExtraCounts };
 
   // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare

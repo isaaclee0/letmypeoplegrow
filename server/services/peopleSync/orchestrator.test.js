@@ -202,11 +202,13 @@ function makeDeps({
   return { deps, events, finished, failed, applied, presence, availableHealth, failedHealth, plans };
 }
 
-function pcoApplyDeps(extra = {}) {
+function pcoApplyDeps(extra = {}, {
+  authorityState = { active: 'planning_center', pending: null },
+} = {}) {
   const pcoSource = { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' };
   return makeDeps({
     batches: [batch({ id: 1, provider: 'planning_center', source: pcoSource })],
-    authorityState: { active: 'planning_center', pending: null },
+    authorityState,
     extra: {
       getProvider: () => ({
         provider: 'planning_center',
@@ -246,7 +248,58 @@ test('reviewed PCO apply refreshes supplementary background checks after roster 
   assert.deepEqual(refreshedChurches, ['church-a']);
   assert.equal(result.applied.backgroundCheckSynced, 7);
   assert.equal(result.applied.backgroundCheckSyncFailed, 0);
+  assert.equal(Object.hasOwn(result, 'refreshRequired'), false);
   assert.equal(finished[0].counts.backgroundCheckSynced, 7);
+});
+
+test('authority apply reports refresh-required when provider refresh rejects after commit', async () => {
+  const { deps, finished, failed } = pcoApplyDeps({
+    getAuthorityPreviewIntent: async () => ({
+      provider: 'planning_center', authorityPreviewId: 'pco-authority-preview',
+    }),
+    refreshBackgroundCheckStatuses: async () => { throw new Error('supplementary read failed'); },
+  }, {
+    authorityState: { active: 'none', pending: 'planning_center' },
+  });
+
+  const result = await applyReviewed({
+    churchId: 'church-a', provider: 'planning_center', batchId: null,
+    reviewToken: 'valid-authority-review', selections: {}, userId: 1,
+  }, deps);
+
+  assert.equal(result.status, 'applied');
+  assert.equal(result.refreshRequired, true);
+  assert.equal(result.message, 'Authority applied; refresh status.');
+  assert.equal(result.applied.backgroundCheckSyncFailed, 1);
+  assert.equal(finished[0].status, 'applied');
+  assert.equal(failed.length, 0);
+});
+
+test('authority apply reports refresh-required when audit finalization rejects after commit', async () => {
+  let finishAttempts = 0;
+  const { deps, failed } = makeDeps({
+    authorityState: { active: 'none', pending: 'elvanto' },
+    extra: {
+      getAuthorityPreviewIntent: async () => ({
+        provider: 'elvanto', authorityPreviewId: 'elvanto-authority-preview',
+      }),
+      finishRun: async () => {
+        finishAttempts += 1;
+        throw new Error('audit storage unavailable');
+      },
+    },
+  });
+
+  const result = await applyReviewed({
+    churchId: 'church-a', provider: 'elvanto', batchId: null,
+    reviewToken: 'valid-authority-review', selections: {}, userId: 1,
+  }, deps);
+
+  assert.equal(result.status, 'applied');
+  assert.equal(result.refreshRequired, true);
+  assert.equal(result.message, 'Authority applied; refresh status.');
+  assert.equal(finishAttempts, 2);
+  assert.equal(failed.length, 0);
 });
 
 test('unattended PCO apply refreshes background checks once', async () => {

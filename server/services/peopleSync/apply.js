@@ -445,6 +445,7 @@ async function applyPeopleSyncPlan({
     if (sourceExpectations) {
       await batchRepository.assertSourceExpectationsWithConnection(conn, {
         churchId, provider, expectations: sourceExpectations,
+        requireExactSet: activateAuthority === true,
       });
     }
     if (connectionExpectation) {
