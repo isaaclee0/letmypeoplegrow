@@ -1198,7 +1198,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
-  const isAuthoritySwitch = pre.authorityState.pending === provider;
+  const isAuthoritySwitch = batchId === null && pre.authorityState.pending === provider;
   const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
   if (batchId !== null && batchId !== undefined && !isAuthoritySwitch) {
     assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);

@@ -301,6 +301,62 @@ test('PCO source POST derives the batch name from the server-resolved List', asy
   });
 });
 
+test('PCO source batch list, creation, and update expose authority-derived operational state', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO people_sync_settings (church_id, authority_provider)
+       VALUES (?, 'planning_center')
+       ON CONFLICT(church_id) DO UPDATE SET authority_provider = excluded.authority_provider`,
+      [churchId],
+    );
+    const activeBatch = await createSourceBatch(churchId);
+    await Database.query(
+      `UPDATE people_sync_batches
+          SET source_kind = 'planning_center_list', source_external_id = 'list-1', source_name = 'Members',
+              source_revision = 2, draft_source_kind = NULL, draft_source_external_id = NULL,
+              draft_source_name = NULL, draft_source_base_revision = NULL, draft_source_updated_at = NULL
+        WHERE church_id = ? AND id = ? AND provider = 'planning_center'`,
+      [churchId, activeBatch.id],
+    );
+    await connectionStore.upsertConnection({
+      churchId, provider: 'planning_center', authType: 'oauth', credentials: { accessToken: 'test-token' },
+    });
+    const app = await startApp(churchId);
+    try {
+      const list = await app.request('/api/integrations/planning-center/sync-batches');
+      const created = await app.request('/api/integrations/planning-center/sync-batches', {
+        method: 'POST', body: sourceCreateBody(),
+      });
+      const updated = await app.request(`/api/integrations/planning-center/sync-batches/${activeBatch.id}`, {
+        method: 'PUT', body: settings(),
+      });
+
+      for (const batch of [list.body.batches[0], updated.body.batch]) {
+        assert.deepEqual({
+          operationalState: batch.operationalState,
+          reviewable: batch.reviewable,
+          runnable: batch.runnable,
+        }, {
+          operationalState: 'active',
+          reviewable: true,
+          runnable: true,
+        });
+      }
+      assert.deepEqual({
+        operationalState: created.body.batch.operationalState,
+        reviewable: created.body.batch.reviewable,
+        runnable: created.body.batch.runnable,
+      }, {
+        operationalState: 'source_review_required',
+        reviewable: true,
+        runnable: false,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 test('PCO source POST accepts valid boundaries before server-side source resolution', async () => {
   await withRouteChurchDb(async (churchId) => {
     const gathering = await Database.query('INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Monthly gathering']);

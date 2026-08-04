@@ -1447,6 +1447,25 @@ test('a prepared batch rejects ordinary reviewed apply before starting an audit 
   assert.equal(fetches, 0);
 });
 
+test('a batch-specific apply remains prepared and blocked while an authority preview targets its provider', async () => {
+  let fetches = 0;
+  const { deps, events } = makeDeps({
+    authorityState: { active: 'planning_center', pending: 'elvanto' },
+    fetchSourceSnapshot: async () => { fetches += 1; return sourceSnapshot(source('group-1')); },
+    extra: { getAuthorityPreviewIntent: async () => null },
+  });
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      reviewToken: 'review-token', selections: {}, userId: 5,
+    }, deps),
+    (error) => error instanceof OrchestratorError && error.code === 'SYNC_BATCH_PREPARED' && error.status === 409
+  );
+  assert.equal(events.includes('startRun'), false);
+  assert.equal(fetches, 0);
+});
+
 for (const failure of [
   { name: 'missing', error: Object.assign(new Error('gone'), { code: 'SYNC_SOURCE_UNAVAILABLE' }) },
   { name: 'incomplete', snapshot: sourceSnapshot(source('group-1'), { complete: false }) },
@@ -1680,7 +1699,7 @@ test('legacy authority apply requires no owned intent and does not schedule a pr
   });
 
   await applyReviewed({
-    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    churchId: 'church-a', provider: 'elvanto', batchId: null,
     reviewToken: 'legacy-review-token', selections: {}, userId: 5,
   }, deps);
 

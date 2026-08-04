@@ -21,8 +21,9 @@ const {
 const { createPeopleSyncRouter } = require('./integrations/peopleSync');
 const { createElvantoRouter } = require('./integrations/elvanto');
 const { createPlanningCenterPeopleSyncRouter } = require('./integrations/planningCenterPeopleSync');
-const { createSourceBuilderRouter } = require('./integrations/sourceBuilder');
+const { createSourceBuilderRouter, withOperationalState } = require('./integrations/sourceBuilder');
 const { resolveVisibleSource } = require('../services/peopleSync/sourceSelection');
+const peopleSyncAuthority = require('../services/peopleSync/authority');
 
 const router = express.Router();
 
@@ -1383,8 +1384,14 @@ function resolveGatheringAutoRemoveEnabled(body) {
 // List all saved sync batches for this church.
 router.get('/planning-center/sync-batches', async (req, res) => {
   try {
-    const batches = await pcoSync.listBatches(req.user.church_id);
-    res.json({ success: true, batches });
+    const [batches, authorityState] = await Promise.all([
+      pcoSync.listBatches(req.user.church_id),
+      peopleSyncAuthority.getAuthority(req.user.church_id),
+    ]);
+    res.json({
+      success: true,
+      batches: batches.map((batch) => withOperationalState(batch, authorityState.active)),
+    });
   } catch (error) {
     logger.error('List PCO sync batches error:', error);
     res.status(500).json({ error: 'Failed to load sync batches.' });
@@ -1400,12 +1407,15 @@ router.post('/planning-center/sync-batches', async (req, res) => {
     const { sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
     const source = await resolveVisibleSource({ churchId, provider: 'planning_center', sourceKind, sourceExternalId });
-    const batch = await pcoSync.createBatch(churchId, {
-      initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
-      defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
-      scheduleEnabled, scheduleFrequency, scheduleDay,
-    });
-    res.json({ success: true, batch });
+    const [batch, authorityState] = await Promise.all([
+      pcoSync.createBatch(churchId, {
+        initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
+        defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
+        scheduleEnabled, scheduleFrequency, scheduleDay,
+      }),
+      peopleSyncAuthority.getAuthority(churchId),
+    ]);
+    res.json({ success: true, batch: withOperationalState(batch, authorityState.active) });
   } catch (error) {
     if (error?.code === 'SYNC_SOURCE_UNAVAILABLE') return res.status(409).json({ error: 'The requested sync source is unavailable. Reconnect Planning Center and try again.', code: error.code });
     logger.error('Create PCO sync batch error:', error);
@@ -1432,12 +1442,15 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
       defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
     };
-    const batch = await pcoSync.updateBatch(churchId, batchId, settings);
+    const [batch, authorityState] = await Promise.all([
+      pcoSync.updateBatch(churchId, batchId, settings),
+      peopleSyncAuthority.getAuthority(churchId),
+    ]);
 
     // Existing gathering membership stays unowned until the provider-owned
     // source has been reviewed and applied.
 
-    res.json({ success: true, batch });
+    res.json({ success: true, batch: withOperationalState(batch, authorityState.active) });
   } catch (error) {
     if (error?.code === LEGACY_BATCH_RETIRED) {
       return res.status(409).json({ error: LEGACY_BATCH_RETIRED_MESSAGE, code: error.code });
