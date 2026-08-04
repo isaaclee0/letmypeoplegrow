@@ -536,7 +536,7 @@ describe('PeopleSourceControl', () => {
 
     expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Refresh plan' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
     expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
 

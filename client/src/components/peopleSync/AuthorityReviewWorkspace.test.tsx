@@ -173,6 +173,113 @@ describe('AuthorityReviewWorkspace', () => {
     ));
   });
 
+  it('applies an accepted review through its immutable provider after the provider prop changes', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: { success: true, runId: 10, status: 'applied', applied: {} as never, summary: review.summary },
+    });
+    const callbacks = { onApplied: vi.fn(), onCancel: vi.fn() };
+    const { rerender } = render(
+      <AuthorityReviewWorkspace provider="elvanto" autoStart {...callbacks} />,
+    );
+    const applyButton = await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ });
+
+    rerender(<AuthorityReviewWorkspace provider="planning_center" autoStart={false} {...callbacks} />);
+    fireEvent.click(applyButton);
+
+    await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1));
+    expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-review',
+      expect.any(Object),
+    );
+    expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalledWith(
+      'planning_center',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('cancels an accepted review through its immutable provider after the provider prop changes', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    const callbacks = { onApplied: vi.fn(), onCancel: vi.fn() };
+    const { rerender } = render(
+      <AuthorityReviewWorkspace provider="elvanto" autoStart {...callbacks} />,
+    );
+    await screen.findByRole('region', { name: 'Elvanto authority review' });
+
+    rerender(<AuthorityReviewWorkspace provider="planning_center" autoStart={false} {...callbacks} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-1',
+    ));
+    expect(peopleSyncAPI.cancelAuthorityPreview).not.toHaveBeenCalledWith(
+      'planning_center',
+      'authority-preview-1',
+    );
+  });
+
+  it('waits for an in-flight preview and exact-cancels its late intent before notifying onCancel', async () => {
+    const pendingPreview = deferred<{ data: { success: true } & PeopleSyncReview }>();
+    const pendingCancellation = deferred<{ data: { success: true; authority: { active: 'none'; pending: null } } }>();
+    vi.mocked(peopleSyncAPI.previewAuthority).mockReturnValue(pendingPreview.promise);
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReturnValue(pendingCancellation.promise);
+    const { onCancel } = renderWorkspace();
+    await screen.findByRole('status');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(peopleSyncAPI.cancelAuthorityPreview).not.toHaveBeenCalled();
+
+    await act(async () => pendingPreview.resolve({
+      data: {
+        ...review,
+        success: true,
+        authorityPreviewId: 'authority-preview-late-after-cancel',
+      },
+    }));
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-late-after-cancel',
+    ));
+    expect(screen.queryByRole('region', { name: /authority review/i })).not.toBeInTheDocument();
+    expect(onCancel).not.toHaveBeenCalled();
+    await act(async () => pendingCancellation.resolve({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('region', { name: /authority review/i })).not.toBeInTheDocument();
+  });
+
+  it('exact-cancels the prior owned intent when a cancelled replacement preview rejects', async () => {
+    const replacementPreview = deferred<{ data: { success: true } & PeopleSyncReview }>();
+    const priorCancellation = deferred<{ data: { success: true; authority: { active: 'none'; pending: null } } }>();
+    vi.mocked(peopleSyncAPI.previewAuthority)
+      .mockResolvedValueOnce({ data: { success: true, ...review } })
+      .mockReturnValueOnce(replacementPreview.promise);
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReturnValue(priorCancellation.promise);
+    const { onCancel } = renderWorkspace();
+    await screen.findByRole('region', { name: 'Elvanto authority review' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+    await act(async () => replacementPreview.reject(new Error('replacement preview failed')));
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-1',
+    ));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: /authority review/i })).not.toBeInTheDocument();
+    await act(async () => priorCancellation.resolve({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('replaces a preview and exact-cancels the previous owned intent', async () => {
     vi.mocked(peopleSyncAPI.previewAuthority)
       .mockResolvedValueOnce({ data: { success: true, ...review } })

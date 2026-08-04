@@ -31,6 +31,16 @@ export interface AuthorityReviewWorkspaceProps {
   onCancel: () => void;
 }
 
+interface AcceptedReviewOwnership {
+  provider: SyncProvider;
+  authorityPreviewId: string | null;
+}
+
+interface InFlightAuthorityPreview {
+  generation: number;
+  provider: SyncProvider;
+}
+
 const providerName = (provider: SyncProvider) =>
   provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
 
@@ -45,7 +55,10 @@ export default function AuthorityReviewWorkspace({
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
   const activeReviewTokenRef = useRef<PeopleReviewToken<'authority_switch'> | null>(null);
+  const acceptedReviewOwnershipRef = useRef<AcceptedReviewOwnership | null>(null);
   const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
+  const inFlightPreviewRef = useRef<InFlightAuthorityPreview | null>(null);
+  const pendingPreviewCancellationRef = useRef<InFlightAuthorityPreview | null>(null);
   const mountedRef = useRef(false);
   const autoStartedProviderRef = useRef<SyncProvider | null>(null);
   const progressRef = useRef<HTMLParagraphElement>(null);
@@ -75,22 +88,26 @@ export default function AuthorityReviewWorkspace({
   }, [provider, retireAuthorityPreview]);
 
   const preview = useCallback(async () => {
+    if (pendingPreviewCancellationRef.current) return;
     const generation = ++generationRef.current;
+    const requestProvider = provider;
     const previousReview = review;
     const previousOwnedPreview = ownedAuthorityPreviewRef.current;
+    inFlightPreviewRef.current = { generation, provider: requestProvider };
     activeReviewTokenRef.current = null;
     setState('previewing');
     setError(null);
     try {
-      const response = await peopleSyncAPI.previewAuthority(provider);
+      const response = await peopleSyncAPI.previewAuthority(requestProvider);
       const nextReview = tagLegacyPeopleReview(response.data, 'authority_switch');
       if (generation !== generationRef.current) {
         discardSupersededPreview(nextReview);
         return;
       }
+      if (inFlightPreviewRef.current?.generation === generation) inFlightPreviewRef.current = null;
       activeReviewTokenRef.current = nextReview.reviewToken;
       const nextOwnedPreview = nextReview.authorityPreviewId
-        ? { provider, authorityPreviewId: nextReview.authorityPreviewId }
+        ? { provider: requestProvider, authorityPreviewId: nextReview.authorityPreviewId }
         : null;
       if (previousOwnedPreview && (!nextOwnedPreview
         || previousOwnedPreview.provider !== nextOwnedPreview.provider
@@ -98,20 +115,78 @@ export default function AuthorityReviewWorkspace({
         void retireAuthorityPreview(previousOwnedPreview);
       }
       ownedAuthorityPreviewRef.current = nextOwnedPreview;
+      acceptedReviewOwnershipRef.current = {
+        provider: requestProvider,
+        authorityPreviewId: nextReview.authorityPreviewId ?? null,
+      };
+
+      const pendingCancellation = pendingPreviewCancellationRef.current;
+      if (pendingCancellation?.generation === generation) {
+        setReview(null);
+        if (!nextOwnedPreview) {
+          pendingPreviewCancellationRef.current = null;
+          acceptedReviewOwnershipRef.current = null;
+          activeReviewTokenRef.current = null;
+          setState('idle');
+          onCancel();
+          return;
+        }
+        try {
+          await retireAuthorityPreview(nextOwnedPreview);
+        } catch (cause) {
+          if (generation !== generationRef.current) return;
+          setError(peopleSyncErrorMessage(cause, 'Failed to cancel the authority change.'));
+          setState('error');
+          return;
+        }
+        if (generation !== generationRef.current) return;
+        pendingPreviewCancellationRef.current = null;
+        acceptedReviewOwnershipRef.current = null;
+        ownedAuthorityPreviewRef.current = null;
+        activeReviewTokenRef.current = null;
+        setError(null);
+        setState('idle');
+        onCancel();
+        return;
+      }
       setReview(nextReview);
       setState('reviewing');
     } catch (cause) {
       if (generation !== generationRef.current) return;
+      if (inFlightPreviewRef.current?.generation === generation) inFlightPreviewRef.current = null;
+      if (pendingPreviewCancellationRef.current?.generation === generation) {
+        if (previousOwnedPreview) {
+          try {
+            await retireAuthorityPreview(previousOwnedPreview);
+          } catch (cancellationCause) {
+            if (generation !== generationRef.current) return;
+            setError(peopleSyncErrorMessage(cancellationCause, 'Failed to cancel the authority change.'));
+            setState('error');
+            return;
+          }
+          if (generation !== generationRef.current) return;
+        }
+        pendingPreviewCancellationRef.current = null;
+        acceptedReviewOwnershipRef.current = null;
+        ownedAuthorityPreviewRef.current = null;
+        activeReviewTokenRef.current = null;
+        setReview(null);
+        setError(null);
+        setState('idle');
+        onCancel();
+        return;
+      }
       setError(peopleSyncErrorMessage(cause, 'Failed to preview the authority change.'));
       if (previousReview) {
         // A replacement may have invalidated the old server-side intent even
         // when its response failed. Retire that exact intent and fail closed.
         if (previousOwnedPreview) void retireAuthorityPreview(previousOwnedPreview);
+        acceptedReviewOwnershipRef.current = null;
         setReview(null);
       }
       setState('error');
     }
-  }, [discardSupersededPreview, provider, retireAuthorityPreview, review]);
+  }, [discardSupersededPreview, onCancel, provider, retireAuthorityPreview, review]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -124,6 +199,9 @@ export default function AuthorityReviewWorkspace({
         if (mountedRef.current) return;
         generationRef.current += 1;
         activeReviewTokenRef.current = null;
+        acceptedReviewOwnershipRef.current = null;
+        inFlightPreviewRef.current = null;
+        pendingPreviewCancellationRef.current = null;
         const ownedPreview = ownedAuthorityPreviewRef.current;
         if (ownedPreview) void retireAuthorityPreview(ownedPreview);
       });
@@ -174,13 +252,14 @@ export default function AuthorityReviewWorkspace({
     reviewToken: PeopleReviewToken<'authority_switch'>,
     selections: PeopleSyncSelections,
   ) => {
-    if (activeReviewTokenRef.current !== reviewToken) return;
+    const acceptedOwnership = acceptedReviewOwnershipRef.current;
+    if (!acceptedOwnership || activeReviewTokenRef.current !== reviewToken) return;
     const generation = ++generationRef.current;
     activeReviewTokenRef.current = null;
     setState('applying');
     setError(null);
     try {
-      await peopleSyncAPI.applyAuthority(provider, reviewToken, selections);
+      await peopleSyncAPI.applyAuthority(acceptedOwnership.provider, reviewToken, selections);
     } catch (cause) {
       if (generation === generationRef.current) {
         activeReviewTokenRef.current = reviewToken;
@@ -190,33 +269,49 @@ export default function AuthorityReviewWorkspace({
     }
     if (generation !== generationRef.current) return;
     ownedAuthorityPreviewRef.current = null;
+    acceptedReviewOwnershipRef.current = null;
     await refreshAfterApply();
   };
 
   const clearReview = () => {
     activeReviewTokenRef.current = null;
+    acceptedReviewOwnershipRef.current = null;
     ownedAuthorityPreviewRef.current = null;
+    pendingPreviewCancellationRef.current = null;
     setReview(null);
     setError(null);
     setState('idle');
   };
 
   const cancelReview = async () => {
-    if (!review || state === 'previewing' || state === 'applying' || state === 'cancelling') return;
+    if (state === 'applying' || state === 'cancelling') return;
+    if (state === 'previewing') {
+      const inFlightPreview = inFlightPreviewRef.current;
+      if (!inFlightPreview) return;
+      pendingPreviewCancellationRef.current = inFlightPreview;
+      activeReviewTokenRef.current = null;
+      setReview(null);
+      setError(null);
+      setState('cancelling');
+      return;
+    }
+    if (!review) return;
     const reviewToCancel = review;
+    const acceptedOwnership = acceptedReviewOwnershipRef.current;
+    if (!acceptedOwnership) return;
     const generation = ++generationRef.current;
     activeReviewTokenRef.current = null;
     setError(null);
 
-    if (!reviewToCancel.authorityPreviewId) {
+    if (!acceptedOwnership.authorityPreviewId) {
       clearReview();
       onCancel();
       return;
     }
 
     const previewToCancel = {
-      provider,
-      authorityPreviewId: reviewToCancel.authorityPreviewId,
+      provider: acceptedOwnership.provider,
+      authorityPreviewId: acceptedOwnership.authorityPreviewId,
     };
     setState('cancelling');
     try {
@@ -233,6 +328,34 @@ export default function AuthorityReviewWorkspace({
     onCancel();
   };
 
+  const retryPendingPreviewCancellation = async () => {
+    const pendingCancellation = pendingPreviewCancellationRef.current;
+    const acceptedOwnership = acceptedReviewOwnershipRef.current;
+    if (!pendingCancellation || !acceptedOwnership?.authorityPreviewId) return;
+    const generation = pendingCancellation.generation;
+    setError(null);
+    setState('cancelling');
+    try {
+      await retireAuthorityPreview({
+        provider: acceptedOwnership.provider,
+        authorityPreviewId: acceptedOwnership.authorityPreviewId,
+      });
+    } catch (cause) {
+      if (generation !== generationRef.current) return;
+      setError(peopleSyncErrorMessage(cause, 'Failed to cancel the authority change.'));
+      setState('error');
+      return;
+    }
+    if (generation !== generationRef.current) return;
+    pendingPreviewCancellationRef.current = null;
+    acceptedReviewOwnershipRef.current = null;
+    ownedAuthorityPreviewRef.current = null;
+    activeReviewTokenRef.current = null;
+    setError(null);
+    setState('idle');
+    onCancel();
+  };
+
   const summary = review?.summary;
   const linked = summary?.linkPeople || 0;
   const locked = linked
@@ -240,18 +363,32 @@ export default function AuthorityReviewWorkspace({
     + (summary?.reactivate || 0)
     + (summary?.archive || 0);
   const applyRefreshPending = state === 'apply_refresh_pending' || state === 'refreshing_after_apply';
+  const reviewProvider = acceptedReviewOwnershipRef.current?.provider ?? provider;
+  const cancellingPendingPreview = pendingPreviewCancellationRef.current !== null;
 
   return (
     <div className="space-y-4">
-      {state === 'previewing' && (
-        <p ref={progressRef} role="status" tabIndex={-1} className="text-sm text-gray-600">
-          Preparing authority review…
-        </p>
+      {state === 'previewing' && !review && (
+        <div className="space-y-3">
+          <p ref={progressRef} role="status" tabIndex={-1} className="text-sm text-gray-600">
+            Preparing authority review…
+          </p>
+          <button type="button" onClick={() => void cancelReview()} className="text-sm underline">
+            Cancel authority change
+          </button>
+        </div>
+      )}
+      {state === 'cancelling' && cancellingPendingPreview && (
+        <p role="status" className="text-sm text-gray-600">Cancelling authority change…</p>
       )}
       {error && !applyRefreshPending && (
         <div ref={errorRef} role="alert" tabIndex={-1} className="space-y-3 text-sm text-red-600">
           <p>{error}</p>
-          {!review && (
+          {!review && cancellingPendingPreview ? (
+            <button type="button" onClick={() => void retryPendingPreviewCancellation()} className="text-sm underline">
+              Retry cancellation
+            </button>
+          ) : !review && (
             <div className="flex gap-3">
               <button type="button" onClick={() => void preview()} className="text-sm underline">
                 Retry authority review
@@ -267,7 +404,7 @@ export default function AuthorityReviewWorkspace({
         <div
           ref={reviewRegionRef}
           role="region"
-          aria-label={`${providerName(provider)} authority review`}
+          aria-label={`${providerName(reviewProvider)} authority review`}
           tabIndex={-1}
           className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20"
         >
@@ -301,18 +438,18 @@ export default function AuthorityReviewWorkspace({
             <>
               <SyncReview
                 operationKind="authority_switch"
-                provider={provider}
+                provider={reviewProvider}
                 review={review}
                 onRefresh={preview}
                 onApply={apply}
                 applying={state === 'applying'}
                 interactionDisabled={state === 'previewing' || state === 'cancelling'}
-                requireAllPlannedArchivesAccepted={provider === 'planning_center'}
+                requireAllPlannedArchivesAccepted={reviewProvider === 'planning_center'}
               />
               <button
                 type="button"
                 onClick={() => void cancelReview()}
-                disabled={state === 'previewing' || state === 'applying' || state === 'cancelling'}
+                disabled={state === 'applying' || state === 'cancelling'}
                 className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 Cancel authority change
