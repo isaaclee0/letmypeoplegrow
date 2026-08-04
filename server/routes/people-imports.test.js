@@ -4,9 +4,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
+const cookieParser = require('cookie-parser');
 const {
   createPeopleImportsRouter,
   createPeopleImportsJsonParser,
+  createPeopleImportsRequestBoundary,
   MAX_BODY_BYTES,
 } = require('./people-imports');
 
@@ -51,8 +53,27 @@ function buildServer(overrides = {}, { preparse = false } = {}) {
   return http.createServer(app);
 }
 
+function buildProductionOrderServer(overrides = {}) {
+  const app = express();
+  app.use(cookieParser());
+  app.use('/people-imports', createPeopleImportsRequestBoundary(overrides));
+  app.use(express.json({ limit: '10mb' }));
+  app.use('/people-imports', createPeopleImportsRouter(overrides));
+  return http.createServer(app);
+}
+
 async function withServer(overrides, options, run) {
   const server = buildServer(overrides, options);
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    return await run(`http://127.0.0.1:${server.address().port}/people-imports`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function withProductionOrderServer(overrides, run) {
+  const server = buildProductionOrderServer(overrides);
   await new Promise((resolve) => server.listen(0, resolve));
   try {
     return await run(`http://127.0.0.1:${server.address().port}/people-imports`);
@@ -90,6 +111,80 @@ test('all routes require authentication, church isolation, and the admin role be
   });
 
   assert.equal(providerCalls, 0);
+});
+
+test('production mount authenticates from cookies before narrow parsing without running auth twice', async () => {
+  let authenticationChecks = 0;
+  let isolationChecks = 0;
+  let adminChecks = 0;
+  let providerCalls = 0;
+  const overrides = dependencies({
+    verifyToken(req, res, next) {
+      authenticationChecks += 1;
+      if (req.cookies.authToken !== 'admin-cookie') {
+        return res.status(401).json({ error: 'Authentication required.' });
+      }
+      req.user = ADMIN;
+      return next();
+    },
+    ensureChurchIsolation(req, _res, next) {
+      isolationChecks += 1;
+      req.churchId = req.user.church_id;
+      next();
+    },
+    requireAdmin(req, res, next) {
+      adminChecks += 1;
+      if (req.user.role !== 'admin') return res.status(403).json({ error: 'Insufficient permissions.' });
+      return next();
+    },
+    previewImport: async () => { providerCalls += 1; return {}; },
+  });
+
+  await withProductionOrderServer(overrides, async (base) => {
+    for (const body of ['{"selection":', JSON.stringify({
+      selection: { kind: 'elvanto_group', externalId: 'x'.repeat(MAX_BODY_BYTES) },
+    })]) {
+      const response = await fetch(`${base}/elvanto/preview`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+      });
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+    }
+
+    const malformed = await fetch(`${base}/elvanto/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: 'authToken=admin-cookie' },
+      body: '{"selection":',
+    });
+    assert.equal(malformed.status, 400);
+    assert.deepEqual(await malformed.json(), {
+      error: 'Invalid people import request.', code: 'PEOPLE_IMPORT_REQUEST_INVALID',
+    });
+
+    const oversized = await fetch(`${base}/elvanto/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: 'authToken=admin-cookie' },
+      body: JSON.stringify({
+        selection: { kind: 'elvanto_group', externalId: 'x'.repeat(MAX_BODY_BYTES) },
+      }),
+    });
+    assert.equal(oversized.status, 413);
+    assert.deepEqual(await oversized.json(), {
+      error: 'Invalid people import request.', code: 'PEOPLE_IMPORT_REQUEST_INVALID',
+    });
+
+    const valid = await fetch(`${base}/elvanto/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: 'authToken=admin-cookie' },
+      body: JSON.stringify({ selection: { kind: 'all' } }),
+    });
+    assert.equal(valid.status, 200);
+  });
+
+  assert.equal(authenticationChecks, 5);
+  assert.equal(isolationChecks, 3);
+  assert.equal(adminChecks, 3);
+  assert.equal(providerCalls, 1);
 });
 
 test('GET sources forwards verified church/provider context and exposes only safe source fields', async () => {

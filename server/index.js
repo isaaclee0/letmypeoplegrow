@@ -337,19 +337,20 @@ app.use(cors({
 
 
 
-// Body parsing middleware
-// This narrow parser must precede the general 10 MiB parser. It enforces the
-// source-selection request boundary for both Content-Length and chunked
-// requests without changing unrelated API upload limits.
+// Cookie parsing must precede the authenticated people-import request
+// boundary below so verifyToken can read its HTTP-only auth cookie before
+// malformed or oversized JSON is considered.
+app.use(cookieParser());
+
+// Body parsing middleware. These narrow parsers must precede the general
+// 10 MiB parser so both Content-Length and chunked requests retain their
+// route-specific limits without changing unrelated API upload limits.
 const { createSourceBuilderJsonParser } = require('./routes/integrations/sourceBuilder');
 app.use('/api/integrations/people-sync/providers', createSourceBuilderJsonParser());
-const { createPeopleImportsJsonParser } = require('./routes/people-imports');
-app.use('/api/people-imports', createPeopleImportsJsonParser());
+const { createPeopleImportsRequestBoundary } = require('./routes/people-imports');
+app.use('/api/people-imports', createPeopleImportsRequestBoundary());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-// Cookie parsing middleware
-app.use(cookieParser());
 
 // Request logging middleware with error handling
 try {

@@ -17,6 +17,7 @@ const SOURCE_KINDS = Object.freeze({
 const ALL_OPTION = Object.freeze({ kind: 'all', name: 'Everyone' });
 const MAX_BODY_BYTES = 16 * 1024;
 const DEFAULT_IMPORT_ROUTE_TIMEOUT_MS = 120000;
+const REQUEST_BOUNDARY_PASSED = Symbol('peopleImportsRequestBoundaryPassed');
 
 const SAFE_ERRORS = Object.freeze({
   SYNC_SOURCE_AUTH: [401, 'The provider rejected the stored connection credentials. Reconnect it to continue.'],
@@ -114,6 +115,32 @@ const defaultDeps = {
   withTimeout,
 };
 
+function installRequestBoundary(router, deps) {
+  const unlessAlreadyPassed = (middleware) => (req, res, next) => (
+    req[REQUEST_BOUNDARY_PASSED] ? next() : middleware(req, res, next)
+  );
+  router.use(unlessAlreadyPassed(deps.verifyToken));
+  router.use(unlessAlreadyPassed(deps.ensureChurchIsolation));
+  router.use(unlessAlreadyPassed(deps.requireAdmin));
+
+  const parseJson = createPeopleImportsJsonParser();
+  router.use((req, res, next) => {
+    if (req[REQUEST_BOUNDARY_PASSED]) return next();
+    return parseJson(req, res, (error) => {
+      if (error) return next(error);
+      req[REQUEST_BOUNDARY_PASSED] = true;
+      return next();
+    });
+  });
+}
+
+function createPeopleImportsRequestBoundary(overrides = {}) {
+  const deps = { ...defaultDeps, ...overrides };
+  const boundary = express.Router();
+  installRequestBoundary(boundary, deps);
+  return boundary;
+}
+
 async function runWithDeadline(req, res, deps, operation) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -156,10 +183,11 @@ function createPeopleImportsRouter(overrides = {}) {
   const deps = { ...defaultDeps, ...overrides };
   const router = express.Router();
 
-  router.use(deps.verifyToken);
-  router.use(deps.ensureChurchIsolation);
-  router.use(deps.requireAdmin);
-  router.use(createPeopleImportsJsonParser());
+  // In production this boundary first runs ahead of the global JSON parser
+  // so unauthenticated requests cannot terminate at body parsing. The same
+  // boundary remains installed here for standalone/test mounting; an
+  // unforgeable request-local marker prevents duplicate auth execution.
+  installRequestBoundary(router, deps);
 
   router.param('provider', (req, res, next, provider) => {
     if (!PROVIDERS.has(provider)) {
@@ -237,6 +265,7 @@ const productionRouter = createPeopleImportsRouter();
 module.exports = productionRouter;
 module.exports.createPeopleImportsRouter = createPeopleImportsRouter;
 module.exports.createPeopleImportsJsonParser = createPeopleImportsJsonParser;
+module.exports.createPeopleImportsRequestBoundary = createPeopleImportsRequestBoundary;
 module.exports.defaultDeps = defaultDeps;
 module.exports.MAX_BODY_BYTES = MAX_BODY_BYTES;
 module.exports.DEFAULT_IMPORT_ROUTE_TIMEOUT_MS = DEFAULT_IMPORT_ROUTE_TIMEOUT_MS;
