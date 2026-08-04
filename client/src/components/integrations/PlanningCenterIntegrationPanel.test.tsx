@@ -261,6 +261,17 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByRole('button', { name: 'Reconnect Planning Center' })).not.toBeInTheDocument();
   });
 
+  it("shows What you'll get before connection and hides it after connection", async () => {
+    // Catches introductory benefits continuing to occupy the connected management view.
+    const disconnected = renderPanel({ status: { connected: false } });
+    expect(screen.getByRole('heading', { name: "What you'll get" })).toBeInTheDocument();
+
+    disconnected.unmount();
+    renderPanel();
+    await screen.findByText('Members');
+    expect(screen.queryByRole('heading', { name: "What you'll get" })).not.toBeInTheDocument();
+  });
+
   it('does not block reconnect when Planning Center is authoritative', () => {
     // Catches the destructive Disconnect guard leaking into the non-destructive reconnect flow.
     renderPanel({

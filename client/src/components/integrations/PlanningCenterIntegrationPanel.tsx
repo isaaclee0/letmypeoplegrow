@@ -413,23 +413,25 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             </div>
           )}
 
-          <div className="mt-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-            <div className="flex">
-              <div className="shrink-0">
-                <InformationCircleIcon className="h-5 w-5 text-green-400" />
-              </div>
-              <div className="ml-3">
-                <h4 className="text-sm font-medium text-green-800 dark:text-green-300">What you'll get</h4>
-                <div className="mt-2 text-sm text-green-700 dark:text-green-400">
-                  <ul className="list-disc list-inside space-y-1">
-                    <li>Import people with household grouping</li>
-                    <li>Import historical check-in data as a one-time attendance backfill</li>
-                    <li>Seamless integration with Planning Center Online</li>
-                  </ul>
+          {!status.connected && (
+            <div className="mt-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
+              <div className="flex">
+                <div className="shrink-0">
+                  <InformationCircleIcon className="h-5 w-5 text-green-400" />
+                </div>
+                <div className="ml-3">
+                  <h4 className="text-sm font-medium text-green-800 dark:text-green-300">What you'll get</h4>
+                  <div className="mt-2 text-sm text-green-700 dark:text-green-400">
+                    <ul className="list-disc list-inside space-y-1">
+                      <li>Import people with household grouping</li>
+                      <li>Import historical check-in data as a one-time attendance backfill</li>
+                      <li>Seamless integration with Planning Center Online</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
           {!status.connected && <div className="mt-4">{peopleSourceControl}</div>}
 
