@@ -23,7 +23,7 @@ export default function IdentityRemovalDialog({
       <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
       <div className="fixed inset-0 overflow-y-auto p-4">
         <div className="flex min-h-full items-start justify-center py-4 sm:items-center">
-          <DialogPanel className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl dark:bg-gray-800">
+          <DialogPanel className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-xl [@supports(height:100dvh)]:max-h-[calc(100dvh-2rem)] dark:bg-gray-800">
             <div className="flex items-start justify-between gap-4">
               <DialogTitle className="text-lg font-semibold text-gray-950 dark:text-white">
                 Remove matching decision for {externalName}

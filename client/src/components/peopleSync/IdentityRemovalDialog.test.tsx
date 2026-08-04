@@ -55,6 +55,27 @@ describe('IdentityRemovalDialog', () => {
     expect(onSkip).toHaveBeenCalledWith();
   });
 
+  it('keeps every decision action reachable when the dialog is taller than the viewport', async () => {
+    render(
+      <IdentityRemovalDialog
+        open
+        externalName="Sarah Wierenga"
+        pairedIndividualId={42}
+        onRejectPair={vi.fn()}
+        onSkip={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Remove matching decision for Sarah Wierenga' });
+    const panel = dialog.querySelector('.rounded-xl');
+    expect(panel).toHaveClass('overflow-y-auto');
+    expect(panel).toHaveClass('max-h-[calc(100vh-2rem)]');
+    expect(panel).toHaveClass('[@supports(height:100dvh)]:max-h-[calc(100dvh-2rem)]');
+    expect(within(dialog).getByRole('button', { name: 'Reject this match' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Skip and ask again' })).toBeInTheDocument();
+  });
+
   it('offers only deferral for a proposed addition', async () => {
     render(
       <IdentityRemovalDialog
