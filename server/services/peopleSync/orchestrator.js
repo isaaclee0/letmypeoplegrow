@@ -972,14 +972,14 @@ async function buildReview({
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
-  if (batchId !== null && batchId !== undefined) {
-    const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-    assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
-  }
+  const reviewedBatch = batchId !== null && batchId !== undefined
+    ? pre.batches.find((candidate) => String(candidate.id) === String(batchId))
+    : pre.batches[0];
+  assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
-  const authoritative = pre.authorityState.active === provider;
-  const activeAuthority = pre.authorityState.active;
+  const authoritative = true;
+  const activeAuthority = provider;
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
   try {
@@ -1029,8 +1029,11 @@ async function previewLinkCorrections({
   assertProvider(provider);
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
   const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
     churchId, provider, batchId, trigger: 'manual', mode: 'full', watermark: undefined,
+    authoritative: true, activeAuthority: provider,
   }));
   const sourceContext = reviewedSourceContext(
     provider, pre.batches, batchId, acquired.sourceProvenance, pre.connectionGeneration
@@ -1211,12 +1214,10 @@ function reviewTokenErrorMessage(code) {
 
 // ─── applyReviewed ───────────────────────────────────────────────────────────
 //
-// Re-fetches a fresh full snapshot, rebuilds the plan under the SAME
-// authoritative/activeAuthority stance the reviewed plan would have used
-// (normal apply: whatever is currently the real active authority;
-// authority-switch apply: pretend `provider` is already authoritative,
-// detected via people_sync_settings.pending_authority_provider === provider
-// — the signal beginAuthoritySwitch left behind at preview time), verifies
+// Re-fetches a fresh full snapshot and rebuilds the plan under the SAME
+// authoritative provider stance the reviewed plan used. Ordinary applies
+// require `provider` to remain active; authority-switch applies use the
+// pending provider staged by beginAuthoritySwitch. It then verifies
 // the caller's token against the FRESH digest, validates selections, then
 // applies inside apply.js's one critical transaction.
 //
@@ -1250,8 +1251,10 @@ async function applyReviewed({
     ? authoritySourceSet.promotions
     : reviewBatches.filter((batch) => batch.effectiveSourceIsDraft).map(toSourcePromotion);
   const operationKind = isAuthoritySwitch ? 'authority_switch' : 'people_sync';
-  const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-  if (batchId !== null && batchId !== undefined && !isAuthoritySwitch) {
+  const reviewedBatch = batchId !== null && batchId !== undefined
+    ? pre.batches.find((candidate) => String(candidate.id) === String(batchId))
+    : pre.batches[0];
+  if (!isAuthoritySwitch) {
     assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
   }
   const pendingAuthorityIntent = isAuthoritySwitch
@@ -1260,8 +1263,8 @@ async function applyReviewed({
   const authorityPreviewId = pendingAuthorityIntent?.provider === provider
     ? pendingAuthorityIntent.authorityPreviewId
     : null;
-  const authoritative = isAuthoritySwitch ? true : pre.authorityState.active === provider;
-  const activeAuthority = isAuthoritySwitch ? provider : pre.authorityState.active;
+  const authoritative = true;
+  const activeAuthority = provider;
   const trigger = isAuthoritySwitch ? 'authority_switch' : 'manual';
   const authorityExpectation = {
     active: pre.authorityState.active,

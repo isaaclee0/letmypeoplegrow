@@ -52,13 +52,12 @@ export default function PeopleSyncBatchReviewPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [batches, nextReview] = await Promise.all([
-        adapter.listBatches(),
-        adapter.loadReview(batchId),
-      ]);
+      const batches = await adapter.listBatches();
       if (generation !== requestGeneration.current) return false;
       const nextBatch = batches.find((candidate) => candidate.id === batchId);
       if (!nextBatch) throw new Error('This sync batch is no longer available.');
+      const nextReview = await adapter.loadReview(nextBatch);
+      if (generation !== requestGeneration.current) return false;
       setBatch(nextBatch);
       setReview(nextReview);
       setLoadedContextKey(`${adapter.provider}:${batchId}`);
@@ -104,16 +103,16 @@ export default function PeopleSyncBatchReviewPage() {
     baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
   ): Promise<PeopleSyncOperationCorrectionPreview> => {
-    if (!adapter || batchId === null) return Promise.reject(new Error('This sync review link is invalid.'));
-    return adapter.previewCorrections(batchId, baseReviewToken, linkCorrections);
-  }, [adapter, batchId]);
+    if (!adapter || !visibleBatch) return Promise.reject(new Error('This sync review link is invalid.'));
+    return adapter.previewCorrections(visibleBatch, baseReviewToken, linkCorrections);
+  }, [adapter, visibleBatch]);
 
   const applyReview = useCallback(async (reviewToken: PeopleReviewToken<'people_sync'>, selections: PeopleSyncSelections) => {
-    if (!adapter || batchId === null) throw new Error('This sync review link is invalid.');
+    if (!adapter || !visibleBatch) throw new Error('This sync review link is invalid.');
     const generation = ++requestGeneration.current;
     setApplying(true);
     try {
-      await adapter.applyReview(batchId, reviewToken, selections);
+      await adapter.applyReview(visibleBatch, reviewToken, selections);
       if (generation !== requestGeneration.current) return;
       setDirty(false);
       showSuccess('Sync applied successfully.');
@@ -128,7 +127,7 @@ export default function PeopleSyncBatchReviewPage() {
     } finally {
       if (generation === requestGeneration.current) setApplying(false);
     }
-  }, [adapter, batchId, navigate, showSuccess, showWarning]);
+  }, [adapter, navigate, showSuccess, showWarning, visibleBatch]);
 
   if (!adapter || batchId === null) return null;
 

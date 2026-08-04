@@ -231,7 +231,6 @@ function addLifecycleAndManagedActions(context) {
   } = context;
   const activeAuthority = input.activeAuthority || (input.authoritative ? input.provider : 'none');
   const canManage = input.authoritative === true;
-  const reviewedReimport = !canManage && activeAuthority === 'none' && input.trigger === 'manual';
   const alignPeopleType = input.settings?.alignPeopleType !== false;
 
   for (const identity of identities) {
@@ -242,8 +241,6 @@ function addLifecycleAndManagedActions(context) {
     const state = normalizeState(externalPerson.state);
     const included = populationIds.has(externalPersonId);
     const changes = managedFieldChanges(externalPerson, localPerson);
-    const canReviewedUpdate = reviewedReimport && identity.bucket === 'linked';
-
     if (identity.bucket !== 'linked') {
       plan.linkPeople.push({
         id: actionId('linkPeople', externalPersonId, individualId), externalPersonId, individualId,
@@ -281,27 +278,26 @@ function addLifecycleAndManagedActions(context) {
       });
     }
 
-    if (changes.length > 0 && (canManage || canReviewedUpdate)) {
+    if (changes.length > 0 && canManage) {
       plan.updateManagedFields.push({
         id: actionId('updateManagedFields', externalPersonId, individualId), externalPersonId, individualId,
-        changes, reason: canManage ? 'provider_managed_fields' : 'reviewed_reimport',
-        reviewRequired: !canManage,
+        changes, reason: 'provider_managed_fields', reviewRequired: false,
       });
     }
 
     if (!alignPeopleType) continue;
     const desired = desiredPeopleType(externalPerson, qualifyingBatchesFor(externalPersonId, batches, eligibleByBatch));
     const current = peopleType(localPerson);
-    if (desired === current || (!canManage && !canReviewedUpdate)) continue;
+    if (desired === current || !canManage) continue;
     if (desired === 'regular') {
       plan.promoteToRegular.push({
         id: actionId('promoteToRegular', externalPersonId, individualId), externalPersonId, individualId,
-        fromPeopleType: current, toPeopleType: 'regular', reason: 'provider_state_active', reviewRequired: !canManage,
+        fromPeopleType: current, toPeopleType: 'regular', reason: 'provider_state_active', reviewRequired: false,
       });
     } else if (desired === 'local_visitor') {
       plan.demoteToLocalVisitor.push({
         id: actionId('demoteToLocalVisitor', externalPersonId, individualId), externalPersonId, individualId,
-        fromPeopleType: current, toPeopleType: 'local_visitor', reason: 'provider_state_contact', reviewRequired: !canManage,
+        fromPeopleType: current, toPeopleType: 'local_visitor', reason: 'provider_state_contact', reviewRequired: false,
       });
     }
   }
@@ -309,20 +305,12 @@ function addLifecycleAndManagedActions(context) {
 
 function addUnmatchedActions(context) {
   const { plan, input, matcherResult, conflictIds, externalById, populationIds, batches, eligibleByBatch } = context;
-  const activeAuthority = input.activeAuthority || (input.authoritative ? input.provider : 'none');
   for (const rawExternalPersonId of matcherResult.unmatchedExternalIds || []) {
     const externalPersonId = externalId(rawExternalPersonId);
     if (conflictIds.has(externalPersonId) || !populationIds.has(externalPersonId)) continue;
     const externalPerson = externalById.get(externalPersonId);
     if (!externalPerson) continue;
     const desired = desiredPeopleType(externalPerson, qualifyingBatchesFor(externalPersonId, batches, eligibleByBatch));
-    if (!input.authoritative && desired === 'regular') {
-      plan.skipped.push({
-        id: actionId('skipped', externalPersonId, 'create_regular_non_authoritative'), externalPersonId,
-        reason: 'create_regular_non_authoritative', activeAuthority,
-      });
-      continue;
-    }
     plan.addPeople.push({
       id: actionId('addPeople', externalPersonId), externalPersonId,
       firstName: externalPerson.firstName, lastName: externalPerson.lastName,

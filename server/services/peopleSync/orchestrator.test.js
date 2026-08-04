@@ -1504,6 +1504,59 @@ test('a prepared batch rejects ordinary reviewed apply before starting an audit 
   assert.equal(fetches, 0);
 });
 
+test('ordinary provider-wide review rejects without active provider authority before audit or provider work', async () => {
+  let fetches = 0;
+  const { deps, events } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async () => { fetches += 1; return sourceSnapshot(source('group-1')); },
+  });
+
+  await assert.rejects(
+    buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_BATCH_PREPARED' && error.status === 409
+  );
+  assert.equal(events.includes('startRun'), false);
+  assert.equal(fetches, 0);
+});
+
+test('ordinary correction preview rejects a prepared batch before provider work', async () => {
+  let fetches = 0;
+  const { deps } = makeDeps({
+    authorityState: { active: 'planning_center', pending: null },
+    fetchSourceSnapshot: async () => { fetches += 1; return sourceSnapshot(source('group-1')); },
+  });
+
+  await assert.rejects(
+    previewLinkCorrections({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      baseReviewToken: 'review-token', linkCorrections: {},
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_BATCH_PREPARED' && error.status === 409
+  );
+  assert.equal(fetches, 0);
+});
+
+test('every successful ordinary review and apply plans explicitly use active provider authority', async () => {
+  const reviewDeps = makeDeps();
+  const review = await buildReview({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual',
+  }, reviewDeps.deps);
+  assert.equal(review.plan.authoritative, true);
+  assert.equal(reviewDeps.plans[0].authoritative, true);
+  assert.equal(reviewDeps.plans[0].activeAuthority, 'elvanto');
+
+  const applyDeps = makeDeps();
+  await applyReviewed({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    reviewToken: 'review-token', selections: {}, userId: 5,
+  }, applyDeps.deps);
+  assert.equal(applyDeps.applied[0].plan.authoritative, true);
+  assert.equal(applyDeps.plans[0].authoritative, true);
+  assert.equal(applyDeps.plans[0].activeAuthority, 'elvanto');
+});
+
 test('a batch-specific apply remains prepared and blocked while an authority preview targets its provider', async () => {
   let fetches = 0;
   const { deps, events } = makeDeps({

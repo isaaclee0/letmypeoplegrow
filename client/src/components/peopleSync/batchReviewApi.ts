@@ -1,4 +1,8 @@
-import { elvantoSyncAPI, integrationsAPI } from '../../services/api';
+import {
+  elvantoSyncAPI,
+  integrationsAPI,
+  PEOPLE_SYNC_BATCH_PREPARED_MESSAGE,
+} from '../../services/api';
 import { tagLegacyPeopleReview } from './types';
 import type {
   EstablishedLinkCorrection,
@@ -17,17 +21,24 @@ export interface BatchReviewAdapter {
   provider: SyncProvider;
   returnTo: string;
   listBatches: () => Promise<PeopleSyncBatch[]>;
-  loadReview: (batchId: number) => Promise<PeopleSyncOperationReview>;
+  loadReview: (batch: PeopleSyncBatch) => Promise<PeopleSyncOperationReview>;
   previewCorrections: (
-    batchId: number,
+    batch: PeopleSyncBatch,
     baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
   ) => Promise<PeopleSyncOperationCorrectionPreview>;
   applyReview: (
-    batchId: number,
+    batch: PeopleSyncBatch,
     reviewToken: PeopleReviewToken<'people_sync'>,
     selections: PeopleSyncSelections,
   ) => Promise<PeopleSyncApplyResult>;
+}
+
+function assertBatchReviewable(batch: PeopleSyncBatch, provider: SyncProvider): void {
+  if (batch.provider !== provider) throw new Error('This sync batch belongs to a different provider.');
+  if (batch.reviewable) return;
+  if (batch.operationalState === 'prepared') throw new Error(PEOPLE_SYNC_BATCH_PREPARED_MESSAGE);
+  throw new Error('This sync batch is not available for review.');
 }
 
 function responseBody<T extends object>(data: T & { success?: boolean }): T {
@@ -42,19 +53,22 @@ const planningCenterAdapter: BatchReviewAdapter = {
     const response = await integrationsAPI.getPlanningCenterSyncBatches();
     return response.data.batches;
   },
-  async loadReview(batchId) {
-    const response = await integrationsAPI.getPlanningCenterBatchPlan(batchId);
+  async loadReview(batch) {
+    assertBatchReviewable(batch, 'planning_center');
+    const response = await integrationsAPI.getPlanningCenterBatchPlan(batch.id);
     return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
-  async previewCorrections(batchId, baseReviewToken, linkCorrections) {
-    const response = await integrationsAPI.previewPlanningCenterLinkCorrections(batchId, {
+  async previewCorrections(batch, baseReviewToken, linkCorrections) {
+    assertBatchReviewable(batch, 'planning_center');
+    const response = await integrationsAPI.previewPlanningCenterLinkCorrections(batch.id, {
       baseReviewToken,
       linkCorrections,
     });
     return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
-  async applyReview(batchId, reviewToken, selections) {
-    const response = await integrationsAPI.applyPlanningCenterBatch(batchId, { reviewToken, selections });
+  async applyReview(batch, reviewToken, selections) {
+    assertBatchReviewable(batch, 'planning_center');
+    const response = await integrationsAPI.applyPlanningCenterBatch(batch.id, { reviewToken, selections });
     return responseBody<PeopleSyncApplyResult>(response.data);
   },
 };
@@ -66,19 +80,22 @@ const elvantoAdapter: BatchReviewAdapter = {
     const response = await elvantoSyncAPI.listBatches();
     return response.data.batches;
   },
-  async loadReview(batchId) {
-    const response = await elvantoSyncAPI.getBatchPlan(batchId);
+  async loadReview(batch) {
+    assertBatchReviewable(batch, 'elvanto');
+    const response = await elvantoSyncAPI.getBatchPlan(batch.id);
     return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
-  async previewCorrections(batchId, baseReviewToken, linkCorrections) {
-    const response = await elvantoSyncAPI.previewLinkCorrections(batchId, {
+  async previewCorrections(batch, baseReviewToken, linkCorrections) {
+    assertBatchReviewable(batch, 'elvanto');
+    const response = await elvantoSyncAPI.previewLinkCorrections(batch.id, {
       baseReviewToken,
       linkCorrections,
     });
     return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
-  async applyReview(batchId, reviewToken, selections) {
-    const response = await elvantoSyncAPI.applyBatch(batchId, { reviewToken, selections });
+  async applyReview(batch, reviewToken, selections) {
+    assertBatchReviewable(batch, 'elvanto');
+    const response = await elvantoSyncAPI.applyBatch(batch.id, { reviewToken, selections });
     return responseBody<PeopleSyncApplyResult>(response.data);
   },
 };

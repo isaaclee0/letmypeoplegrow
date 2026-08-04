@@ -81,6 +81,7 @@ vi.mock('../contexts/SmartCacheContext', () => ({
 vi.mock('../utils/logger', () => ({ default: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 vi.mock('../services/userPreferences', () => ({ userPreferences: {} }));
 vi.mock('../services/api', () => ({
+  PEOPLE_SYNC_BATCH_PREPARED_MESSAGE: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
   aiAPI: { getStatus: vi.fn().mockResolvedValue({ data: { configured: false } }) },
   gatheringsAPI: { getAll: vi.fn().mockResolvedValue({ data: { gatherings: [] } }) },
   notificationsAPI: { getAll: vi.fn(), markAsRead: vi.fn() },
@@ -260,6 +261,9 @@ function batchFor(provider: SyncProvider, id = 7): PeopleSyncBatch {
     sourceStatus: 'available',
     sourceStatusCheckedAt: null,
     sourceStatusErrorCode: null,
+    operationalState: 'active',
+    reviewable: true,
+    runnable: true,
     defaultPeopleType: 'regular',
     gatheringTypeId: null,
     gatheringAutoRemoveEnabled: false,
@@ -400,6 +404,26 @@ describe('PeopleSyncBatchReviewPage', () => {
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
     expect(integrationsAPI.getPlanningCenterBatchPlan).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows switch-source guidance and never opens or applies a prepared batch from a stale bookmark', async () => {
+    const prepared = {
+      ...batchFor('planning_center'),
+      operationalState: 'prepared' as const,
+      reviewable: false,
+      runnable: false,
+    };
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
+      .mockResolvedValue({ data: { success: true, batches: [prepared] } } as never);
+
+    renderRoute('/app/settings/integrations/planning-center/batches/7/review');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+    );
+    expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
+    expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Apply .*selected change/ })).not.toBeInTheDocument();
   });
 
   it('uses the original base token for corrections and the effective preview token for apply', async () => {

@@ -373,10 +373,8 @@ export interface UnmatchedLocalRegularAction {
   reviewRequired: true;
 }
 
-// Different producers attach different optional fields (individualId is
-// absent for a "create_regular_non_authoritative" skip and present for
-// others; activeAuthority is set only by its own producer) -- see plan.js's
-// several `plan.skipped.push(...)` call sites.
+// Different producers attach different optional fields; see plan.js's
+// `plan.skipped.push(...)` call sites.
 export interface SkippedAction {
   id: string;
   externalPersonId: string;

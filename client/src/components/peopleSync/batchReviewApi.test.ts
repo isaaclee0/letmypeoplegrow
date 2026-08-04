@@ -11,6 +11,7 @@ import type {
 } from './types';
 
 vi.mock('../../services/api', () => ({
+  PEOPLE_SYNC_BATCH_PREPARED_MESSAGE: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
   integrationsAPI: {
     getPlanningCenterSyncBatches: vi.fn(),
     getPlanningCenterBatchPlan: vi.fn(),
@@ -66,6 +67,9 @@ const batchFor = (provider: 'planning_center' | 'elvanto'): PeopleSyncBatch => (
   sourceStatus: 'available',
   sourceStatusCheckedAt: null,
   sourceStatusErrorCode: null,
+  operationalState: 'active',
+  reviewable: true,
+  runnable: true,
   defaultPeopleType: 'regular',
   gatheringTypeId: null,
   gatheringAutoRemoveEnabled: false,
@@ -112,17 +116,17 @@ describe('batchReviewApi', () => {
     expect(adapter?.provider).toBe('planning_center');
     expect(adapter?.returnTo).toBe('/app/settings?tab=integrations&integration=planning-center');
     await expect(adapter?.listBatches()).resolves.toEqual([batch]);
-    await expect(adapter?.loadReview(7)).resolves.toEqual({
+    await expect(adapter?.loadReview(batch)).resolves.toEqual({
       ...review,
       operationKind: 'people_sync',
       plan: { ...review.plan, operationKind: 'people_sync' },
     });
-    await expect(adapter?.previewCorrections(7, 'pco-base-token' as never, corrections)).resolves.toEqual({
+    await expect(adapter?.previewCorrections(batch, 'pco-base-token' as never, corrections)).resolves.toEqual({
       ...preview,
       operationKind: 'people_sync',
       plan: { ...preview.plan, operationKind: 'people_sync' },
     });
-    await expect(adapter?.applyReview(7, 'pco-preview-token' as never, selections)).resolves.toMatchObject({
+    await expect(adapter?.applyReview(batch, 'pco-preview-token' as never, selections)).resolves.toMatchObject({
       runId: 41,
       status: 'applied',
     });
@@ -162,17 +166,17 @@ describe('batchReviewApi', () => {
     expect(adapter?.provider).toBe('elvanto');
     expect(adapter?.returnTo).toBe('/app/settings?tab=integrations&integration=elvanto');
     await expect(adapter?.listBatches()).resolves.toEqual([batch]);
-    await expect(adapter?.loadReview(7)).resolves.toEqual({
+    await expect(adapter?.loadReview(batch)).resolves.toEqual({
       ...review,
       operationKind: 'people_sync',
       plan: { ...review.plan, operationKind: 'people_sync' },
     });
-    await expect(adapter?.previewCorrections(7, 'base-token' as never, corrections)).resolves.toEqual({
+    await expect(adapter?.previewCorrections(batch, 'base-token' as never, corrections)).resolves.toEqual({
       ...preview,
       operationKind: 'people_sync',
       plan: { ...preview.plan, operationKind: 'people_sync' },
     });
-    await expect(adapter?.applyReview(7, 'elvanto-preview-token' as never, selections)).resolves.toMatchObject({
+    await expect(adapter?.applyReview(batch, 'elvanto-preview-token' as never, selections)).resolves.toMatchObject({
       runId: 42,
       status: 'applied',
     });
@@ -198,8 +202,42 @@ describe('batchReviewApi', () => {
       },
     } as never);
 
-    await expect(batchReviewApi('elvanto')?.loadReview(7)).rejects.toThrow(
+    await expect(batchReviewApi('elvanto')?.loadReview(batchFor('elvanto'))).rejects.toThrow(
       'belongs to a different operation',
     );
+  });
+
+  it.each([
+    ['planning-center', 'planning_center'],
+    ['elvanto', 'elvanto'],
+  ] as const)('cannot open, correct, or apply a prepared %s batch', async (slug, provider) => {
+    const prepared = {
+      ...batchFor(provider),
+      operationalState: 'prepared' as const,
+      reviewable: false,
+      runnable: false,
+    };
+    const adapter = batchReviewApi(slug);
+
+    await expect(adapter?.loadReview(prepared)).rejects.toThrow(
+      'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+    );
+    await expect(adapter?.previewCorrections(
+      prepared,
+      'review-token' as never,
+      {},
+    )).rejects.toThrow('Switch source of truth');
+    await expect(adapter?.applyReview(
+      prepared,
+      'review-token' as never,
+      { decisionContractVersion: 2, identityDecisions: {} },
+    )).rejects.toThrow('Switch source of truth');
+
+    expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
+    expect(integrationsAPI.previewPlanningCenterLinkCorrections).not.toHaveBeenCalled();
+    expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
+    expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
+    expect(elvantoSyncAPI.previewLinkCorrections).not.toHaveBeenCalled();
+    expect(elvantoSyncAPI.applyBatch).not.toHaveBeenCalled();
   });
 });

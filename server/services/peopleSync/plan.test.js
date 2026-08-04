@@ -384,7 +384,7 @@ test('a projected link changes only provider fields with known values on its new
   }]);
 });
 
-test('an inactive provider cannot update authority-owned fields or create regulars', () => {
+test('an inactive provider cannot update authority-owned fields', () => {
   const linked = person({ firstName: 'New' });
   const unlinked = person({ id: 'ext-2', firstName: 'Another' });
   const plan = computePeopleSyncPlan(input({
@@ -398,33 +398,30 @@ test('an inactive provider cannot update authority-owned fields or create regula
   }));
 
   assert.deepEqual(plan.updateManagedFields, []);
-  assert.deepEqual(plan.addPeople, []);
+  assert.deepEqual(plan.addPeople, [{
+    id: 'addPeople:ext-2', externalPersonId: 'ext-2', firstName: 'Another',
+    lastName: 'Lovelace', isChild: false, familyId: null, peopleType: 'regular',
+    reason: 'eligible_unmatched_external', reviewRequired: true,
+  }]);
   assert.deepEqual(plan.skipped, [
     { id: 'skipped:ext-1:1:active_authority_owned', externalPersonId: 'ext-1', individualId: 1,
       reason: 'active_authority_owned', activeAuthority: 'planning_center' },
-    { id: 'skipped:ext-2:create_regular_non_authoritative', externalPersonId: 'ext-2',
-      reason: 'create_regular_non_authoritative', activeAuthority: 'planning_center' },
   ]);
 });
 
-test('manual re-import with no active authority proposes reviewed linked updates', () => {
+test('manual trigger cannot opt a non-authoritative sync plan into managed updates', () => {
   const plan = computePeopleSyncPlan(input({
     authoritative: false, activeAuthority: 'none', trigger: 'manual',
     externalPeople: [person({ firstName: 'Augusta', child: true })],
     localPeople: [local({ firstName: 'Ada', isChild: false })],
   }));
 
-  assert.deepEqual(plan.updateManagedFields, [{
-    id: 'updateManagedFields:ext-1:1', externalPersonId: 'ext-1', individualId: 1,
-    changes: [
-      { field: 'firstName', localValue: 'Ada', externalValue: 'Augusta' },
-      { field: 'isChild', localValue: false, externalValue: true },
-    ],
-    reason: 'reviewed_reimport', reviewRequired: true,
-  }]);
+  assert.deepEqual(plan.updateManagedFields, []);
+  assert.deepEqual(plan.promoteToRegular, []);
+  assert.deepEqual(plan.demoteToLocalVisitor, []);
 });
 
-test('authority-none reviewed updates remain limited to already-linked people', () => {
+test('non-authoritative identity matching never grants managed-update permission', () => {
   const plan = computePeopleSyncPlan(input({
     authoritative: false, activeAuthority: 'none', trigger: 'manual',
     externalPeople: [person({ firstName: 'Augusta' })],
