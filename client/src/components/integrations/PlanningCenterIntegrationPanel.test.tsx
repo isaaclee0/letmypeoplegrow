@@ -261,6 +261,13 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByRole('button', { name: 'Reconnect Planning Center' })).not.toBeInTheDocument();
   });
 
+  it('does not offer Planning Center as a people source before it is connected', () => {
+    // Catches the authority control leaking into the pre-connection setup view.
+    renderPanel({ status: { connected: false } });
+
+    expect(screen.queryByText('People source control')).not.toBeInTheDocument();
+  });
+
   it("shows What you'll get before connection and hides it after connection", async () => {
     // Catches introductory benefits continuing to occupy the connected management view.
     const disconnected = renderPanel({ status: { connected: false } });

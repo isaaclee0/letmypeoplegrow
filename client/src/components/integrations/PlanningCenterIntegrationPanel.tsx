@@ -433,8 +433,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             </div>
           )}
 
-          {!status.connected && <div className="mt-4">{peopleSourceControl}</div>}
-
           {status.connected && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
               {/* Sync batches */}
