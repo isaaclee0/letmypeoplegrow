@@ -148,6 +148,17 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByRole('button', { name: 'Review & sync Members' })).not.toBeInTheDocument();
   });
 
+  it('keeps a disabled batch draft actionable without presenting it as a source review', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, enabled: false, operationalState: 'disabled', reviewable: false, runnable: false }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Disabled')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard source draft' })).toBeInTheDocument();
+    expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument();
+  });
+
   it('opens review immediately after creating a batch', async () => {
     renderPanel();
     await screen.findByText('Members');
