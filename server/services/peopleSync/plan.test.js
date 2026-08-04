@@ -123,6 +123,128 @@ test('maps new Active people to regulars and included Contacts to local visitors
   ]);
 });
 
+for (const provider of ['planning_center', 'elvanto']) {
+  test(`${provider} creates one family action for an entirely new household`, () => {
+    const ada = person({ id: 'ext-1', familyId: 'house-1' });
+    const charles = person({
+      id: 'ext-2', firstName: 'Charles', lastName: 'Lovelace', familyId: 'house-1',
+    });
+    const plan = computePeopleSyncPlan(input({
+      provider,
+      externalPeople: [ada, charles], householdPeople: [ada, charles], localPeople: [],
+      externalFamilies: [{
+        id: 'house-1', name: 'Provider Household', memberExternalIds: ['ext-2', 'ext-1'],
+      }],
+      localFamilies: [], familyLinks: [], personLinks: [],
+      batches: [batch({ eligibleExternalPersonIds: ['ext-1', 'ext-2'] })],
+      matcher: matcher({ unmatchedExternalIds: ['ext-1', 'ext-2'] }),
+    }));
+
+    assert.deepEqual(plan.addFamilies, [{
+      id: 'addFamilies:house-1', externalFamilyId: 'house-1',
+      familyName: 'Lovelace, Ada and Charles', memberExternalIds: ['ext-1', 'ext-2'],
+      reason: 'all_household_members_new',
+    }]);
+    assert.equal(plan.addPeople.every((action) => action.familyId === 'house-1'), true);
+    assert.deepEqual(plan.linkFamilies, []);
+    assert.deepEqual(plan.familyConflicts, []);
+  });
+}
+
+test('names a newly created one-person household after the individual', () => {
+  const ada = person({ familyId: 'house-1' });
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [ada], householdPeople: [ada], localPeople: [],
+    externalFamilies: [{ id: 'house-1', name: 'Provider Household', memberExternalIds: ['ext-1'] }],
+    localFamilies: [], familyLinks: [], personLinks: [],
+    matcher: matcher({ unmatchedExternalIds: ['ext-1'] }),
+  }));
+
+  assert.equal(plan.addFamilies[0].familyName, 'Lovelace, Ada');
+});
+
+test('reuses an existing external family link without planning a duplicate family mutation', () => {
+  const ada = person({ familyId: 'house-1' });
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [ada], householdPeople: [ada], localPeople: [],
+    externalFamilies: [{ id: 'house-1', memberExternalIds: ['ext-1'] }],
+    localFamilies: [{ id: 9, familyName: 'Existing' }],
+    familyLinks: [{ externalFamilyId: 'house-1', familyId: 9 }], personLinks: [],
+    matcher: matcher({ unmatchedExternalIds: ['ext-1'] }),
+  }));
+
+  assert.deepEqual(plan.linkFamilies, []);
+  assert.deepEqual(plan.addFamilies, []);
+  assert.deepEqual(plan.familyConflicts, []);
+});
+
+test('links a new external household to the one local family established by a matched member', () => {
+  const existing = person({ id: 'ext-existing', firstName: 'Ada', familyId: 'house-1' });
+  const newcomer = person({ id: 'ext-new', firstName: 'Charles', familyId: 'house-1' });
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [existing, newcomer], householdPeople: [existing, newcomer],
+    localPeople: [local({ id: 1, familyId: 9 })],
+    externalFamilies: [{ id: 'house-1', memberExternalIds: ['ext-existing', 'ext-new'] }],
+    localFamilies: [{ id: 9, familyName: 'Lovelace, Ada' }], familyLinks: [], personLinks: [],
+    batches: [batch({ eligibleExternalPersonIds: ['ext-existing', 'ext-new'] })],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'ext-existing', individualId: 1, reason: 'existing_link' }],
+      unmatchedExternalIds: ['ext-new'],
+    }),
+  }));
+
+  assert.deepEqual(plan.linkFamilies, [{
+    id: 'linkFamilies:house-1:9', externalFamilyId: 'house-1', familyId: 9,
+    memberExternalIds: ['ext-existing', 'ext-new'], reason: 'household_member_family',
+  }]);
+  assert.deepEqual(plan.addFamilies, []);
+  assert.deepEqual(plan.familyConflicts, []);
+});
+
+test('does not reconcile a household whose matched members belong to multiple local families', () => {
+  const first = person({ id: 'ext-1', familyId: 'house-1' });
+  const second = person({ id: 'ext-2', firstName: 'Grace', familyId: 'house-1' });
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [first, second], householdPeople: [first, second],
+    localPeople: [local({ id: 1, familyId: 9 }), local({ id: 2, firstName: 'Grace', familyId: 10 })],
+    externalFamilies: [{ id: 'house-1', memberExternalIds: ['ext-1', 'ext-2'] }],
+    localFamilies: [{ id: 9, familyName: 'One' }, { id: 10, familyName: 'Two' }],
+    familyLinks: [], personLinks: [],
+    batches: [batch({ eligibleExternalPersonIds: ['ext-1', 'ext-2'] })],
+    matcher: matcher({ linked: [
+      { externalPersonId: 'ext-1', individualId: 1, reason: 'existing_link' },
+      { externalPersonId: 'ext-2', individualId: 2, reason: 'existing_link' },
+    ] }),
+  }));
+
+  assert.deepEqual(plan.linkFamilies, []);
+  assert.deepEqual(plan.addFamilies, []);
+  assert.deepEqual(plan.familyConflicts, [{
+    id: 'familyConflicts:house-1:multiple_local_families', externalFamilyId: 'house-1',
+    memberExternalIds: ['ext-1', 'ext-2'], candidateFamilyIds: [9, 10],
+    unresolvedExternalPersonIds: [], reason: 'multiple_local_families',
+  }]);
+});
+
+test('does not create a family when household-only context is unresolved', () => {
+  const member = person({ id: 'member', familyId: 'house-1' });
+  const contextPerson = person({ id: 'context', firstName: 'Context', familyId: 'house-1' });
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [member], householdPeople: [member, contextPerson], localPeople: [],
+    externalFamilies: [{ id: 'house-1', memberExternalIds: ['member', 'context'] }],
+    localFamilies: [], familyLinks: [], personLinks: [],
+    batches: [batch({ eligibleExternalPersonIds: ['member'] })],
+    matcher: matcher({ unmatchedExternalIds: ['member'] }),
+  }));
+
+  assert.deepEqual(plan.addFamilies, []);
+  assert.deepEqual(plan.familyConflicts, [{
+    id: 'familyConflicts:house-1:unresolved_household_members', externalFamilyId: 'house-1',
+    memberExternalIds: ['context', 'member'], candidateFamilyIds: [],
+    unresolvedExternalPersonIds: ['context'], reason: 'unresolved_household_members',
+  }]);
+});
+
 test('source-rule exclusions never archive linked non-terminal people', () => {
   const active = computePeopleSyncPlan(input({
     externalPeople: [person({ state: 'active' })],

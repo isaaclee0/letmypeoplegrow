@@ -1,3 +1,5 @@
+const { buildFamilyName } = require('./familyName');
+
 const BUCKETS = [
   'linkPeople', 'linkFamilies', 'addPeople', 'addFamilies', 'updateManagedFields',
   'promoteToRegular', 'demoteToLocalVisitor', 'archive', 'reactivate', 'moveFamily',
@@ -67,6 +69,22 @@ function normalizedLocalPeople(people) {
   return uniqueBy(validated, (item) => item.id)
     .map((item) => clone(item))
     .sort((a, b) => a.id - b.id);
+}
+
+function normalizedExternalFamilies(families) {
+  const validated = (families || []).map((family) => ({
+    ...clone(family),
+    id: externalId(family?.id, 'External family ID'),
+    memberExternalIds: [...new Set((family?.memberExternalIds || [])
+      .map((id) => externalId(id, 'External family member ID')))]
+      .sort((left, right) => left.localeCompare(right, 'en')),
+  }));
+  return uniqueBy(validated, (family) => family.id)
+    .sort((left, right) => left.id.localeCompare(right.id, 'en'));
+}
+
+function normalizedLocalFamilyIds(families) {
+  return new Set((families || []).map((family) => positiveInteger(family?.id, 'Local family ID')));
 }
 
 function idsFrom(value) {
@@ -315,6 +333,129 @@ function addUnmatchedActions(context) {
   }
 }
 
+function familyConflict(externalFamilyId, memberExternalIds, candidateFamilyIds,
+  unresolvedExternalPersonIds, reason) {
+  return {
+    id: actionId('familyConflicts', externalFamilyId, reason),
+    externalFamilyId,
+    memberExternalIds,
+    candidateFamilyIds,
+    unresolvedExternalPersonIds,
+    reason,
+  };
+}
+
+function addFamilyActions(context) {
+  const { plan, input, localById, identities, conflictIds, populationIds } = context;
+  const externalFamilies = normalizedExternalFamilies(input.externalFamilies || []);
+  if (!externalFamilies.length) return;
+
+  const householdPeople = normalizedExternalPeople(input.householdPeople || input.externalPeople || []);
+  const householdPersonById = new Map(householdPeople.map((person) => [person.id, person]));
+  const localFamilyIds = normalizedLocalFamilyIds(input.localFamilies || []);
+  const localIndividualIdByExternal = new Map();
+  for (const link of input.personLinks || []) {
+    const externalPersonId = externalId(link?.externalPersonId);
+    const individualId = positiveInteger(link?.individualId, 'Linked individual ID');
+    localIndividualIdByExternal.set(externalPersonId, individualId);
+  }
+  for (const identity of identities) {
+    localIndividualIdByExternal.set(identity.externalPersonId, identity.individualId);
+  }
+
+  const linkedFamilyIdsByExternal = new Map();
+  for (const link of input.familyLinks || []) {
+    const externalFamilyId = externalId(link?.externalFamilyId, 'Linked external family ID');
+    const familyId = positiveInteger(link?.familyId, 'Linked local family ID');
+    if (!linkedFamilyIdsByExternal.has(externalFamilyId)) linkedFamilyIdsByExternal.set(externalFamilyId, new Set());
+    linkedFamilyIdsByExternal.get(externalFamilyId).add(familyId);
+  }
+  const addPeopleByExternal = new Map(plan.addPeople.map((action) => [action.externalPersonId, action]));
+
+  for (const family of externalFamilies) {
+    const memberExternalIds = family.memberExternalIds;
+    if (!memberExternalIds.some((id) => populationIds.has(id))) continue;
+
+    const linkedFamilyIds = [...(linkedFamilyIdsByExternal.get(family.id) || [])].sort((a, b) => a - b);
+    if (linkedFamilyIds.length === 1 && localFamilyIds.has(linkedFamilyIds[0])) continue;
+    if (linkedFamilyIds.length > 0) {
+      plan.familyConflicts.push(familyConflict(
+        family.id, memberExternalIds, linkedFamilyIds, [], 'invalid_existing_family_link'
+      ));
+      continue;
+    }
+
+    const candidateFamilyIds = new Set();
+    const unresolvedExternalPersonIds = [];
+    for (const externalPersonId of memberExternalIds) {
+      if (addPeopleByExternal.has(externalPersonId)) continue;
+      if (conflictIds.has(externalPersonId)) {
+        unresolvedExternalPersonIds.push(externalPersonId);
+        continue;
+      }
+      const individualId = localIndividualIdByExternal.get(externalPersonId);
+      const localPerson = individualId === undefined ? null : localById.get(individualId);
+      if (!localPerson || localPerson.familyId === null || localPerson.familyId === undefined ||
+          !localFamilyIds.has(Number(localPerson.familyId))) {
+        unresolvedExternalPersonIds.push(externalPersonId);
+        continue;
+      }
+      candidateFamilyIds.add(Number(localPerson.familyId));
+    }
+
+    const sortedCandidateFamilyIds = [...candidateFamilyIds].sort((a, b) => a - b);
+    const sortedUnresolvedIds = [...new Set(unresolvedExternalPersonIds)]
+      .sort((left, right) => left.localeCompare(right, 'en'));
+    if (sortedCandidateFamilyIds.length > 1) {
+      plan.familyConflicts.push(familyConflict(
+        family.id, memberExternalIds, sortedCandidateFamilyIds, sortedUnresolvedIds,
+        'multiple_local_families'
+      ));
+      continue;
+    }
+    if (sortedUnresolvedIds.length > 0) {
+      plan.familyConflicts.push(familyConflict(
+        family.id, memberExternalIds, sortedCandidateFamilyIds, sortedUnresolvedIds,
+        'unresolved_household_members'
+      ));
+      continue;
+    }
+    if (sortedCandidateFamilyIds.length === 1) {
+      const familyId = sortedCandidateFamilyIds[0];
+      plan.linkFamilies.push({
+        id: actionId('linkFamilies', family.id, familyId),
+        externalFamilyId: family.id,
+        familyId,
+        memberExternalIds,
+        reason: 'household_member_family',
+      });
+      continue;
+    }
+
+    if (!memberExternalIds.length || !memberExternalIds.every((id) => addPeopleByExternal.has(id))) continue;
+    const primaryContactId = family.primaryContactExternalId === null ||
+      family.primaryContactExternalId === undefined
+      ? null : stableString(family.primaryContactExternalId);
+    const orderedMemberIds = primaryContactId && memberExternalIds.includes(primaryContactId)
+      ? [primaryContactId, ...memberExternalIds.filter((id) => id !== primaryContactId)]
+      : memberExternalIds;
+    const familyName = buildFamilyName(orderedMemberIds.map((id) => householdPersonById.get(id)).filter(Boolean));
+    if (!familyName) {
+      plan.familyConflicts.push(familyConflict(
+        family.id, memberExternalIds, [], memberExternalIds, 'missing_family_name'
+      ));
+      continue;
+    }
+    plan.addFamilies.push({
+      id: actionId('addFamilies', family.id),
+      externalFamilyId: family.id,
+      familyName,
+      memberExternalIds,
+      reason: 'all_household_members_new',
+    });
+  }
+}
+
 function membershipBatchId(row) {
   const value = row?.addedBySyncBatchId ?? row?.added_by_sync_batch_id;
   return value === null || value === undefined ? null : positiveInteger(value, 'Roster provenance batch ID');
@@ -424,6 +565,7 @@ function computePeopleSyncPlan(input = {}) {
   };
   addLifecycleAndManagedActions(context);
   addUnmatchedActions(context);
+  addFamilyActions(context);
   addGatheringActions(context);
 
   for (const bucket of BUCKETS) {
