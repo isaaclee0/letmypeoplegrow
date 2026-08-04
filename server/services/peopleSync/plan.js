@@ -360,6 +360,7 @@ function addFamilyActions(context) {
     localIndividualIdByExternal.set(externalPersonId, individualId);
   }
   for (const identity of identities) {
+    if (identity.reviewRequired) continue;
     localIndividualIdByExternal.set(identity.externalPersonId, identity.individualId);
   }
 

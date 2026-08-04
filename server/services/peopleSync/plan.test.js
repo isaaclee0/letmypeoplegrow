@@ -245,6 +245,32 @@ test('does not create a family when household-only context is unresolved', () =>
   }]);
 });
 
+test('does not use a review-required person suggestion to establish a household family link', () => {
+  const suggested = person({ id: 'ext-suggested', familyId: 'house-1' });
+  const newcomer = person({ id: 'ext-new', firstName: 'Charles', familyId: 'house-1' });
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [suggested, newcomer], householdPeople: [suggested, newcomer],
+    localPeople: [local({ id: 1, familyId: 9, peopleType: 'local_visitor' })],
+    externalFamilies: [{ id: 'house-1', memberExternalIds: ['ext-suggested', 'ext-new'] }],
+    localFamilies: [{ id: 9, familyName: 'Lovelace, Ada' }], familyLinks: [], personLinks: [],
+    batches: [batch({ eligibleExternalPersonIds: ['ext-suggested', 'ext-new'] })],
+    matcher: matcher({
+      visitorMatches: [{
+        externalPersonId: 'ext-suggested', individualId: 1, peopleType: 'local_visitor',
+      }],
+      unmatchedExternalIds: ['ext-new'],
+    }),
+  }));
+
+  assert.deepEqual(plan.linkFamilies, []);
+  assert.deepEqual(plan.addFamilies, []);
+  assert.deepEqual(plan.familyConflicts, [{
+    id: 'familyConflicts:house-1:unresolved_household_members', externalFamilyId: 'house-1',
+    memberExternalIds: ['ext-new', 'ext-suggested'], candidateFamilyIds: [],
+    unresolvedExternalPersonIds: ['ext-suggested'], reason: 'unresolved_household_members',
+  }]);
+});
+
 test('source-rule exclusions never archive linked non-terminal people', () => {
   const active = computePeopleSyncPlan(input({
     externalPeople: [person({ state: 'active' })],
