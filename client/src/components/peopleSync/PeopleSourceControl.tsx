@@ -1,31 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { peopleSyncAPI } from '../../services/api';
 import Modal from '../Modal';
-import SyncReview from './SyncReview';
-import { peopleSyncErrorMessage, toPeopleSyncDisplayError } from './apiError';
-import {
-  cancelAuthorityPreviewWithRetry,
-  type AuthorityPreviewCancellation,
-} from './authorityPreviewCancellation';
-import type {
-  AuthoritySwitchReview,
-  PeopleReviewToken,
-  PeopleSyncSelections,
-  PeopleSyncSettings,
-  SyncProvider,
-} from './types';
-import { tagLegacyPeopleReview } from './types';
+import AuthorityReviewWorkspace from './AuthorityReviewWorkspace';
+import { peopleSyncErrorMessage } from './apiError';
+import type { PeopleSyncSettings, SyncProvider } from './types';
 
-type SourceControlState =
-  | 'idle'
-  | 'previewing'
-  | 'reviewing'
-  | 'applying'
-  | 'cancelling'
-  | 'apply_refresh_pending'
-  | 'refreshing_after_apply'
-  | 'disabling'
-  | 'error';
+type DisableState = 'idle' | 'disabling' | 'error';
 
 export interface PeopleSourceControlProps {
   provider: SyncProvider;
@@ -45,48 +25,17 @@ export default function PeopleSourceControl({
   connections,
   onRefresh,
 }: PeopleSourceControlProps) {
-  const [state, setState] = useState<SourceControlState>('idle');
-  const [pendingProvider, setPendingProvider] = useState<SyncProvider | null>(null);
-  const [pendingReview, setPendingReview] = useState<AuthoritySwitchReview | null>(null);
+  const [disableState, setDisableState] = useState<DisableState>('idle');
+  const [reviewActive, setReviewActive] = useState(false);
   const [confirmSwitch, setConfirmSwitch] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [disableError, setDisableError] = useState<string | null>(null);
   const [disableMutationSucceeded, setDisableMutationSucceeded] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const switchDialogRef = useRef<HTMLDivElement>(null);
   const disableDialogRef = useRef<HTMLDivElement>(null);
-  const progressRef = useRef<HTMLParagraphElement>(null);
-  const reviewRegionRef = useRef<HTMLDivElement>(null);
-  const errorRef = useRef<HTMLParagraphElement>(null);
-  const previewGenerationRef = useRef(0);
-  const activeReviewTokenRef = useRef<PeopleReviewToken<'authority_switch'> | null>(null);
-  const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
   const dialogWasOpen = useRef(false);
   const restoreSwitchOnDialogClose = useRef(true);
-  const continueFocusPending = useRef(false);
-
-  const retireAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
-    const cancellation = cancelAuthorityPreviewWithRetry(preview);
-    void cancellation.then(
-      () => {
-        if (ownedAuthorityPreviewRef.current?.provider === preview.provider
-          && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
-          ownedAuthorityPreviewRef.current = null;
-        }
-      },
-      () => undefined,
-    );
-    return cancellation;
-  };
-
-  useEffect(() => () => {
-    previewGenerationRef.current += 1;
-    activeReviewTokenRef.current = null;
-    const ownedPreview = ownedAuthorityPreviewRef.current;
-    if (ownedPreview) {
-      void retireAuthorityPreview(ownedPreview);
-    }
-  }, []);
 
   useEffect(() => {
     const dialogOpen = confirmSwitch || confirmDisable;
@@ -96,225 +45,53 @@ export default function PeopleSourceControl({
         'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       )?.focus();
     } else if (dialogWasOpen.current) {
-      if (restoreSwitchOnDialogClose.current) {
-        toggleRef.current?.focus();
-      }
+      if (restoreSwitchOnDialogClose.current) toggleRef.current?.focus();
       restoreSwitchOnDialogClose.current = true;
     }
     dialogWasOpen.current = dialogOpen;
   }, [confirmSwitch, confirmDisable]);
 
   useEffect(() => {
-    if (!continueFocusPending.current || confirmSwitch) return;
-    const target = state === 'previewing'
-      ? progressRef.current
-      : pendingReview
-        ? reviewRegionRef.current
-        : state === 'error'
-          ? errorRef.current
-          : null;
-    target?.focus();
-    if (state !== 'previewing') {
-      continueFocusPending.current = false;
-    }
-  }, [confirmSwitch, pendingReview, state]);
-
-  useEffect(() => {
     if (settings.authorityProvider !== provider && disableMutationSucceeded) {
       setDisableMutationSucceeded(false);
-      setError(null);
+      setDisableError(null);
     }
   }, [disableMutationSucceeded, provider, settings.authorityProvider]);
 
   useEffect(() => {
-    const awaitingApplyRefresh = state === 'apply_refresh_pending' || state === 'refreshing_after_apply';
-    if (awaitingApplyRefresh && pendingProvider && settings.authorityProvider === pendingProvider) {
-      previewGenerationRef.current += 1;
-      activeReviewTokenRef.current = null;
-      ownedAuthorityPreviewRef.current = null;
-      setPendingReview(null);
-      setPendingProvider(null);
-      setError(null);
-      setState('idle');
-    }
-  }, [pendingProvider, settings.authorityProvider, state]);
-
-  const discardSupersededPreview = (discardedProvider: SyncProvider, discardedReview: AuthoritySwitchReview) => {
-    if (!discardedReview.authorityPreviewId) return;
-    void retireAuthorityPreview({
-      provider: discardedProvider,
-      authorityPreviewId: discardedReview.authorityPreviewId,
-    });
-  };
-
-  const preview = async (nextProvider: SyncProvider) => {
-    if (!connections[nextProvider] || !hasEnabledBatch || nextProvider === settings.authorityProvider) return;
-    const generation = ++previewGenerationRef.current;
-    const previousReview = pendingReview;
-    activeReviewTokenRef.current = null;
-    setState('previewing');
-    setError(null);
-    setPendingProvider(nextProvider);
-    try {
-      const response = await peopleSyncAPI.previewAuthority(nextProvider);
-      const nextReview = tagLegacyPeopleReview(response.data, 'authority_switch');
-      if (generation !== previewGenerationRef.current) {
-        discardSupersededPreview(nextProvider, nextReview);
-        return;
-      }
-      activeReviewTokenRef.current = nextReview.reviewToken;
-      const nextOwnedPreview = nextReview.authorityPreviewId
-        ? { provider: nextProvider, authorityPreviewId: nextReview.authorityPreviewId }
-        : null;
-      const previousOwnedPreview = ownedAuthorityPreviewRef.current;
-      if (previousOwnedPreview && (!nextOwnedPreview
-        || previousOwnedPreview.provider !== nextOwnedPreview.provider
-        || previousOwnedPreview.authorityPreviewId !== nextOwnedPreview.authorityPreviewId)) {
-        void retireAuthorityPreview(previousOwnedPreview);
-      }
-      ownedAuthorityPreviewRef.current = nextOwnedPreview;
-      setPendingReview(nextReview);
-      setState('reviewing');
-    } catch (cause) {
-      if (generation !== previewGenerationRef.current) return;
-      setError(peopleSyncErrorMessage(cause, 'Failed to preview the authority change.'));
-      if (previousReview) {
-        // A refresh may already have replaced the previous server-side
-        // intent before failing. Fail closed: retire that old exact intent
-        // if it still exists, and never re-enable its now-uncertain token.
-        discardSupersededPreview(nextProvider, previousReview);
-        setPendingReview(null);
-        setPendingProvider(null);
-        setState('error');
-      } else {
-        setState('error');
-      }
-    }
-  };
-
-  const refreshAfterApply = async () => {
-    setState('refreshing_after_apply');
-    setError(null);
-    try {
-      await onRefresh();
-    } catch (refreshCause) {
-      const detail = peopleSyncErrorMessage(refreshCause, 'Refresh failed.');
-      setError(`The authority change was applied, but its status could not be refreshed: ${detail}`);
-      setState('apply_refresh_pending');
-      return;
-    }
-    activeReviewTokenRef.current = null;
-    setPendingReview(null);
-    setPendingProvider(null);
-    setState('idle');
-  };
-
-  const apply = async (reviewToken: PeopleReviewToken<'authority_switch'>, selections: PeopleSyncSelections) => {
-    if (!pendingProvider || activeReviewTokenRef.current !== reviewToken) return;
-    const generation = ++previewGenerationRef.current;
-    activeReviewTokenRef.current = null;
-    setState('applying');
-    setError(null);
-    try {
-      await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
-    } catch (cause) {
-      if (generation === previewGenerationRef.current) {
-        activeReviewTokenRef.current = reviewToken;
-        setState('reviewing');
-      }
-      throw toPeopleSyncDisplayError(cause, 'Failed to apply the authority change.');
-    }
-    if (generation !== previewGenerationRef.current) return;
-    ownedAuthorityPreviewRef.current = null;
-    await refreshAfterApply();
-  };
-
-  const refreshPreview = async () => {
-    if (pendingProvider) await preview(pendingProvider);
-  };
+    if (reviewActive && settings.authorityProvider === provider) setReviewActive(false);
+  }, [provider, reviewActive, settings.authorityProvider]);
 
   const refreshAfterDisable = async () => {
-    setState('disabling');
-    setError(null);
+    setDisableState('disabling');
+    setDisableError(null);
     try {
       await onRefresh();
       setConfirmDisable(false);
       setDisableMutationSucceeded(false);
-      setState('idle');
+      setDisableState('idle');
     } catch (cause) {
       const detail = peopleSyncErrorMessage(cause, 'Refresh failed.');
-      setError(`The people source was disabled, but its status could not be refreshed: ${detail}`);
-      setState('error');
+      setDisableError(`The people source was disabled, but its status could not be refreshed: ${detail}`);
+      setDisableState('error');
     }
   };
 
   const disable = async () => {
-    setState('disabling');
-    setError(null);
+    setDisableState('disabling');
+    setDisableError(null);
     try {
       await peopleSyncAPI.disableAuthority();
     } catch (cause) {
-      setError(peopleSyncErrorMessage(cause, 'Failed to disable the people source.'));
-      setState('error');
+      setDisableError(peopleSyncErrorMessage(cause, 'Failed to disable the people source.'));
+      setDisableState('error');
       return;
     }
     setDisableMutationSucceeded(true);
     await refreshAfterDisable();
   };
 
-  const clearReview = () => {
-    activeReviewTokenRef.current = null;
-    ownedAuthorityPreviewRef.current = null;
-    setPendingProvider(null);
-    setPendingReview(null);
-    setError(null);
-    setState('idle');
-  };
-
-  const cancelReview = async () => {
-    if (!pendingProvider || !pendingReview || state === 'previewing' || state === 'applying' || state === 'cancelling') return;
-    const providerToCancel = pendingProvider;
-    const reviewToCancel = pendingReview;
-    const generation = ++previewGenerationRef.current;
-    activeReviewTokenRef.current = null;
-    setError(null);
-
-    if (!reviewToCancel.authorityPreviewId) {
-      clearReview();
-      return;
-    }
-
-    const previewToCancel = {
-      provider: providerToCancel,
-      authorityPreviewId: reviewToCancel.authorityPreviewId,
-    };
-    setState('cancelling');
-    try {
-      await retireAuthorityPreview(previewToCancel);
-    } catch (cause) {
-      if (generation !== previewGenerationRef.current) return;
-      activeReviewTokenRef.current = reviewToCancel.reviewToken;
-      setError(peopleSyncErrorMessage(cause, 'Failed to cancel the authority change.'));
-      setState('reviewing');
-      return;
-    }
-    if (generation === previewGenerationRef.current) clearReview();
-  };
-
-  const summary = pendingReview?.summary;
-  const linked = summary?.linkPeople || 0;
-  const locked = linked
-    + (summary?.updateManagedFields || 0)
-    + (summary?.reactivate || 0)
-    + (summary?.archive || 0);
   const checked = settings.authorityProvider === provider;
-  const applyRefreshPending = state === 'apply_refresh_pending' || state === 'refreshing_after_apply';
-  const busy = state === 'previewing'
-    || state === 'reviewing'
-    || state === 'applying'
-    || state === 'cancelling'
-    || state === 'disabling'
-    || pendingReview !== null;
   const prerequisite = checked
     ? null
     : !connections[provider]
@@ -324,7 +101,7 @@ export default function PeopleSourceControl({
           ? 'Create a Planning Center sync batch first.'
           : 'Create and enable an Elvanto sync batch first.'
         : null;
-  const toggleDisabled = busy || prerequisite !== null;
+  const toggleDisabled = reviewActive || disableState === 'disabling' || prerequisite !== null;
   const otherProvider = settings.authorityProvider !== 'none' && settings.authorityProvider !== provider
     ? settings.authorityProvider
     : null;
@@ -335,20 +112,14 @@ export default function PeopleSourceControl({
     } else if (otherProvider) {
       setConfirmSwitch(true);
     } else {
-      void preview(provider);
+      setReviewActive(true);
     }
   };
 
-  const closeSwitchDialog = () => {
-    if (state !== 'previewing' && state !== 'applying' && state !== 'disabling') {
-      setConfirmSwitch(false);
-    }
-  };
+  const closeSwitchDialog = () => setConfirmSwitch(false);
 
   const closeDisableDialog = () => {
-    if (state !== 'previewing' && state !== 'applying' && state !== 'disabling') {
-      setConfirmDisable(false);
-    }
+    if (disableState !== 'disabling') setConfirmDisable(false);
   };
 
   const handleDialogKeyDown = (
@@ -406,64 +177,16 @@ export default function PeopleSourceControl({
       </div>
       {prerequisite && <p className="text-xs text-gray-500">{prerequisite}</p>}
 
-      {state === 'previewing' && (
-        <p ref={progressRef} role="status" tabIndex={-1} className="text-sm text-gray-600">
-          Preparing authority review…
-        </p>
-      )}
-      {error && !confirmDisable && !applyRefreshPending && <p ref={errorRef} role="alert" tabIndex={-1} className="text-sm text-red-600">{error}</p>}
-      {pendingReview && pendingProvider && (
-        <div
-          ref={reviewRegionRef}
-          role="region"
-          aria-label={`${providerName(pendingProvider)} authority review`}
-          tabIndex={-1}
-          className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20"
-        >
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded bg-blue-50 px-2 py-1 text-blue-800">Coverage: {linked} linked</span>
-            <span className="rounded bg-blue-50 px-2 py-1 text-blue-800">{locked} locked after apply</span>
-            <span className="rounded bg-gray-100 px-2 py-1">{summary?.addPeople || 0} adds</span>
-            <span className="rounded bg-gray-100 px-2 py-1">{summary?.updateManagedFields || 0} updates</span>
-            <span className="rounded bg-gray-100 px-2 py-1">{summary?.reactivate || 0} restore{summary?.reactivate === 1 ? '' : 's'}</span>
-            <span className="rounded bg-gray-100 px-2 py-1">{summary?.archive || 0} archives</span>
-          </div>
-          {applyRefreshPending ? (
-            <div className="space-y-3">
-              {error ? (
-                <p role="alert" className="text-sm text-red-600">{error}</p>
-              ) : (
-                <p role="status" className="text-sm text-gray-600">
-                  Authority change applied. Refreshing authoritative source status…
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={() => void refreshAfterApply()}
-                disabled={state === 'refreshing_after_apply'}
-                className="rounded bg-green-600 px-3 py-2 text-sm text-white disabled:opacity-50"
-              >
-                {state === 'refreshing_after_apply' ? 'Refreshing…' : 'Retry status refresh'}
-              </button>
-            </div>
-          ) : (
-            <>
-              <SyncReview
-                operationKind="authority_switch"
-                provider={pendingProvider}
-                review={pendingReview}
-                onRefresh={refreshPreview}
-                onApply={apply}
-                applying={state === 'applying'}
-                interactionDisabled={state === 'previewing' || state === 'cancelling'}
-                requireAllPlannedArchivesAccepted={pendingProvider === 'planning_center'}
-              />
-              <button type="button" onClick={() => void cancelReview()} disabled={state === 'previewing' || state === 'applying' || state === 'cancelling'} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
-                Cancel authority change
-              </button>
-            </>
-          )}
-        </div>
+      {reviewActive && (
+        <AuthorityReviewWorkspace
+          provider={provider}
+          autoStart
+          onApplied={async () => {
+            await onRefresh();
+            setReviewActive(false);
+          }}
+          onCancel={() => setReviewActive(false)}
+        />
       )}
 
       <Modal isOpen={confirmSwitch} onClose={closeSwitchDialog}>
@@ -479,16 +202,15 @@ export default function PeopleSourceControl({
             Switch source of truth from {otherProvider ? providerName(otherProvider) : ''} to {providerName(provider)}?
           </h6>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-            The new provider controls linked names, child status, family membership, people type, archive/reactivation, and scheduled people reconciliation. {otherProvider ? providerName(otherProvider) : 'The old provider'} stays connected.
+            Linked people and families become managed by {providerName(provider)}. Local edits and lifecycle actions are restricted, and {providerName(provider)} schedules may run. {otherProvider ? providerName(otherProvider) : 'The other provider'} remains connected, but its batches become inactive.
           </p>
           <div className="mt-5 flex gap-3">
             <button
               type="button"
               onClick={() => {
                 restoreSwitchOnDialogClose.current = false;
-                continueFocusPending.current = true;
                 setConfirmSwitch(false);
-                void preview(provider);
+                setReviewActive(true);
               }}
               className="rounded bg-green-600 px-3 py-2 text-sm text-white"
             >
@@ -501,10 +223,7 @@ export default function PeopleSourceControl({
         </div>
       </Modal>
 
-      <Modal
-        isOpen={confirmDisable}
-        onClose={closeDisableDialog}
-      >
+      <Modal isOpen={confirmDisable} onClose={closeDisableDialog}>
         <div
           ref={disableDialogRef}
           role="dialog"
@@ -516,20 +235,20 @@ export default function PeopleSourceControl({
           <h6 id="people-source-disable-title" className="font-medium text-gray-900 dark:text-gray-100">
             Stop using a people source of truth?
           </h6>
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Linked people will become editable in LMPG. Existing links are retained.</p>
-          {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Linked people will become editable in LMPG. Existing links and provider connections are retained.</p>
+          {disableError && <p role="alert" className="mt-3 text-sm text-red-600">{disableError}</p>}
           <div className="mt-5 flex gap-3">
             <button
               type="button"
               onClick={() => void (disableMutationSucceeded ? refreshAfterDisable() : disable())}
-              disabled={state === 'disabling'}
+              disabled={disableState === 'disabling'}
               className="rounded bg-red-600 px-3 py-2 text-sm text-white disabled:opacity-50"
             >
-              {state === 'disabling'
+              {disableState === 'disabling'
                 ? disableMutationSucceeded ? 'Refreshing…' : 'Disabling…'
                 : disableMutationSucceeded ? 'Retry status refresh' : 'Use no people source'}
             </button>
-            <button type="button" onClick={closeDisableDialog} disabled={state === 'disabling'} className="text-sm underline disabled:opacity-50">Cancel</button>
+            <button type="button" onClick={closeDisableDialog} disabled={disableState === 'disabling'} className="text-sm underline disabled:opacity-50">Cancel</button>
           </div>
         </div>
       </Modal>

@@ -151,8 +151,11 @@ describe('PeopleSourceControl', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
 
     expect(screen.getByText('Switch source of truth from Planning Center to Elvanto?')).toBeInTheDocument();
-    expect(screen.getByText(/new provider controls linked names, child status, family membership, people type, archive\/reactivation, and scheduled people reconciliation/i)).toBeInTheDocument();
-    expect(screen.getByText(/Planning Center stays connected/i)).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Switch source of truth from Planning Center to Elvanto?' });
+    expect(dialog).toHaveTextContent('Linked people and families become managed by Elvanto.');
+    expect(dialog).toHaveTextContent('Local edits and lifecycle actions are restricted');
+    expect(dialog).toHaveTextContent('Elvanto schedules may run');
+    expect(dialog).toHaveTextContent('Planning Center remains connected, but its batches become inactive.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
@@ -387,7 +390,9 @@ describe('PeopleSourceControl', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
 
     expect(screen.getByText('Switch source of truth from Elvanto to Planning Center?')).toBeInTheDocument();
-    expect(screen.getByText(/Elvanto stays connected/i)).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'Elvanto remains connected, but its batches become inactive.',
+    );
   });
 
   it('cancels an authority review without changing persisted state', async () => {
