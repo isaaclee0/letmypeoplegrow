@@ -27,6 +27,28 @@ CREATE TABLE IF NOT EXISTS platform_settings (
 );
 `;
 
+function peopleSyncRunsTableSql(tableName, ifNotExists = true) {
+  if (!/^[a-z_]+$/.test(tableName)) throw new Error('Invalid people-sync runs table name');
+  return `CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}${tableName} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  batch_id INTEGER,
+  trigger TEXT NOT NULL CHECK(trigger IN ('onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation', 'people_import')),
+  fetch_mode TEXT NOT NULL CHECK(fetch_mode IN ('full', 'incremental')),
+  status TEXT NOT NULL CHECK(status IN ('running', 'review_required', 'applied', 'failed', 'cancelled')),
+  counts TEXT NOT NULL DEFAULT '{}',
+  review_notification_fingerprint TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  external_watermark TEXT,
+  source_provenance TEXT,
+  started_at TEXT DEFAULT (datetime('now')),
+  completed_at TEXT,
+  FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE SET NULL
+);`;
+}
+
 const PROVIDER_NEUTRAL_SYNC_SCHEMA = `
 CREATE TABLE IF NOT EXISTS integration_connections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,24 +264,7 @@ CREATE TABLE IF NOT EXISTS people_sync_batches (
 CREATE INDEX IF NOT EXISTS idx_people_sync_batches_church ON people_sync_batches(church_id);
 CREATE INDEX IF NOT EXISTS idx_people_sync_batches_provider ON people_sync_batches(church_id, provider);
 
-CREATE TABLE IF NOT EXISTS people_sync_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
-  batch_id INTEGER,
-  trigger TEXT NOT NULL CHECK(trigger IN ('onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation')),
-  fetch_mode TEXT NOT NULL CHECK(fetch_mode IN ('full', 'incremental')),
-  status TEXT NOT NULL CHECK(status IN ('running', 'review_required', 'applied', 'failed', 'cancelled')),
-  counts TEXT NOT NULL DEFAULT '{}',
-  review_notification_fingerprint TEXT,
-  error_code TEXT,
-  error_message TEXT,
-  external_watermark TEXT,
-  source_provenance TEXT,
-  started_at TEXT DEFAULT (datetime('now')),
-  completed_at TEXT,
-  FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE SET NULL
-);
+${peopleSyncRunsTableSql('people_sync_runs')}
 CREATE INDEX IF NOT EXISTS idx_people_sync_runs_church ON people_sync_runs(church_id);
 CREATE INDEX IF NOT EXISTS idx_people_sync_runs_lookup ON people_sync_runs(church_id, provider, batch_id, started_at);
 `;
@@ -832,6 +837,7 @@ module.exports = {
   REGISTRY_SCHEMA,
   CHURCH_SCHEMA,
   PROVIDER_NEUTRAL_SYNC_SCHEMA,
+  peopleSyncRunsTableSql,
   UPDATED_AT_TRIGGERS,
   UPDATED_AT_TRIGGER_DEFINITIONS,
   INDIVIDUALS_UPDATED_AT_TRIGGER,

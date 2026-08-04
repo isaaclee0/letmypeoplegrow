@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const INVALID = Object.freeze({ ok: false, code: 'SYNC_REVIEW_INVALID' });
 const EXPIRED = Object.freeze({ ok: false, code: 'SYNC_REVIEW_EXPIRED' });
 const STALE = Object.freeze({ ok: false, code: 'SYNC_PLAN_STALE' });
+const OPERATION_KINDS = new Set(['people_sync', 'people_import']);
 const VOLATILE_PATHS = new Set([
   'snapshot.fetchedAt',
   // A provider's fetch watermark (e.g. Elvanto's max(date_modified) across
@@ -82,6 +83,7 @@ function assertCreateContext(context) {
   const hasBasePlanDigest = context?.basePlanDigest !== undefined;
   const hasRootReviewTokenDigest = context?.rootReviewTokenDigest !== undefined;
   if (!isPlainObject(context) || typeof context.churchId !== 'string' || context.churchId.length === 0 ||
+      !OPERATION_KINDS.has(context.operationKind) ||
       typeof context.provider !== 'string' || context.provider.length === 0 ||
       !(context.batchId === null || typeof context.batchId === 'string' || Number.isSafeInteger(context.batchId)) ||
       typeof context.planDigest !== 'string' || !/^[a-f0-9]{64}$/.test(context.planDigest) ||
@@ -116,6 +118,7 @@ function createReviewToken(context) {
   if (!secret) throw new ReviewSigningSecretMissingError();
   assertCreateContext(context);
   const payload = {
+    operationKind: context.operationKind,
     churchId: context.churchId,
     provider: context.provider,
     batchId: context.batchId,
@@ -133,6 +136,7 @@ function createReviewToken(context) {
 
 function validExpected(expected) {
   return isPlainObject(expected) && typeof expected.churchId === 'string' && expected.churchId.length > 0 &&
+    (expected.operationKind === undefined || OPERATION_KINDS.has(expected.operationKind)) &&
     typeof expected.provider === 'string' && expected.provider.length > 0 &&
     (expected.batchId === null || typeof expected.batchId === 'string' || Number.isSafeInteger(expected.batchId)) &&
     typeof expected.planDigest === 'string' && /^[a-f0-9]{64}$/.test(expected.planDigest);
@@ -140,6 +144,7 @@ function validExpected(expected) {
 
 function validLineageExpected(expected) {
   return isPlainObject(expected) && typeof expected.churchId === 'string' && expected.churchId.length > 0 &&
+    (expected.operationKind === undefined || OPERATION_KINDS.has(expected.operationKind)) &&
     typeof expected.provider === 'string' && expected.provider.length > 0 &&
     (expected.batchId === null || typeof expected.batchId === 'string' || Number.isSafeInteger(expected.batchId)) &&
     typeof expected.basePlanDigest === 'string' && /^[a-f0-9]{64}$/.test(expected.basePlanDigest);
@@ -150,15 +155,21 @@ function validPayload(payload) {
   const keys = Object.keys(payload).sort();
   const keyList = keys.join(',');
   const hasOneTimeIdentity = keyList === 'batchId,churchId,exp,jti,planDigest,provider';
+  const hasOperationIdentity = keyList === 'batchId,churchId,exp,jti,operationKind,planDigest,provider';
   const hasCorrectionLineage = keyList ===
     'basePlanDigest,batchId,churchId,exp,jti,planDigest,provider,rootReviewTokenDigest';
+  const hasOperationCorrectionLineage = keyList ===
+    'basePlanDigest,batchId,churchId,exp,jti,operationKind,planDigest,provider,rootReviewTokenDigest';
   const isLegacyPayload = keyList === 'batchId,churchId,exp,planDigest,provider';
-  if (!hasOneTimeIdentity && !hasCorrectionLineage && !isLegacyPayload) return false;
+  if (!hasOneTimeIdentity && !hasOperationIdentity && !hasCorrectionLineage &&
+      !hasOperationCorrectionLineage && !isLegacyPayload) return false;
+  const hasOperationKind = hasOperationIdentity || hasOperationCorrectionLineage;
   return typeof payload.churchId === 'string' && payload.churchId.length > 0 &&
+    (!hasOperationKind || OPERATION_KINDS.has(payload.operationKind)) &&
     typeof payload.provider === 'string' && payload.provider.length > 0 &&
     (payload.batchId === null || typeof payload.batchId === 'string' || Number.isSafeInteger(payload.batchId)) &&
     typeof payload.planDigest === 'string' && /^[a-f0-9]{64}$/.test(payload.planDigest) &&
-    (!hasCorrectionLineage ||
+    (!(hasCorrectionLineage || hasOperationCorrectionLineage) ||
       (typeof payload.basePlanDigest === 'string' && /^[a-f0-9]{64}$/.test(payload.basePlanDigest) &&
         typeof payload.rootReviewTokenDigest === 'string' &&
         /^[a-f0-9]{64}$/.test(payload.rootReviewTokenDigest))) &&
@@ -188,6 +199,9 @@ function verifySignedPayload(token, expected) {
         !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) return INVALID;
     const payload = decodePayload(parts[0]);
     if (!validPayload(payload)) return INVALID;
+    if (payload.operationKind === undefined
+      ? expected.operationKind !== undefined
+      : expected.operationKind !== payload.operationKind) return INVALID;
     if (payload.churchId !== expected.churchId || payload.provider !== expected.provider || payload.batchId !== expected.batchId) {
       return INVALID;
     }

@@ -1,7 +1,7 @@
 const Database = require('../../config/database');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
-const TRIGGERS = new Set(['onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation']);
+const TRIGGERS = new Set(['onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation', 'people_import']);
 const FETCH_MODES = new Set(['full', 'incremental']);
 const FINISHED_STATUSES = new Set(['review_required', 'applied', 'cancelled']);
 const COUNT_KEYS = new Set([
@@ -112,7 +112,7 @@ function isoTimestamp(value, label, { allowNull = false } = {}) {
   return value;
 }
 
-function sanitiseSourceProvenance(value, provider, { allowNull = true } = {}) {
+function sanitiseSourceProvenance(value, provider, { allowNull = true, operationKind = 'people_sync' } = {}) {
   if (value === null || value === undefined) {
     if (allowNull) return null;
     throw new Error('Source provenance must be an array');
@@ -121,13 +121,17 @@ function sanitiseSourceProvenance(value, provider, { allowNull = true } = {}) {
     throw new Error('Source provenance must be a size-bounded array');
   }
   assertNoCredentialShape(value);
-  const allowedKinds = SOURCE_KINDS[provider] || new Set();
+  const isPeopleImport = operationKind === 'people_import';
+  const allowedKinds = isPeopleImport ? new Set(['all']) : (SOURCE_KINDS[provider] || new Set());
   const safe = value.map((entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
         Object.keys(entry).sort().join(',') !== [...SOURCE_PROVENANCE_KEYS].sort().join(',')) {
       throw new Error('Source provenance entry fields are not allowlisted');
     }
-    if (!Number.isSafeInteger(entry.batchId) || entry.batchId <= 0 ||
+    const validBatchId = isPeopleImport
+      ? entry.batchId === null
+      : Number.isSafeInteger(entry.batchId) && entry.batchId > 0;
+    if (!validBatchId ||
         typeof entry.sourceKind !== 'string' || !allowedKinds.has(entry.sourceKind) ||
         !Number.isSafeInteger(entry.memberCount) || entry.memberCount < 0 ||
         typeof entry.snapshotDigest !== 'string' || !/^[a-f0-9]{64}$/.test(entry.snapshotDigest)) {
@@ -150,19 +154,19 @@ function sanitiseSourceProvenance(value, provider, { allowNull = true } = {}) {
   return safe;
 }
 
-function parseSourceProvenance(value, provider) {
+function parseSourceProvenance(value, provider, operationKind) {
   try {
     if (value === null || value === undefined) return [];
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return sanitiseSourceProvenance(parsed, provider, { allowNull: false });
+    return sanitiseSourceProvenance(parsed, provider, { allowNull: false, operationKind });
   } catch (_) {
     return [];
   }
 }
 
-function validateSourceProvenance(value, provider) {
+function validateSourceProvenance(value, provider, operationKind = 'people_sync') {
   assertProvider(provider);
-  return sanitiseSourceProvenance(value, provider, { allowNull: false });
+  return sanitiseSourceProvenance(value, provider, { allowNull: false, operationKind });
 }
 
 function toRun(row) {
@@ -171,7 +175,7 @@ function toRun(row) {
     id: row.id, provider: row.provider, batchId: row.batch_id, trigger: row.trigger, fetchMode: row.fetch_mode,
     status: row.status, counts: parseCounts(row.counts), reviewNotificationFingerprint: row.review_notification_fingerprint,
     errorCode: row.error_code, errorMessage: row.error_message, externalWatermark: row.external_watermark,
-    sourceProvenance: parseSourceProvenance(row.source_provenance, row.provider),
+    sourceProvenance: parseSourceProvenance(row.source_provenance, row.provider, row.trigger),
     startedAt: row.started_at, completedAt: row.completed_at,
   };
 }
@@ -196,6 +200,7 @@ async function startRun(input) {
   const { churchId, provider, batchId = null, trigger, fetchMode } = input;
   assertProvider(provider);
   if (!churchId || !TRIGGERS.has(trigger) || !FETCH_MODES.has(fetchMode)) throw new Error('Invalid run start input');
+  if (trigger === 'people_import' && batchId !== null) throw new Error('People import runs must be batchless');
   if (batchId !== null) {
     const batches = await Database.queryForChurch(churchId,
       'SELECT id FROM people_sync_batches WHERE id = ? AND church_id = ? AND provider = ?', [batchId, churchId, provider]);
@@ -215,8 +220,10 @@ async function finishRun(input) {
   if (!FINISHED_STATUSES.has(status)) throw new Error('Invalid completed run status');
   const safeCounts = sanitiseCounts(counts);
   const safeWatermark = normaliseSafeAuditText(externalWatermark, 'External watermark');
-  const safeSourceProvenance = sanitiseSourceProvenance(sourceProvenance, provider);
-  await getRunningRun(runId, churchId, provider);
+  const run = await getRunningRun(runId, churchId, provider);
+  const safeSourceProvenance = sanitiseSourceProvenance(sourceProvenance, provider, {
+    operationKind: run.trigger,
+  });
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = ?, counts = ?, external_watermark = ?, source_provenance = ?,
       error_code = NULL, error_message = NULL, completed_at = datetime('now')
       WHERE id = ? AND church_id = ? AND provider = ? AND status = 'running'`,

@@ -189,6 +189,46 @@ test('finished runs persist and return only validated source provenance fields',
   });
 });
 
+test('one-time imports persist batchless all-people provenance', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const entry = provenance({
+      batchId: null,
+      sourceKind: 'all',
+      sourceExternalId: 'all',
+      sourceName: 'All people',
+    });
+    const run = await startRun({
+      churchId, provider: 'elvanto', batchId: null, trigger: 'people_import', fetchMode: 'full',
+    });
+    const finished = await finishRun({
+      churchId, provider: 'elvanto', runId: run.id, status: 'applied', counts: {}, sourceProvenance: [entry],
+    });
+
+    assert.equal(finished.trigger, 'people_import');
+    assert.equal(finished.batchId, null);
+    assert.deepEqual(finished.sourceProvenance, [entry]);
+  });
+});
+
+test('ordinary sync provenance still rejects a batchless all-people source', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const run = await startRun({
+      churchId, provider: 'elvanto', batchId: null, trigger: 'manual', fetchMode: 'full',
+    });
+    await assert.rejects(
+      finishRun({
+        churchId,
+        provider: 'elvanto',
+        runId: run.id,
+        status: 'applied',
+        counts: {},
+        sourceProvenance: [provenance({ batchId: null, sourceKind: 'all' })],
+      }),
+      /source provenance.*invalid|positive batch|people import/i
+    );
+  });
+});
+
 test('source provenance rejects extra keys, raw people, credentials, and oversized values', async () => {
   await withTestChurchDb(async (churchId) => {
     const invalidPayloads = [

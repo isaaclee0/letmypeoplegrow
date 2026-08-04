@@ -327,6 +327,19 @@ function planWithReviewedArchiveSelections(plan, accepted) {
   };
 }
 
+function assertAllowedMutationBuckets(plan, allowed) {
+  if (!allowed) return;
+  for (const bucket of BUCKETS) {
+    if (!allowed.has(bucket) && Array.isArray(plan[bucket]) && plan[bucket].length > 0) {
+      throw reviewedApplyError(
+        'SYNC_REVIEW_INVALID',
+        `Plan contains forbidden ${bucket} actions`,
+        400
+      );
+    }
+  }
+}
+
 async function applyCorrectionReviewState(conn, { churchId, provider, accepted, userId }) {
   for (const exclusion of accepted.correctionExclusionsToAdd) {
     await matchReviewRepository.upsertExclusionWithConnection(conn, {
@@ -409,6 +422,7 @@ async function applyPeopleSyncPlan({
   sourceExpectations = null,
   connectionExpectation = null,
   requireConnection = false,
+  allowedMutationBuckets = null,
 }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
@@ -416,6 +430,7 @@ async function applyPeopleSyncPlan({
   if (plan.provider && plan.provider !== provider) {
     throw new Error(`Plan was computed for provider "${plan.provider}", not "${provider}"`);
   }
+  assertAllowedMutationBuckets(plan, allowedMutationBuckets);
 
   return Database.transactionForChurch(churchId, async (conn) => {
     if (authorityExpectation) {
@@ -463,6 +478,7 @@ async function applyPeopleSyncPlan({
         throw reviewedApplyError('SYNC_PLAN_STALE', 'The reviewed plan changed before it could be applied.');
       }
       const verification = reviewedApply.verifyReviewToken?.(reviewedApply.reviewToken, {
+        operationKind: reviewedApply.operationKind,
         churchId,
         provider,
         batchId: reviewedApply.batchId ?? null,

@@ -6,6 +6,7 @@ const {
   REGISTRY_SCHEMA,
   CHURCH_SCHEMA,
   PROVIDER_NEUTRAL_SYNC_SCHEMA,
+  peopleSyncRunsTableSql,
   UPDATED_AT_TRIGGER_DEFINITIONS,
   INDIVIDUALS_UPDATED_AT_TRIGGER,
 } = require('./schema');
@@ -27,6 +28,12 @@ const INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION = Object.freeze({
   version: 'v2.2.0_individuals_background_check_timestamp',
   name: 'individuals_background_check_timestamp',
   description: 'Preserve person updated_at during supplementary PCO background-check projection',
+});
+
+const PEOPLE_IMPORT_RUN_TRIGGER_MIGRATION = Object.freeze({
+  version: 'v2.2.0_people_import_run_trigger',
+  name: 'people_import_run_trigger',
+  description: 'Allow one-time provider people imports in the people-sync run audit log',
 });
 
 function ensureMigrationTrackingSchema(db) {
@@ -120,6 +127,65 @@ function migrateIndividualsBackgroundCheckTimestamp(db) {
       INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION.description
     );
   })();
+}
+
+function markPeopleImportRunTriggerMigrationApplied(db) {
+  db.prepare(`INSERT INTO migrations
+    (version, name, description, execution_time_ms, status, executed_at)
+    VALUES (?, ?, ?, 0, 'success', datetime('now'))
+    ON CONFLICT(version) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      execution_time_ms = excluded.execution_time_ms,
+      status = excluded.status,
+      executed_at = excluded.executed_at,
+      error_message = NULL`).run(
+    PEOPLE_IMPORT_RUN_TRIGGER_MIGRATION.version,
+    PEOPLE_IMPORT_RUN_TRIGGER_MIGRATION.name,
+    PEOPLE_IMPORT_RUN_TRIGGER_MIGRATION.description
+  );
+}
+
+function migratePeopleImportRunTrigger(db) {
+  ensureMigrationTrackingSchema(db);
+  const table = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'people_sync_runs' LIMIT 1"
+  ).get();
+  if (!table) return;
+
+  if (table.sql.includes("'people_import'")) {
+    const alreadyApplied = db.prepare(
+      "SELECT 1 FROM migrations WHERE version = ? AND status = 'success' LIMIT 1"
+    ).get(PEOPLE_IMPORT_RUN_TRIGGER_MIGRATION.version);
+    if (alreadyApplied) return;
+    db.transaction(() => markPeopleImportRunTriggerMigrationApplied(db))();
+    return;
+  }
+
+  const foreignKeysEnabled = db.pragma('foreign_keys', { simple: true }) === 1;
+  if (foreignKeysEnabled) db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS people_sync_runs_next');
+      db.exec(peopleSyncRunsTableSql('people_sync_runs_next', false));
+      db.exec(`INSERT INTO people_sync_runs_next
+        (id, church_id, provider, batch_id, trigger, fetch_mode, status, counts,
+         review_notification_fingerprint, error_code, error_message, external_watermark,
+         source_provenance, started_at, completed_at)
+        SELECT id, church_id, provider, batch_id, trigger, fetch_mode, status, counts,
+         review_notification_fingerprint, error_code, error_message, external_watermark,
+         source_provenance, started_at, completed_at
+        FROM people_sync_runs`);
+      db.exec('DROP TABLE people_sync_runs');
+      db.exec('ALTER TABLE people_sync_runs_next RENAME TO people_sync_runs');
+      db.exec('CREATE INDEX idx_people_sync_runs_church ON people_sync_runs(church_id)');
+      db.exec(`CREATE INDEX idx_people_sync_runs_lookup
+        ON people_sync_runs(church_id, provider, batch_id, started_at)`);
+      markPeopleImportRunTriggerMigrationApplied(db);
+    })();
+  } finally {
+    if (foreignKeysEnabled) db.pragma('foreign_keys = ON');
+  }
 }
 
 function ensureCompatibleUpdatedAtTriggers(db) {
@@ -649,6 +715,8 @@ class Database {
       backfillProviderNeutralSync(db, churchId);
     }
 
+    migratePeopleImportRunTrigger(db);
+
     // Existing SQLite triggers are not replaced by CREATE TRIGGER IF NOT
     // EXISTS. Recreate this one transactionally once per church so deployed
     // databases gain the background-only timestamp exception too.
@@ -662,6 +730,7 @@ class Database {
   static ensureChurchSchema(churchId) {
     const db = Database.getChurchDb(churchId);
     ensureProviderNeutralSyncSchema(db);
+    migratePeopleImportRunTrigger(db);
     ensureCompatibleUpdatedAtTriggers(db);
     backfillProviderNeutralSync(db, churchId);
   }

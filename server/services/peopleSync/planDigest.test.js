@@ -191,9 +191,12 @@ test('review token is bound to church, provider, batch, and plan digest', () => 
   atUnixSecond(2_000_000_000, () => {
     const planDigest = digestPlan(plan());
     const token = createReviewToken({
-      churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest, expiresInSeconds: 900,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+      planDigest, expiresInSeconds: 900,
     });
-    const expected = { churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest };
+    const expected = {
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest,
+    };
 
     assert.equal(verifyReviewToken(token, expected).ok, true);
     assert.deepEqual(verifyReviewToken(token, { ...expected, churchId: 'c2' }), {
@@ -211,6 +214,23 @@ test('review token is bound to church, provider, batch, and plan digest', () => 
   });
 }));
 
+test('review token is bound to its operation kind', () => withSecret('review-secret', () => {
+  const planDigest = 'a'.repeat(64);
+  const token = createReviewToken({
+    operationKind: 'people_import', churchId: 'c1', provider: 'elvanto',
+    batchId: null, planDigest, expiresInSeconds: 60,
+  });
+
+  assert.equal(verifyReviewToken(token, {
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto',
+    batchId: null, planDigest,
+  }).ok, false);
+  assert.equal(verifyReviewToken(token, {
+    operationKind: 'people_import', churchId: 'c1', provider: 'elvanto',
+    batchId: null, planDigest,
+  }).ok, true);
+}));
+
 test('a corrected review token signs the base-plan lineage used to classify apply-time projection errors', () => withSecret('review-secret', () => {
   atUnixSecond(2_000_000_000, () => {
     const basePlanDigest = digestPlan(plan());
@@ -218,22 +238,25 @@ test('a corrected review token signs the base-plan lineage used to classify appl
       updateManagedFields: [{ id: 'update:corrected', individualId: 20 }],
     }));
     const baseToken = createReviewToken({
-      churchId: 'c1', provider: 'elvanto', batchId: 3,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
       planDigest: basePlanDigest,
       expiresInSeconds: 900,
     });
     const rootReviewTokenDigest = digestReviewToken(baseToken);
     const token = createReviewToken({
-      churchId: 'c1', provider: 'elvanto', batchId: 3,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
       planDigest: correctedPlanDigest,
       basePlanDigest,
       rootReviewTokenDigest,
       expiresInSeconds: 900,
     });
-    const lineage = { churchId: 'c1', provider: 'elvanto', batchId: 3, basePlanDigest };
+    const lineage = {
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3, basePlanDigest,
+    };
 
     const verification = verifyReviewToken(token, {
-      churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: correctedPlanDigest,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+      planDigest: correctedPlanDigest,
     });
     assert.equal(verification.ok, true);
     assert.equal(verification.payload.rootReviewTokenDigest, rootReviewTokenDigest);
@@ -249,13 +272,13 @@ test('an ordinary base token is its own valid lineage root', () => withSecret('r
   atUnixSecond(2_000_000_000, () => {
     const basePlanDigest = digestPlan(plan());
     const token = createReviewToken({
-      churchId: 'c1', provider: 'elvanto', batchId: 3,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
       planDigest: basePlanDigest,
       expiresInSeconds: 900,
     });
 
     assert.equal(verifyReviewTokenLineage(token, {
-      churchId: 'c1', provider: 'elvanto', batchId: 3, basePlanDigest,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3, basePlanDigest,
     }).ok, true);
   });
 }));
@@ -264,7 +287,8 @@ test('separate reviews of the same plan receive distinct one-time token identiti
   atUnixSecond(2_000_000_000, () => {
     const planDigest = digestPlan(plan());
     const context = {
-      churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest, expiresInSeconds: 900,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+      planDigest, expiresInSeconds: 900,
     };
     const first = createReviewToken(context);
     const second = createReviewToken(context);
@@ -287,14 +311,21 @@ test('tokens issued immediately before the one-time identity rollout remain veri
     const signature = crypto.createHmac('sha256', 'review-secret').update(payloadPart).digest('base64url');
 
     assert.equal(verifyReviewToken(`${payloadPart}.${signature}`, expected).ok, true);
+    assert.equal(verifyReviewToken(`${payloadPart}.${signature}`, {
+      ...expected, operationKind: 'people_sync',
+    }).ok, false);
   });
 }));
 
 test('review token expires exactly at its exp boundary', () => withSecret('review-secret', () => {
   const token = atUnixSecond(1000, () => createReviewToken({
-    churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()), expiresInSeconds: 10,
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+    planDigest: digestPlan(plan()), expiresInSeconds: 10,
   }));
-  const expected = { churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()) };
+  const expected = {
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+    planDigest: digestPlan(plan()),
+  };
 
   assert.equal(atUnixSecond(1009, () => verifyReviewToken(token, expected).ok), true);
   assert.deepEqual(atUnixSecond(1010, () => verifyReviewToken(token, expected)), {
@@ -304,9 +335,13 @@ test('review token expires exactly at its exp boundary', () => withSecret('revie
 
 test('signature tampering and malformed user input return typed invalid results without throwing', () => withSecret('review-secret', () => {
   const token = createReviewToken({
-    churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()), expiresInSeconds: 900,
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+    planDigest: digestPlan(plan()), expiresInSeconds: 900,
   });
-  const expected = { churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()) };
+  const expected = {
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+    planDigest: digestPlan(plan()),
+  };
   const tampered = `${token.slice(0, -1)}${token.endsWith('a') ? 'b' : 'a'}`;
   const malformed = [null, '', 'one-part', 'a.b.c', '.x', 'e30.invalid', 42, {}, `${'a'.repeat(10000)}.x`];
 
@@ -319,10 +354,12 @@ test('signature tampering and malformed user input return typed invalid results 
 
 test('missing signing secret fails closed for creation and verification', () => withSecret(null, () => {
   assert.throws(() => createReviewToken({
-    churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()), expiresInSeconds: 900,
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+    planDigest: digestPlan(plan()), expiresInSeconds: 900,
   }), /review signing secret/i);
   assert.deepEqual(verifyReviewToken('e30.c2ln', {
-    churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()),
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: 3,
+    planDigest: digestPlan(plan()),
   }), { ok: false, code: 'SYNC_REVIEW_INVALID' });
 }));
 
@@ -334,10 +371,11 @@ test('JWT_SECRET is the fallback signing key when no dedicated review secret exi
   try {
     const planDigest = digestPlan(plan());
     const token = createReviewToken({
-      churchId: 'c1', provider: 'elvanto', batchId: null, planDigest, expiresInSeconds: 60,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: null,
+      planDigest, expiresInSeconds: 60,
     });
     assert.equal(verifyReviewToken(token, {
-      churchId: 'c1', provider: 'elvanto', batchId: null, planDigest,
+      operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto', batchId: null, planDigest,
     }).ok, true);
   } finally {
     if (oldReview === undefined) delete process.env.SYNC_REVIEW_SECRET;

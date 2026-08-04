@@ -1,8 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateLegacySelections, validateSelections } = require('./apply');
+const Database = require('../../config/database');
+const { applyPeopleSyncPlan, validateLegacySelections, validateSelections } = require('./apply');
 const { BUCKETS } = require('./plan');
+const { digestPlan } = require('./planDigest');
 
 function emptyPlan(overrides = {}) {
   const plan = { provider: 'elvanto', authoritative: true };
@@ -301,4 +303,57 @@ test('acceptFamilyRenameIds must reference a renameFamily action actually offere
 
 test('validateSelections requires a plan object', () => {
   assert.throws(() => validateSelections(null, {}), /plan is required/i);
+});
+
+test('allowed mutation buckets reject forbidden actions before opening a transaction', async () => {
+  const originalTransactionForChurch = Database.transactionForChurch;
+  let transactionOpened = false;
+  Database.transactionForChurch = async () => {
+    transactionOpened = true;
+    throw new Error('transaction opened');
+  };
+  try {
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId: 'c1',
+        provider: 'elvanto',
+        plan: emptyPlan({ archive: [{ id: 'archive:1', individualId: 1 }] }),
+        allowedMutationBuckets: new Set(['addPeople', 'addFamilies', 'linkPeople', 'linkFamilies']),
+      }),
+      (error) => error?.code === 'SYNC_REVIEW_INVALID' && /forbidden archive actions/i.test(error.message)
+    );
+    assert.equal(transactionOpened, false);
+  } finally {
+    Database.transactionForChurch = originalTransactionForChurch;
+  }
+});
+
+test('review verification receives the operation kind again inside apply', async () => {
+  const originalTransactionForChurch = Database.transactionForChurch;
+  const plan = emptyPlan();
+  let verificationExpected;
+  Database.transactionForChurch = async (_churchId, callback) => callback({});
+  try {
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId: 'c1',
+        provider: 'elvanto',
+        plan,
+        reviewedApply: {
+          operationKind: 'people_import',
+          batchId: null,
+          planDigest: digestPlan(plan),
+          reviewToken: 'signed-review',
+          verifyReviewToken: (_token, expected) => {
+            verificationExpected = expected;
+            return { ok: false, code: 'SYNC_REVIEW_INVALID' };
+          },
+        },
+      }),
+      (error) => error?.code === 'SYNC_REVIEW_INVALID'
+    );
+    assert.equal(verificationExpected.operationKind, 'people_import');
+  } finally {
+    Database.transactionForChurch = originalTransactionForChurch;
+  }
 });

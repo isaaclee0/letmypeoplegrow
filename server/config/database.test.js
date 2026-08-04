@@ -1116,3 +1116,59 @@ test('registerUserLookup: preserves an existing person_id when re-registering th
     assert.strictEqual(rowAfterReLogin.person_id, linkedPersonId, 'person_id must survive re-registration, not silently reset to null');
   });
 });
+
+test('getChurchDb migrates the legacy people-sync run trigger while preserving existing audit IDs', async () => {
+  // Catches a table rebuild that either loses immutable audit identity or
+  // leaves deployed databases unable to record a one-time provider import.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      DROP INDEX idx_people_sync_runs_church;
+      DROP INDEX idx_people_sync_runs_lookup;
+      ALTER TABLE people_sync_runs RENAME TO people_sync_runs_current;
+      CREATE TABLE people_sync_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        church_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+        batch_id INTEGER,
+        trigger TEXT NOT NULL CHECK(trigger IN ('onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation')),
+        fetch_mode TEXT NOT NULL CHECK(fetch_mode IN ('full', 'incremental')),
+        status TEXT NOT NULL CHECK(status IN ('running', 'review_required', 'applied', 'failed', 'cancelled')),
+        counts TEXT NOT NULL DEFAULT '{}',
+        review_notification_fingerprint TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        external_watermark TEXT,
+        source_provenance TEXT,
+        started_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT,
+        FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE SET NULL
+      );
+      INSERT INTO people_sync_runs SELECT * FROM people_sync_runs_current;
+      DROP TABLE people_sync_runs_current;
+      CREATE INDEX idx_people_sync_runs_church ON people_sync_runs(church_id);
+      CREATE INDEX idx_people_sync_runs_lookup ON people_sync_runs(church_id, provider, batch_id, started_at);
+    `);
+    db.prepare(`INSERT INTO people_sync_runs
+      (id, church_id, provider, batch_id, trigger, fetch_mode, status)
+      VALUES (41, ?, 'elvanto', NULL, 'manual', 'full', 'applied')`).run(churchId);
+    db.pragma('foreign_keys = ON');
+
+    Database.closeAll();
+    Database.initialize();
+    const migrated = Database.getChurchDb(churchId);
+
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT id, trigger FROM people_sync_runs WHERE id = 41').get(),
+      { id: 41, trigger: 'manual' }
+    );
+    assert.doesNotThrow(() => migrated.prepare(`INSERT INTO people_sync_runs
+      (church_id, provider, batch_id, trigger, fetch_mode, status)
+      VALUES (?, 'elvanto', NULL, 'people_import', 'full', 'running')`).run(churchId));
+    assert.deepStrictEqual(
+      migrated.prepare("SELECT status FROM migrations WHERE version = 'v2.2.0_people_import_run_trigger'").get(),
+      { status: 'success' }
+    );
+  });
+});
