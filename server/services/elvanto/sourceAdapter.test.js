@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { listElvantoSources, fetchElvantoSourceSnapshot } = require('./sourceAdapter');
+const { listElvantoSources, fetchElvantoSourceSnapshot, fetchElvantoAllSnapshot } = require('./sourceAdapter');
 
 const CATEGORIES = '/people/categories/getAll.json';
 const GROUPS = '/groups/getAll.json';
@@ -85,6 +85,35 @@ test('fetches a complete category source through category_id before normalizing 
   assert.deepEqual(snapshot.families, [{ id: 'f1', name: 'Lovelace, Ada and Ann', memberExternalIds: ['p1', 'p2'], primaryContactExternalId: 'p1' }]);
   assert.deepEqual(value.calls.map((call) => call.path), [CATEGORIES, PEOPLE]);
   assert.deepEqual(value.calls[1].params, { category_id: 'cat-1' });
+});
+
+test('fetches every Elvanto person as one normalized all-people snapshot', async () => {
+  const value = client({
+    people: [
+      { id: 'p2', firstname: 'Grace', lastname: 'Hopper', family_id: 'f1', family_relationship: 'Spouse' },
+      { id: 'p1', firstname: 'Ada', lastname: 'Lovelace', family_id: 'f1', family_relationship: 'Primary Contact' },
+    ],
+  });
+  const snapshot = await fetchElvantoAllSnapshot({ client: value, now: () => new Date('2026-08-04T00:00:00.000Z') });
+
+  assert.deepEqual(snapshot.source, { kind: 'all', externalId: 'all', name: 'Everyone', memberCount: 2, providerRefreshedAt: null });
+  assert.equal(snapshot.complete, true);
+  assert.equal(snapshot.fetchedAt, '2026-08-04T00:00:00.000Z');
+  assert.deepEqual(snapshot.memberExternalIds, ['p1', 'p2']);
+  assert.deepEqual(snapshot.people.map((person) => person.id), ['p1', 'p2']);
+  assert.deepEqual(snapshot.families, [{ id: 'f1', name: 'Lovelace, Ada and Grace', memberExternalIds: ['p1', 'p2'], primaryContactExternalId: 'p1' }]);
+  assert.deepEqual(value.calls, [{ method: 'GET', path: PEOPLE, params: {}, collectionKey: 'people', itemKey: 'person' }]);
+});
+
+test('fails closed instead of returning a partial all-people snapshot', async () => {
+  const value = client();
+  value.getAll = async () => ({
+    items: [{ id: 'p1', firstname: 'Ada', lastname: 'Lovelace' }], complete: false, pages: 1, total: 2,
+  });
+  await assert.rejects(
+    () => fetchElvantoAllSnapshot({ client: value }),
+    (error) => error.code === 'SYNC_SOURCE_INCOMPLETE'
+  );
 });
 
 test('fetches a selected group with sequential people/search pages and adds only that group as membership context', async () => {

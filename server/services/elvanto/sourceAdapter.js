@@ -197,4 +197,41 @@ async function fetchElvantoSourceSnapshot(options = {}) {
   };
 }
 
-module.exports = { listElvantoSources, fetchElvantoSourceSnapshot, sourceDto, normalizeKindItems };
+async function fetchElvantoAllSnapshot(options = {}) {
+  const client = sourceClient(options);
+  let result;
+  try {
+    result = await client.getAll(PEOPLE_PATH, {}, PEOPLE_COLLECTION_KEY, PEOPLE_ITEM_KEY);
+  } catch (err) {
+    throw classifiedReadFailure(err);
+  }
+  if (!result || result.complete !== true || !Array.isArray(result.items)) {
+    throw sourceError('Elvanto people response is incomplete', 'SYNC_SOURCE_INCOMPLETE');
+  }
+
+  const normalized = normalizeSnapshot(result.items);
+  const normalizedIds = new Set(normalized.people.map((person) => stableId(person && person.id)));
+  if (normalized.skipped.length > 0 || normalized.people.length !== result.items.length ||
+      normalizedIds.size !== normalized.people.length || normalizedIds.has('')) {
+    throw sourceError('Elvanto people response contains malformed people', 'SYNC_SOURCE_INCOMPLETE');
+  }
+  const now = typeof options.now === 'function' ? options.now : () => new Date();
+  return {
+    provider: 'elvanto',
+    source: { kind: 'all', externalId: 'all', name: 'Everyone', memberCount: normalized.people.length, providerRefreshedAt: null },
+    complete: true,
+    fetchedAt: now().toISOString(),
+    memberExternalIds: normalized.people.map((person) => person.id),
+    people: normalized.people,
+    contextPeople: [],
+    families: normalized.families,
+  };
+}
+
+module.exports = {
+  listElvantoSources,
+  fetchElvantoSourceSnapshot,
+  fetchElvantoAllSnapshot,
+  sourceDto,
+  normalizeKindItems,
+};

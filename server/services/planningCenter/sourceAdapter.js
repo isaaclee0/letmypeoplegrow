@@ -141,4 +141,53 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
   };
 }
 
-module.exports = { listPlanningCenterSources, fetchPlanningCenterSourceSnapshot, finiteIntegerOrNull, validIsoOrNull };
+async function fetchPlanningCenterAllSnapshot(options = {}) {
+  const client = createClient(options, 'account');
+  const membersById = new Map();
+  const contextById = new Map();
+  const memberIds = new Set();
+  const primaryContacts = new Map();
+  const householdNames = new Map();
+
+  await client.getAll(`${API}/people?per_page=100&include=households.people,field_data`, async (envelope) => {
+    const fieldDataById = new Map();
+    const pageMembers = Array.isArray(envelope.data) ? envelope.data : [];
+    for (const resource of pageMembers) {
+      const id = resource && resource.id !== null && resource.id !== undefined ? String(resource.id).trim() : '';
+      if (!resource || resource.type !== 'Person' || !id) {
+        throw new PcoSourceError('Planning Center people response contains a malformed Person resource', 'SYNC_SOURCE_INCOMPLETE', {});
+      }
+      memberIds.add(id);
+    }
+    mapIncluded(envelope.included, fieldDataById, primaryContacts, householdNames, contextById, memberIds);
+    for (const resource of pageMembers) {
+      const id = String(resource.id).trim();
+      membersById.set(id, projectPerson(resource, fieldDataById));
+      contextById.delete(id);
+    }
+  });
+
+  for (const memberId of memberIds) contextById.delete(memberId);
+  const memberRawPeople = [...membersById.values()].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const contextRawPeople = [...contextById.values()]
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+
+  return {
+    provider: 'planning_center',
+    source: { kind: 'all', externalId: 'all', name: 'Everyone', memberCount: memberIds.size, providerRefreshedAt: null },
+    complete: true,
+    fetchedAt: new Date().toISOString(),
+    memberExternalIds: [...memberIds].sort(),
+    people: memberRawPeople.map(toNormalizedPcoPerson),
+    contextPeople: contextRawPeople.map(toNormalizedPcoPerson),
+    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts, householdNames),
+  };
+}
+
+module.exports = {
+  listPlanningCenterSources,
+  fetchPlanningCenterSourceSnapshot,
+  fetchPlanningCenterAllSnapshot,
+  finiteIntegerOrNull,
+  validIsoOrNull,
+};

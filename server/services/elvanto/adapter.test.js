@@ -10,16 +10,41 @@ function adapter(deps = {}) {
     validateConnection: async () => ({ ok: true }),
     listSources: async () => [],
     fetchSourceSnapshot: async () => ({ provider: 'elvanto', complete: true, people: [] }),
+    fetchAllSnapshot: async () => ({ provider: 'elvanto', complete: true, people: [] }),
     ...deps,
   });
 }
 
-test('createElvantoAdapter exposes only the source-era Elvanto contract', () => {
+test('createElvantoAdapter exposes the complete-provider import contract', () => {
   const value = adapter();
   assert.deepEqual(Object.getOwnPropertyNames(value).sort(), [
-    'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
+    'fetchImportSnapshot', 'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
   ]);
   assert.equal(value.provider, 'elvanto');
+});
+
+test('fetchImportSnapshot delegates an all-people import without raw credentials', async () => {
+  let received;
+  const snapshot = { provider: 'elvanto', source: { kind: 'all' }, complete: true, people: [] };
+  const value = adapter({ fetchAllSnapshot: async (options) => { received = options; return snapshot; } });
+
+  assert.equal(await value.fetchImportSnapshot({
+    churchId: 'church-a', credentials: { apiKey: 'secret' }, selection: { kind: 'all' }, signal: 'abort-signal',
+  }), snapshot);
+  assert.deepEqual(received, { apiKey: 'secret', signal: 'abort-signal' });
+});
+
+test('fetchImportSnapshot delegates a selected Category to the existing source read', async () => {
+  let received;
+  const snapshot = { provider: 'elvanto', source: { kind: 'elvanto_category', externalId: 'cat-1' }, complete: true, people: [] };
+  const value = adapter({ fetchSourceSnapshot: async (options) => { received = options; return snapshot; } });
+
+  assert.equal(await value.fetchImportSnapshot({
+    credentials: { apiKey: 'secret' }, selection: { kind: 'elvanto_category', externalId: 'cat-1' }, signal: 'abort-signal',
+  }), snapshot);
+  assert.deepEqual(received, {
+    apiKey: 'secret', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1', signal: 'abort-signal',
+  });
 });
 
 test('listSources delegates just the configured Elvanto credentials', async () => {

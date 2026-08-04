@@ -1,7 +1,7 @@
 'use strict';
 
 const { createElvantoClient } = require('./httpClient');
-const { listElvantoSources, fetchElvantoSourceSnapshot } = require('./sourceAdapter');
+const { listElvantoSources, fetchElvantoSourceSnapshot, fetchElvantoAllSnapshot } = require('./sourceAdapter');
 
 const PEOPLE_PATH = '/people/getAll.json';
 
@@ -19,10 +19,13 @@ function createElvantoAdapter(deps = {}) {
     async listSources({ apiKey }) {
       return listElvantoSources({ client: clientFactory({ apiKey }) });
     },
-    async fetchSourceSnapshot({ apiKey, sourceKind, sourceExternalId }) {
+    async fetchSourceSnapshot({ apiKey, sourceKind, sourceExternalId, signal }) {
       return fetchElvantoSourceSnapshot({
-        client: clientFactory({ apiKey }), sourceKind, sourceExternalId,
+        client: clientFactory({ apiKey }), sourceKind, sourceExternalId, signal,
       });
+    },
+    async fetchAllSnapshot({ apiKey, signal }) {
+      return fetchElvantoAllSnapshot({ client: clientFactory({ apiKey }), signal });
     },
     ...deps,
   };
@@ -38,11 +41,25 @@ function createElvantoAdapter(deps = {}) {
       return resolved.listSources({ apiKey: credentials && credentials.apiKey });
     },
 
-    async fetchSourceSnapshot({ credentials, sourceKind, sourceExternalId } = {}) {
-      return resolved.fetchSourceSnapshot({
+    async fetchSourceSnapshot({ credentials, sourceKind, sourceExternalId, signal } = {}) {
+      const source = {
         apiKey: credentials && credentials.apiKey,
         sourceKind,
         sourceExternalId,
+      };
+      if (signal !== undefined) source.signal = signal;
+      return resolved.fetchSourceSnapshot(source);
+    },
+
+    async fetchImportSnapshot({ credentials, selection, signal } = {}) {
+      if (selection?.kind === 'all') {
+        return resolved.fetchAllSnapshot({ apiKey: credentials && credentials.apiKey, signal });
+      }
+      return resolved.fetchSourceSnapshot({
+        apiKey: credentials && credentials.apiKey,
+        sourceKind: selection?.kind,
+        sourceExternalId: selection?.externalId,
+        signal,
       });
     },
 

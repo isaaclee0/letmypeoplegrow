@@ -1,7 +1,11 @@
 // Provider-owned source adapter for Planning Center People.  Lists are read
 // exactly as configured in Planning Center; this module deliberately has no
 // local membership or field-rule evaluation surface.
-const { listPlanningCenterSources, fetchPlanningCenterSourceSnapshot } = require('../planningCenter/sourceAdapter');
+const {
+  listPlanningCenterSources,
+  fetchPlanningCenterSourceSnapshot,
+  fetchPlanningCenterAllSnapshot,
+} = require('../planningCenter/sourceAdapter');
 
 const defaultDeps = {
   async withPlanningCenterSourceToken(churchId, operation) {
@@ -13,8 +17,11 @@ const defaultDeps = {
   async listSources({ accessToken }) {
     return listPlanningCenterSources({ accessToken });
   },
-  async fetchSourceSnapshot({ accessToken, sourceKind, sourceExternalId }) {
-    return fetchPlanningCenterSourceSnapshot({ accessToken, sourceKind, sourceExternalId });
+  async fetchSourceSnapshot({ accessToken, sourceKind, sourceExternalId, signal }) {
+    return fetchPlanningCenterSourceSnapshot({ accessToken, sourceKind, sourceExternalId, signal });
+  },
+  async fetchAllSnapshot({ accessToken, signal }) {
+    return fetchPlanningCenterAllSnapshot({ accessToken, signal });
   },
 };
 
@@ -32,12 +39,21 @@ function createPcoAdapter(deps = {}) {
         (accessToken) => resolved.listSources({ accessToken })
       );
     },
-    async fetchSourceSnapshot({ churchId, sourceKind, sourceExternalId } = {}) {
-      return resolved.withPlanningCenterSourceToken(churchId, (accessToken) => resolved.fetchSourceSnapshot({
-        accessToken,
-        sourceKind,
-        sourceExternalId,
-      }));
+    async fetchSourceSnapshot({ churchId, sourceKind, sourceExternalId, signal } = {}) {
+      const source = { sourceKind, sourceExternalId };
+      if (signal !== undefined) source.signal = signal;
+      return resolved.withPlanningCenterSourceToken(churchId, (accessToken) => resolved.fetchSourceSnapshot({ accessToken, ...source }));
+    },
+    async fetchImportSnapshot({ churchId, selection, signal } = {}) {
+      return resolved.withPlanningCenterSourceToken(churchId, (accessToken) => {
+        if (selection?.kind === 'all') return resolved.fetchAllSnapshot({ accessToken, signal });
+        return resolved.fetchSourceSnapshot({
+          accessToken,
+          sourceKind: selection?.kind,
+          sourceExternalId: selection?.externalId,
+          signal,
+        });
+      });
     },
     isLifecycleEligible(person) {
       return !!person && (person.state === 'active' || person.status === 'active');

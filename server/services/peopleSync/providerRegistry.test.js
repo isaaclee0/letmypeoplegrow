@@ -9,6 +9,7 @@ function adapter(provider = 'planning_center', overrides = {}) {
     validateConnection() {},
     listSources() {},
     fetchSourceSnapshot() {},
+    fetchImportSnapshot() {},
     isLifecycleEligible() {},
     ...overrides,
   };
@@ -53,7 +54,7 @@ test('registerProvider rejects a mismatched adapter provider', () => {
   );
 });
 
-for (const method of ['validateConnection', 'listSources', 'fetchSourceSnapshot', 'isLifecycleEligible']) {
+for (const method of ['validateConnection', 'listSources', 'fetchSourceSnapshot', 'fetchImportSnapshot', 'isLifecycleEligible']) {
   test(`validateAdapter rejects a missing ${method} method`, () => {
     const incomplete = adapter('planning_center', { [method]: undefined });
 

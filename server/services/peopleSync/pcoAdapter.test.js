@@ -20,16 +20,46 @@ function adapter(deps = {}) {
     validateToken: async () => ({ connected: true, accountName: 'Test Church' }),
     listSources: async () => [],
     fetchSourceSnapshot: async () => ({ complete: true, people: [] }),
+    fetchAllSnapshot: async () => ({ complete: true, people: [] }),
     ...deps,
   });
 }
 
-test('createPcoAdapter exposes only the source-era Planning Center contract', () => {
+test('createPcoAdapter exposes the complete-provider import contract', () => {
   const value = adapter();
   assert.deepEqual(Object.getOwnPropertyNames(value).sort(), [
-    'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
+    'fetchImportSnapshot', 'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
   ]);
   assert.equal(value.provider, 'planning_center');
+});
+
+test('fetchImportSnapshot reads everyone with a fresh church token', async () => {
+  let received;
+  const snapshot = { provider: 'planning_center', source: { kind: 'all' }, complete: true, people: [{ id: 'p1' }] };
+  const value = adapter({
+    getAccessTokenForChurch: async () => 'rotated-token',
+    fetchAllSnapshot: async (options) => { received = options; return snapshot; },
+  });
+
+  assert.equal(await value.fetchImportSnapshot({
+    churchId: 'church-a', credentials: { accessToken: 'stale-token' }, selection: { kind: 'all' }, signal: 'abort-signal',
+  }), snapshot);
+  assert.deepEqual(received, { accessToken: 'rotated-token', signal: 'abort-signal' });
+});
+
+test('fetchImportSnapshot delegates a selected List to the existing source read', async () => {
+  let received;
+  const snapshot = { provider: 'planning_center', source: { kind: 'planning_center_list', externalId: '42' }, complete: true, people: [] };
+  const value = adapter({
+    fetchSourceSnapshot: async (options) => { received = options; return snapshot; },
+  });
+
+  assert.equal(await value.fetchImportSnapshot({
+    churchId: 'church-a', selection: { kind: 'planning_center_list', externalId: '42' }, signal: 'abort-signal',
+  }), snapshot);
+  assert.deepEqual(received, {
+    accessToken: 'fresh-token', sourceKind: 'planning_center_list', sourceExternalId: '42', signal: 'abort-signal',
+  });
 });
 
 test('listSources obtains a fresh church token through the shared refresh manager', async () => {

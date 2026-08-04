@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { listPlanningCenterSources, fetchPlanningCenterSourceSnapshot } = require('./sourceAdapter');
+const { listPlanningCenterSources, fetchPlanningCenterSourceSnapshot, fetchPlanningCenterAllSnapshot } = require('./sourceAdapter');
 const { buildReviewDirectory } = require('../peopleSync/reviewContext');
 
 const API = 'https://api.planningcenteronline.com/people/v2';
@@ -106,6 +106,60 @@ test('fetches every List member page while keeping household-only context separa
     `${API}/lists/42/people?per_page=100&include=households.people,field_data`,
     'https://api.planningcenteronline.com/people/v2/lists/42/people?page=2',
   ]);
+});
+
+test('fetches every Planning Center person page as one normalized all-people snapshot', async () => {
+  const calls = [];
+  const allPeopleUrl = `${API}/people?per_page=100&include=households.people,field_data`;
+  const snapshot = await fetchPlanningCenterAllSnapshot({
+    accessToken: 'secret',
+    request: async ({ url, method }) => {
+      calls.push({ url, method });
+      if (url === allPeopleUrl) return response(200, {
+        data: [person('p1', { fieldDataIds: ['fd1'] })],
+        included: [
+          { type: 'FieldDatum', id: 'fd1', attributes: { value: 'Soprano' }, relationships: { field_definition: { data: { id: 'choir' } } } },
+          { type: 'Household', id: 'h1', attributes: { name: 'Lovelace Household', primary_contact_id: 'p1' } },
+        ],
+        links: { next: `${API}/people?page=2&per_page=100&include=households.people,field_data` },
+      });
+      if (url === `${API}/people?page=2&per_page=100&include=households.people,field_data`) return response(200, {
+        data: [person('p2', { firstName: 'Grace', lastName: 'Hopper' })],
+        included: [{ type: 'Household', id: 'h1', attributes: { name: 'Lovelace Household', primary_contact_id: 'p1' } }],
+        links: { next: null },
+      });
+      return undefined;
+    },
+  });
+
+  assert.deepEqual(snapshot.source, {
+    kind: 'all', externalId: 'all', name: 'Everyone', memberCount: 2, providerRefreshedAt: null,
+  });
+  assert.equal(snapshot.complete, true);
+  assert.deepEqual(snapshot.memberExternalIds, ['p1', 'p2']);
+  assert.deepEqual(snapshot.people.map((member) => member.id), ['p1', 'p2']);
+  assert.equal(snapshot.people[0].attributes.fieldValues.choir[0], 'Soprano');
+  assert.deepEqual(snapshot.families, [
+    { id: 'h1', name: 'Lovelace Household', memberExternalIds: ['p1', 'p2'], primaryContactExternalId: 'p1' },
+  ]);
+  assert.deepEqual(calls.map((call) => call.url), [
+    allPeopleUrl,
+    `${API}/people?page=2&per_page=100&include=households.people,field_data`,
+  ]);
+  assert.ok(calls.every((call) => call.method === 'GET'));
+});
+
+test('fails closed instead of returning accumulated people when an all-people page is malformed', async () => {
+  await assert.rejects(
+    () => fetchPlanningCenterAllSnapshot({
+      accessToken: 'secret',
+      request: async () => response(200, {
+        data: [{ type: 'Person', id: 'p1', attributes: {} }, { type: 'Household', id: 'h1', attributes: {} }],
+        links: { next: null },
+      }),
+    }),
+    (error) => error.code === 'SYNC_SOURCE_INCOMPLETE'
+  );
 });
 
 test('fails closed when List resolution is absent, invalid, archived, or not a List', async () => {

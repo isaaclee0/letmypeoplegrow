@@ -1,5 +1,5 @@
 const REQUIRED = [
-  'validateConnection', 'listSources', 'fetchSourceSnapshot', 'isLifecycleEligible',
+  'validateConnection', 'listSources', 'fetchSourceSnapshot', 'fetchImportSnapshot', 'isLifecycleEligible',
 ];
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const ALLOWED_KEYS = new Set(['provider', ...REQUIRED]);
