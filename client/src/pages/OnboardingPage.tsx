@@ -4,11 +4,9 @@ import { useForm } from 'react-hook-form';
 import { authAPI, onboardingAPI, integrationsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { CheckIcon, MapPinIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import PlanningCenterBatchEditor from '../components/planningCenter/PlanningCenterBatchEditor';
-import PlanningCenterSyncReview from '../components/planningCenter/PlanningCenterSyncReview';
 import PCOCheckinImport from '../components/PCOCheckinImport';
-import type { PeopleSyncBatch } from '../components/peopleSync/types';
-import ElvantoOnboarding, { type ElvantoOnboardingStep } from '../components/elvanto/ElvantoOnboarding';
+import ElvantoOnboarding from '../components/elvanto/ElvantoOnboarding';
+import OnboardingPeopleImport from '../components/peopleImport/OnboardingPeopleImport';
 
 interface SetupForm {
   churchName: string;
@@ -26,12 +24,7 @@ interface LocationResult {
 }
 
 type Step = 'form' | 'code' | 'choose-path' |
-  'pco-people' | 'pco-review' | 'pco-gatherings' |
-  'elvanto-connect' | 'elvanto-batch' | 'elvanto-review' | 'elvanto-authority';
-
-const elvantoSteps: ElvantoOnboardingStep[] = [
-  'elvanto-connect', 'elvanto-batch', 'elvanto-review', 'elvanto-authority',
-];
+  'pco-people' | 'pco-gatherings' | 'elvanto-connect';
 
 const OnboardingPage: React.FC = () => {
   const [step, setStep] = useState<Step>('form');
@@ -44,7 +37,6 @@ const OnboardingPage: React.FC = () => {
   const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [locationSearching, setLocationSearching] = useState(false);
-  const [firstBatch, setFirstBatch] = useState<PeopleSyncBatch | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [checkinProbe, setCheckinProbe] = useState<'probing' | 'available' | 'unavailable'>('probing');
   const [showCheckinImport, setShowCheckinImport] = useState(false);
@@ -206,17 +198,6 @@ const OnboardingPage: React.FC = () => {
 
   const finishOnboarding = () => {
     navigate('/app/gatherings');
-  };
-
-  // The batch is created/saved by PlanningCenterBatchEditor itself. Advance to
-  // the review step instead of auto-applying blindly — the admin reviews
-  // ambiguous matches, visitor promotions, and family name updates in the same
-  // screen Settings uses, then explicitly applies (or continues without
-  // applying; the batch is saved regardless and can be run later from
-  // Settings).
-  const onFirstBatchSaved = (batch: PeopleSyncBatch) => {
-    setFirstBatch(batch);
-    setStep('pco-review');
   };
 
   return (
@@ -387,36 +368,16 @@ const OnboardingPage: React.FC = () => {
                 Start fresh
               </button>
             </div>
-          ) : elvantoSteps.includes(step as ElvantoOnboardingStep) ? (
+          ) : step === 'elvanto-connect' ? (
             <ElvantoOnboarding
-              step={step as ElvantoOnboardingStep}
-              onStepChange={setStep}
               onContinueToGatherings={finishOnboarding}
             />
           ) : step === 'pco-people' ? (
-            <div className="space-y-4">
-              <p className="text-sm text-gray-700">Choose which Planning Center people to import, and optionally assign them to a gathering.</p>
-              <PlanningCenterBatchEditor
-                batch={null}
-                onSaved={onFirstBatchSaved}
-                onCancel={() => setStep('pco-gatherings')}
-              />
-            </div>
-          ) : step === 'pco-review' ? (
-            <div className="space-y-4">
-              <p className="text-sm text-gray-700">
-                Review Planning Center's selected List before continuing. Applying this review promotes the proposed people source and starts the first sync safely.
-              </p>
-              {firstBatch !== null && (
-                <PlanningCenterSyncReview
-                  connected={true}
-                  batchId={firstBatch.id}
-                  batchName={firstBatch.name}
-                  sourceName={(firstBatch.draftSource || firstBatch.source)?.name}
-                  onApplied={() => setStep('pco-gatherings')}
-                />
-              )}
-            </div>
+            <OnboardingPeopleImport
+              provider="planning_center"
+              onComplete={() => setStep('pco-gatherings')}
+              onSkip={() => setStep('pco-gatherings')}
+            />
           ) : step === 'pco-gatherings' ? (
             <div className="space-y-4">
               <p className="text-sm text-gray-700">

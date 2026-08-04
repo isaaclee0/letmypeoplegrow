@@ -1,26 +1,8 @@
-import React, { useEffect, useReducer, useRef, useState } from 'react';
-import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
-import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
-import SyncReview from '../peopleSync/SyncReview';
-import {
-  tagLegacyPeopleReview,
-  type AuthoritySwitchReview,
-  type EstablishedLinkCorrection,
-  type PeopleReviewToken,
-  type PeopleSyncBatch,
-  type PeopleSyncOperationReview,
-  type PeopleSyncSelections,
-} from '../peopleSync/types';
-import {
-  cancelAuthorityPreviewWithRetry,
-  type AuthorityPreviewCancellation,
-} from '../peopleSync/authorityPreviewCancellation';
-
-export type ElvantoOnboardingStep = 'elvanto-connect' | 'elvanto-batch' | 'elvanto-review' | 'elvanto-authority';
+import React, { useReducer, useState } from 'react';
+import { integrationsAPI } from '../../services/api';
+import OnboardingPeopleImport from '../peopleImport/OnboardingPeopleImport';
 
 interface Props {
-  step: ElvantoOnboardingStep;
-  onStepChange: (step: ElvantoOnboardingStep) => void;
   onContinueToGatherings: () => void;
 }
 
@@ -40,61 +22,10 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-export default function ElvantoOnboarding({ step, onStepChange, onContinueToGatherings }: Props) {
+export default function ElvantoOnboarding({ onContinueToGatherings }: Props) {
   const [{ apiKey, connected }, dispatchConnection] = useReducer(reduceElvantoConnection, { apiKey: '', connected: false });
-  const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
-  const [batch, setBatch] = useState<PeopleSyncBatch | null>(null);
-  const [batchReview, setBatchReview] = useState<PeopleSyncOperationReview | null>(null);
-  const [authorityReview, setAuthorityReview] = useState<AuthoritySwitchReview | null>(null);
-  const [authorityStarted, setAuthorityStarted] = useState(false);
-  const [batchApplyCommitted, setBatchApplyCommitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const authorityPreviewGenerationRef = useRef(0);
-  const activeAuthorityReviewTokenRef = useRef<PeopleReviewToken<'authority_switch'> | null>(null);
-  const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
-
-  const cancelExactAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
-    const cancellation = cancelAuthorityPreviewWithRetry(preview);
-    void cancellation.then(
-      () => {
-        if (ownedAuthorityPreviewRef.current?.provider === preview.provider
-          && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
-          ownedAuthorityPreviewRef.current = null;
-        }
-      },
-      () => undefined,
-    );
-    return cancellation;
-  };
-
-  useEffect(() => () => {
-    authorityPreviewGenerationRef.current += 1;
-    activeAuthorityReviewTokenRef.current = null;
-    const ownedPreview = ownedAuthorityPreviewRef.current;
-    if (ownedPreview) {
-      void cancelExactAuthorityPreview(ownedPreview);
-    }
-  }, []);
-
-  const discardAuthorityPreviewResponse = (discardedReview: AuthoritySwitchReview) => {
-    if (!discardedReview.authorityPreviewId) return;
-    cancelExactAuthorityPreview({ provider: 'elvanto', authorityPreviewId: discardedReview.authorityPreviewId });
-  };
-
-  const loadSetup = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const gatheringsResponse = await gatheringsAPI.getAll();
-      setGatherings((gatheringsResponse.data.gatherings || []).map((item: { id: number; name: string }) => ({ id: item.id, name: item.name })));
-      onStepChange('elvanto-batch');
-    } catch {
-      setError('Elvanto is unavailable right now. Your connection was saved; retry when the provider is available.');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const connect = async () => {
     const key = apiKey.trim();
@@ -107,275 +38,48 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     try {
       await integrationsAPI.connectElvanto(key);
       dispatchConnection({ type: 'connected' });
-      await loadSetup();
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to connect to Elvanto.'));
-      setBusy(false);
-    }
-  };
-
-  const loadBatchReview = async (savedBatch: PeopleSyncBatch) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await elvantoSyncAPI.getBatchPlan(savedBatch.id);
-      setBatchReview(tagLegacyPeopleReview(response.data, 'people_sync'));
-    } catch (cause) {
-      setError(errorMessage(cause, 'Failed to prepare the Elvanto sync review.'));
     } finally {
       setBusy(false);
     }
   };
 
-  const saveBatch = (savedBatch: PeopleSyncBatch) => {
-    if (!savedBatch.draftSource || !savedBatch.needsSourceReview) {
-      setError('Elvanto did not create a reviewable people source draft. Please try again.');
-      return;
-    }
-    setBatch(savedBatch);
-    setBatchReview(null);
-    setBatchApplyCommitted(false);
-    onStepChange('elvanto-review');
-    void loadBatchReview(savedBatch);
-  };
-
-  const confirmAppliedBatch = async (): Promise<boolean> => {
-    if (!batch) return false;
-    try {
-      const refreshed = await elvantoSyncAPI.listBatches();
-      const promoted = refreshed.data.batches.find((candidate) => candidate.id === batch.id);
-      const expectedSource = batch.draftSource ?? batch.source;
-      if (!promoted || promoted.draftSource || !promoted.source || !expectedSource
-        || promoted.source.kind !== expectedSource.kind || promoted.source.externalId !== expectedSource.externalId) {
-        throw new Error('Promoted source was not returned.');
-      }
-      setBatch(promoted);
-      onStepChange('elvanto-authority');
-      return true;
-    } catch {
-      setError('Elvanto applied the review, but the promoted people source could not be confirmed. Refresh the source status to continue.');
-      return false;
-    }
-  };
-
-  const applyBatch = async (reviewToken: PeopleReviewToken<'people_sync'>, selections: PeopleSyncSelections) => {
-    if (!batch) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await elvantoSyncAPI.applyBatch(batch.id, { reviewToken, selections });
-      setBatchApplyCommitted(true);
-      await confirmAppliedBatch();
-    } catch (cause) {
-      setError(errorMessage(cause, 'Failed to apply the Elvanto source review.'));
-      throw cause;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const previewBatchLinkCorrections = async (
-    baseReviewToken: PeopleReviewToken<'people_sync'>,
-    linkCorrections: Record<string, EstablishedLinkCorrection>,
-  ) => {
-    if (!batch) throw new Error('The Elvanto batch is no longer available.');
-    const response = await elvantoSyncAPI.previewLinkCorrections(batch.id, {
-      baseReviewToken,
-      linkCorrections,
-    });
-    return tagLegacyPeopleReview(response.data, 'people_sync');
-  };
-
-  const retryAppliedBatchRefresh = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await confirmAppliedBatch();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const previewAuthority = async () => {
-    const generation = ++authorityPreviewGenerationRef.current;
-    const previousPreview = ownedAuthorityPreviewRef.current;
-    activeAuthorityReviewTokenRef.current = null;
-    setAuthorityStarted(true);
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await peopleSyncAPI.previewAuthority('elvanto');
-      const nextReview = tagLegacyPeopleReview(response.data, 'authority_switch');
-      if (generation !== authorityPreviewGenerationRef.current) {
-        discardAuthorityPreviewResponse(nextReview);
-        return;
-      }
-      if (previousPreview
-        && previousPreview.authorityPreviewId !== nextReview.authorityPreviewId) {
-        cancelExactAuthorityPreview(previousPreview);
-      }
-      ownedAuthorityPreviewRef.current = nextReview.authorityPreviewId
-        ? { provider: 'elvanto', authorityPreviewId: nextReview.authorityPreviewId }
-        : null;
-      activeAuthorityReviewTokenRef.current = nextReview.reviewToken;
-      setAuthorityReview(nextReview);
-    } catch (cause) {
-      if (generation !== authorityPreviewGenerationRef.current) return;
-      if (previousPreview) cancelExactAuthorityPreview(previousPreview);
-      setAuthorityReview(null);
-      setError(errorMessage(cause, 'Failed to prepare the Elvanto authority review.'));
-    } finally {
-      if (generation === authorityPreviewGenerationRef.current) setBusy(false);
-    }
-  };
-
-  const applyAuthority = async (reviewToken: PeopleReviewToken<'authority_switch'>, selections: PeopleSyncSelections) => {
-    if (activeAuthorityReviewTokenRef.current !== reviewToken) return;
-    const generation = ++authorityPreviewGenerationRef.current;
-    activeAuthorityReviewTokenRef.current = null;
-    setBusy(true);
-    try {
-      await peopleSyncAPI.applyAuthority('elvanto', reviewToken, selections);
-      if (generation !== authorityPreviewGenerationRef.current) return;
-      ownedAuthorityPreviewRef.current = null;
-      setAuthorityReview(null);
-      onContinueToGatherings();
-    } catch (cause) {
-      if (generation === authorityPreviewGenerationRef.current) {
-        activeAuthorityReviewTokenRef.current = reviewToken;
-      }
-      throw cause;
-    } finally {
-      if (generation === authorityPreviewGenerationRef.current) setBusy(false);
-    }
-  };
-
-  const cancelAuthorityReview = async () => {
-    if (busy || !authorityReview) return;
-    const generation = ++authorityPreviewGenerationRef.current;
-    const previewToCancel = ownedAuthorityPreviewRef.current;
-    const reviewToken = activeAuthorityReviewTokenRef.current;
-    activeAuthorityReviewTokenRef.current = null;
-    setBusy(true);
-    setError(null);
-
-    if (!previewToCancel) {
-      setAuthorityReview(null);
-      setAuthorityStarted(false);
-      setBusy(false);
-      return;
-    }
-
-    try {
-      await cancelExactAuthorityPreview(previewToCancel);
-    } catch (cause) {
-      if (generation !== authorityPreviewGenerationRef.current) return;
-      activeAuthorityReviewTokenRef.current = reviewToken;
-      setError(errorMessage(cause, 'Failed to cancel the Elvanto authority review.'));
-      return;
-    } finally {
-      if (generation === authorityPreviewGenerationRef.current) setBusy(false);
-    }
-    if (generation !== authorityPreviewGenerationRef.current) return;
-    setAuthorityReview(null);
-    setAuthorityStarted(false);
-  };
-
-  if (step === 'elvanto-connect') {
+  if (connected) {
     return (
-      <section className="space-y-4">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Connect Elvanto</h2>
-          <p className="mt-1 text-sm text-gray-600">Connect securely, then choose and review the people you want to bring into LMPG.</p>
-        </div>
-        {!connected ? <>
-          <label htmlFor="onboarding-elvanto-api-key" className="block text-sm font-medium text-gray-700">
-            Elvanto API key
-            <input
-              id="onboarding-elvanto-api-key"
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              onChange={(event) => dispatchConnection({ type: 'api-key-changed', value: event.target.value })}
-              className="mt-1 block w-full rounded-md border-gray-300"
-            />
-          </label>
-          <p className="text-xs text-gray-500">The key is encrypted after validation and is never displayed again.</p>
-        </> : <p className="text-sm text-green-700">Elvanto connected. Loading available people sources…</p>}
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <div className="flex flex-wrap gap-3">
-          {!connected ? (
-            <button type="button" onClick={() => void connect()} disabled={busy || !apiKey.trim()} className="rounded bg-primary-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-              {busy ? 'Connecting…' : 'Connect Elvanto'}
-            </button>
-          ) : (
-            <button type="button" onClick={() => void loadSetup()} disabled={busy} className="rounded bg-primary-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-              {busy ? 'Loading…' : 'Retry loading Elvanto'}
-            </button>
-          )}
-          <button type="button" onClick={onContinueToGatherings} disabled={busy} className="text-sm underline">Skip Elvanto</button>
-        </div>
-      </section>
-    );
-  }
-
-  if (step === 'elvanto-batch') {
-    return (
-      <section className="space-y-4">
-        <p className="text-sm text-gray-700">Choose one Elvanto Category or Group, then optionally assign those people to a gathering.</p>
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <ElvantoBatchEditor batch={null} gatherings={gatherings} onSaved={saveBatch} onCancel={onContinueToGatherings} />
-      </section>
-    );
-  }
-
-  if (step === 'elvanto-review') {
-    return (
-      <section className="space-y-4">
-        <p className="text-sm text-gray-700">Review every match and change before importing. Applying this review promotes the selected people source before you continue.</p>
-        {busy && <p className="text-sm text-gray-500">{batchApplyCommitted ? 'Confirming applied source…' : 'Preparing review…'}</p>}
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        {batchApplyCommitted ? (
-          <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-            <p role="status" className="text-sm text-amber-900">Sync applied. Confirm the promoted people source before continuing.</p>
-            <button type="button" onClick={() => void retryAppliedBatchRefresh()} disabled={busy} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-50">Retry source refresh</button>
-          </div>
-        ) : batchReview && (
-          <div role="region" aria-label="Elvanto onboarding batch sync review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
-            <SyncReview operationKind="people_sync" provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onPreviewCorrections={previewBatchLinkCorrections} onApply={applyBatch} applying={busy} />
-          </div>
-        )}
-        <div className="flex flex-wrap gap-3">
-          {error && batch && !batchApplyCommitted && <button type="button" onClick={() => void loadBatchReview(batch)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500">Refresh review</button>}
-        </div>
-      </section>
+      <OnboardingPeopleImport
+        provider="elvanto"
+        onComplete={onContinueToGatherings}
+        onSkip={onContinueToGatherings}
+      />
     );
   }
 
   return (
     <section className="space-y-4">
-      {!authorityStarted ? <>
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Keep LMPG aligned with Elvanto?</h2>
-          <p className="mt-1 text-sm text-gray-600">If enabled, linked names, child status, family membership and active status are managed in Elvanto.</p>
-        </div>
-        <div className="flex flex-col gap-3">
-          <button type="button" onClick={() => void previewAuthority()} className="rounded bg-primary-600 px-4 py-2 text-sm font-medium text-white">Use Elvanto as source of truth</button>
-          <button type="button" onClick={onContinueToGatherings} className="text-sm underline">Not now</button>
-        </div>
-      </> : <>
-        {busy && <p className="text-sm text-gray-500">Preparing authority review…</p>}
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        {authorityReview && (
-          <div role="region" aria-label="Elvanto onboarding authority review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
-            <SyncReview operationKind="authority_switch" provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} interactionDisabled={busy} />
-            <button type="button" onClick={() => void cancelAuthorityReview()} disabled={busy} className="mt-3 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50">
-              Cancel authority change
-            </button>
-          </div>
-        )}
-        {error && <button type="button" onClick={() => void previewAuthority()} disabled={busy} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50">Refresh authority review</button>}
-      </>}
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">Connect Elvanto</h2>
+        <p className="mt-1 text-sm text-gray-600">Connect securely, then choose and review the people you want to bring into LMPG.</p>
+      </div>
+      <label htmlFor="onboarding-elvanto-api-key" className="block text-sm font-medium text-gray-700">
+        Elvanto API key
+        <input
+          id="onboarding-elvanto-api-key"
+          type="password"
+          autoComplete="new-password"
+          value={apiKey}
+          onChange={(event) => dispatchConnection({ type: 'api-key-changed', value: event.target.value })}
+          className="mt-1 block w-full rounded-md border-gray-300"
+        />
+      </label>
+      <p className="text-xs text-gray-500">The key is encrypted after validation and is never displayed again.</p>
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      <div className="flex flex-wrap gap-3">
+        <button type="button" onClick={() => void connect()} disabled={busy || !apiKey.trim()} className="rounded bg-primary-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+          {busy ? 'Connecting…' : 'Connect Elvanto'}
+        </button>
+        <button type="button" onClick={onContinueToGatherings} disabled={busy} className="text-sm underline">Skip Elvanto</button>
+      </div>
     </section>
   );
 }
