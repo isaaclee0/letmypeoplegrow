@@ -10,6 +10,12 @@ const batchRepository = require('../../services/peopleSync/batchRepository');
 const { resolveVisibleSource } = require('../../services/peopleSync/sourceSelection');
 const { SOURCE_KINDS_BY_PROVIDER } = require('../../services/peopleSync/sourceModel');
 const {
+  deriveBatchOperationalState,
+  isBatchReviewable,
+  isBatchRunnable,
+} = require('../../services/peopleSync/batchOperationalState');
+const authority = require('../../services/peopleSync/authority');
+const {
   CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, assertPlanningCenterBatchOperational,
 } = require('../../services/peopleSync/legacyBatch');
 
@@ -27,9 +33,19 @@ function safeSource(source) {
   };
 }
 
-function safeBatch(batch) {
-  if (!batch) return null;
+function withOperationalState(batch, authorityProvider) {
+  const operationalState = deriveBatchOperationalState(batch, authorityProvider);
   return {
+    ...batch,
+    operationalState,
+    reviewable: isBatchReviewable(batch, authorityProvider),
+    runnable: isBatchRunnable(batch, authorityProvider),
+  };
+}
+
+function safeBatch(batch, authorityProvider) {
+  if (!batch) return null;
+  return withOperationalState({
     id: batch.id,
     provider: batch.provider,
     name: batch.name,
@@ -50,7 +66,7 @@ function safeBatch(batch) {
     scheduleEnabled: Boolean(batch.scheduleEnabled),
     scheduleFrequency: batch.scheduleFrequency,
     scheduleDay: batch.scheduleDay,
-  };
+  }, authorityProvider);
 }
 
 function parseBatchId(value) {
@@ -99,6 +115,7 @@ function validSourceBody(body, provider) {
 }
 
 const defaultDeps = {
+  getAuthority: authority.getAuthority,
   listSources: defaultListSources,
   resolveVisibleSource,
   getBatch: batchRepository.getBatch,
@@ -135,7 +152,8 @@ function createSourceBuilderRouter(overrides = {}) {
       assertPlanningCenterBatchOperational(existing);
       const resolved = await deps.resolveVisibleSource({ churchId, provider, sourceKind: req.body.sourceKind, sourceExternalId: req.body.sourceExternalId });
       const batch = await deps.saveSourceDraft({ churchId, provider, batchId, source: { kind: resolved.kind, externalId: resolved.externalId, name: resolved.name } });
-      return res.json({ success: true, batch: safeBatch(batch) });
+      const authorityState = await deps.getAuthority(churchId);
+      return res.json({ success: true, batch: safeBatch(batch, authorityState.active) });
     } catch (error) { return respondError(res, error, 'save sync source draft'); }
   });
 
@@ -148,10 +166,12 @@ function createSourceBuilderRouter(overrides = {}) {
       const existing = await deps.getBatch(churchId, provider, batchId);
       if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
       assertPlanningCenterBatchOperational(existing);
-      return res.json({ success: true, batch: safeBatch(await deps.discardSourceDraft(churchId, provider, batchId)) });
+      const batch = await deps.discardSourceDraft(churchId, provider, batchId);
+      const authorityState = await deps.getAuthority(churchId);
+      return res.json({ success: true, batch: safeBatch(batch, authorityState.active) });
     } catch (error) { return respondError(res, error, 'discard sync source draft'); }
   });
   return router;
 }
 
-module.exports = { createSourceBuilderRouter, createSourceBuilderJsonParser: createJsonParser, safeSource, safeBatch, defaultDeps, MAX_BODY_BYTES };
+module.exports = { createSourceBuilderRouter, createSourceBuilderJsonParser: createJsonParser, safeSource, safeBatch, withOperationalState, defaultDeps, MAX_BODY_BYTES };

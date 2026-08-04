@@ -269,6 +269,66 @@ test('batch creation rejects unknown local-rule fields', async () => {
   });
 });
 
+test('batch list, creation, and update expose a prepared operational state', async () => {
+  const preparedBatch = {
+    id: 4,
+    provider: 'elvanto',
+    enabled: true,
+    source: { kind: 'elvanto_category', externalId: 'cat-1', name: 'Members' },
+    needsSourceReview: false,
+    scheduleFrequency: 'weekly',
+    scheduleDay: 1,
+  };
+  await withServer({
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
+    listBatches: async () => [preparedBatch],
+    getBatch: async () => preparedBatch,
+    createBatch: async () => preparedBatch,
+    updateBatch: async () => preparedBatch,
+  }, async (base) => {
+    const list = await request(`${base}/sync-batches`, undefined, 'GET');
+    const created = await request(`${base}/sync-batches`, {
+      sourceKind: 'elvanto_category', sourceExternalId: 'cat-1',
+    });
+    const updated = await request(`${base}/sync-batches/4`, { enabled: true }, 'PUT');
+
+    for (const response of [list.body.batches[0], created.body.batch, updated.body.batch]) {
+      assert.deepEqual({
+        operationalState: response.operationalState,
+        reviewable: response.reviewable,
+        runnable: response.runnable,
+      }, {
+        operationalState: 'prepared',
+        reviewable: false,
+        runnable: false,
+      });
+    }
+  });
+});
+
+test('run-now rejects a prepared batch before creating its review', async () => {
+  let reviews = 0;
+  await withServer({
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
+    getBatch: async () => ({
+      id: 4, provider: 'elvanto', enabled: true,
+      source: { kind: 'elvanto_category', externalId: 'cat-1', name: 'Members' },
+      needsSourceReview: false,
+    }),
+    buildReview: async () => { reviews += 1; return {}; },
+  }, async (base) => {
+    const response = await request(`${base}/sync-batches/4/run-now`, {});
+    assert.deepEqual(response, {
+      status: 409,
+      body: {
+        error: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+        code: 'SYNC_BATCH_PREPARED',
+      },
+    });
+  });
+  assert.equal(reviews, 0);
+});
+
 test('batch plan passes the v2 decision contract and apply forwards legacy and v2 selections verbatim', async () => {
   const applyCalls = [];
   await withServer({

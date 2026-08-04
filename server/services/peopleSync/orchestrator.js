@@ -52,6 +52,7 @@ const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
 const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
 const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRetiredPlanningCenterBatch } = require('./legacyBatch');
+const { assertBatchReviewable, assertBatchRunnable } = require('./batchOperationalState');
 const backgroundCheckSync = require('../planningCenter/backgroundCheckSync');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
@@ -77,6 +78,14 @@ function assertProvider(provider) {
 function assertChurchId(churchId) {
   if (!churchId || typeof churchId !== 'string') {
     throw new OrchestratorError('SYNC_CHURCH_REQUIRED', 'A churchId is required', 400);
+  }
+}
+
+function assertOperationalBatch(assertion, batch, authorityProvider) {
+  try {
+    assertion(batch, authorityProvider);
+  } catch (error) {
+    throw new OrchestratorError(error.code, error.message, error.status);
   }
 }
 
@@ -924,6 +933,10 @@ async function buildReview({
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  if (batchId !== null && batchId !== undefined) {
+    const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+    assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
+  }
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const authoritative = pre.authorityState.active === provider;
@@ -1186,6 +1199,10 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const isAuthoritySwitch = pre.authorityState.pending === provider;
+  const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  if (batchId !== null && batchId !== undefined && !isAuthoritySwitch) {
+    assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
+  }
   const pendingAuthorityIntent = isAuthoritySwitch
     ? await deps.getAuthorityPreviewIntent(churchId)
     : null;
@@ -1201,8 +1218,6 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     ...(isAuthoritySwitch ? { authorityPreviewId } : {}),
   };
   const sourceExpectations = sourceExpectationsFor(reviewBatches);
-  const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
 
   // Everything that can still legitimately fail THIS run (fetch,
@@ -1351,6 +1366,8 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const targetBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  assertOperationalBatch(assertBatchRunnable, targetBatch, pre.authorityState.active);
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   if (pre.authorityState.active !== provider) {
     throw new OrchestratorError(

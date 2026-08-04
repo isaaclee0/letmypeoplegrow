@@ -1411,6 +1411,42 @@ test('a complete empty source is accepted', async () => {
   assert.equal(finished[0].status, 'review_required');
 });
 
+test('a prepared batch rejects ordinary manual review before starting an audit run or fetching the provider', async () => {
+  let fetches = 0;
+  const { deps, events } = makeDeps({
+    authorityState: { active: 'planning_center', pending: null },
+    fetchSourceSnapshot: async () => { fetches += 1; return sourceSnapshot(source('group-1')); },
+  });
+
+  await assert.rejects(
+    buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_BATCH_PREPARED' && error.status === 409 &&
+      error.message === 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.'
+  );
+  assert.equal(events.includes('startRun'), false);
+  assert.equal(fetches, 0);
+});
+
+test('a prepared batch rejects ordinary reviewed apply before starting an audit run or fetching the provider', async () => {
+  let fetches = 0;
+  const { deps, events } = makeDeps({
+    authorityState: { active: 'planning_center', pending: null },
+    fetchSourceSnapshot: async () => { fetches += 1; return sourceSnapshot(source('group-1')); },
+  });
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      reviewToken: 'review-token', selections: {}, userId: 5,
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_BATCH_PREPARED' && error.status === 409
+  );
+  assert.equal(events.includes('startRun'), false);
+  assert.equal(fetches, 0);
+});
+
 for (const failure of [
   { name: 'missing', error: Object.assign(new Error('gone'), { code: 'SYNC_SOURCE_UNAVAILABLE' }) },
   { name: 'incomplete', snapshot: sourceSnapshot(source('group-1'), { complete: false }) },

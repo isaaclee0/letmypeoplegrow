@@ -26,6 +26,12 @@ function parseBatchId(raw) {
 }
 
 function respondWithError(res, error, label) {
+  if (error?.code === 'SYNC_BATCH_PREPARED') {
+    return res.status(409).json({
+      error: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+      code: error.code,
+    });
+  }
   if (error instanceof RouteTimeoutError) {
     return res.status(503).json({ error: 'Planning Center sync timed out. Please try again.', code: error.code });
   }

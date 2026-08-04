@@ -35,6 +35,7 @@ async function request(url, options = {}) {
 
 function deps(extra = {}) {
   return {
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
     listSources: async () => [source, { ...source, credentials: 'must not leak', rawRecords: [{ id: 'secret' }] }],
     resolveVisibleSource: async () => source,
     getBatch: async () => ({ id: 8, provider: 'planning_center', source: null, draftSource: null, sourceRevision: 1, needsSourceReview: false, initialSourceReviewPending: false, credential: 'secret' }),
@@ -76,13 +77,22 @@ test('PUT source draft accepts only source identity, resolves its name server-si
   const saveCalls = [];
   await withServer(deps({
     resolveVisibleSource: async (input) => { resolveCalls.push(input); return source; },
-    saveSourceDraft: async (input) => { saveCalls.push(input); return { id: 8, provider: 'planning_center', source: null, draftSource: { kind: source.kind, externalId: source.externalId, name: source.name }, sourceRevision: 1, needsSourceReview: true, initialSourceReviewPending: true }; },
+    saveSourceDraft: async (input) => { saveCalls.push(input); return { id: 8, provider: 'planning_center', enabled: true, source: null, draftSource: { kind: source.kind, externalId: source.externalId, name: source.name }, sourceRevision: 1, needsSourceReview: true, initialSourceReviewPending: true }; },
   }), ADMIN, async (base) => {
     const response = await request(`${base}/planning_center/sync-batches/8/source-draft`, {
       method: 'PUT', body: { sourceKind: source.kind, sourceExternalId: source.externalId },
     });
     assert.equal(response.status, 200);
     assert.equal(response.body.batch.draftSource.name, 'Sunday people');
+    assert.deepEqual({
+      operationalState: response.body.batch.operationalState,
+      reviewable: response.body.batch.reviewable,
+      runnable: response.body.batch.runnable,
+    }, {
+      operationalState: 'source_review_required',
+      reviewable: true,
+      runnable: false,
+    });
     assert.equal(JSON.stringify(response.body).includes('credential'), false);
   });
   assert.deepEqual(resolveCalls, [{ churchId: ADMIN.church_id, provider: 'planning_center', sourceKind: source.kind, sourceExternalId: source.externalId }]);

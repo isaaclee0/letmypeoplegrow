@@ -36,6 +36,9 @@ const legacyCredential = require('../../services/elvanto/legacyCredential');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 const { resolveVisibleSource } = require('../../services/peopleSync/sourceSelection');
 const { SOURCE_KINDS_BY_PROVIDER } = require('../../services/peopleSync/sourceModel');
+const authority = require('../../services/peopleSync/authority');
+const { assertBatchRunnable } = require('../../services/peopleSync/batchOperationalState');
+const { withOperationalState } = require('./sourceBuilder');
 
 const { OrchestratorError } = orchestrator;
 
@@ -150,6 +153,7 @@ const defaultDeps = {
   getOrMigrateCredentials: legacyCredential.getOrMigrateCredentials,
   replaceConnection: legacyCredential.replaceConnection,
   disconnectConnection: legacyCredential.disconnectConnection,
+  getAuthority: authority.getAuthority,
   listBatches: batchRepository.listBatches,
   getBatch: batchRepository.getBatch,
   createBatch: batchRepository.createBatch,
@@ -191,6 +195,12 @@ function isElvantoAuthError(err) {
 }
 
 function respondWithError(res, err, { context, logLabel } = {}) {
+  if (err?.code === 'SYNC_BATCH_PREPARED') {
+    return res.status(409).json({
+      error: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+      code: err.code,
+    });
+  }
   if (err?.code === 'SYNC_SOURCE_UNAVAILABLE') {
     return res.status(409).json({ error: 'The requested sync source is unavailable. Reconnect Elvanto and try again.', code: err.code });
   }
@@ -331,8 +341,11 @@ function createElvantoRouter(overrides = {}) {
 
   router.get('/sync-batches', async (req, res) => {
     try {
-      const batches = await deps.listBatches(req.user.church_id, PROVIDER);
-      res.json({ success: true, batches });
+      const [batches, authorityState] = await Promise.all([
+        deps.listBatches(req.user.church_id, PROVIDER),
+        deps.getAuthority(req.user.church_id),
+      ]);
+      res.json({ success: true, batches: batches.map((batch) => withOperationalState(batch, authorityState.active)) });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto GET /sync-batches' });
     }
@@ -347,12 +360,15 @@ function createElvantoRouter(overrides = {}) {
 
       const fields = extractBatchFields(body);
       const source = await deps.resolveVisibleSource({ churchId, provider: PROVIDER, sourceKind: body.sourceKind, sourceExternalId: body.sourceExternalId });
-      const batch = await deps.createBatch({
-        churchId, provider: PROVIDER, ...fields,
-        name: source.name,
-        initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
-      });
-      res.json({ success: true, batch });
+      const [batch, authorityState] = await Promise.all([
+        deps.createBatch({
+          churchId, provider: PROVIDER, ...fields,
+          name: source.name,
+          initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
+        }),
+        deps.getAuthority(churchId),
+      ]);
+      res.json({ success: true, batch: withOperationalState(batch, authorityState.active) });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /sync-batches' });
     }
@@ -371,8 +387,11 @@ function createElvantoRouter(overrides = {}) {
       if (bodyError) return res.status(400).json({ error: bodyError });
 
       const fields = extractBatchFields(body);
-      const batch = await deps.updateBatch({ churchId, provider: PROVIDER, batchId, ...fields });
-      res.json({ success: true, batch });
+      const [batch, authorityState] = await Promise.all([
+        deps.updateBatch({ churchId, provider: PROVIDER, batchId, ...fields }),
+        deps.getAuthority(churchId),
+      ]);
+      res.json({ success: true, batch: withOperationalState(batch, authorityState.active) });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto PUT /sync-batches/:id' });
     }
@@ -462,6 +481,16 @@ function createElvantoRouter(overrides = {}) {
     const batchId = parseBatchId(req.params.id);
     if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
     try {
+      const [batch, authorityState] = await Promise.all([
+        deps.getBatch(churchId, PROVIDER, batchId),
+        deps.getAuthority(churchId),
+      ]);
+      if (!batch) throw new OrchestratorError('SYNC_BATCH_NOT_FOUND', `Batch ${batchId} not found for ${PROVIDER}`, 404);
+      try {
+        assertBatchRunnable(batch, authorityState.active);
+      } catch (error) {
+        throw new OrchestratorError(error.code, error.message, error.status);
+      }
       const result = await withTimeout(
         deps.buildReview({ churchId, provider: PROVIDER, batchId, trigger: 'manual' }),
         deps.routeTimeoutMs

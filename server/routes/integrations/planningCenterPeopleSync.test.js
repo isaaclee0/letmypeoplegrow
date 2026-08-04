@@ -202,6 +202,26 @@ test('GET batch plan passes the decision contract version through without applyi
   assert.equal(applyCalls, 0);
 });
 
+test('GET batch plan exposes a prepared operational-state conflict', async () => {
+  await withServer({
+    buildReview: async () => {
+      throw Object.assign(
+        new Error('This batch is prepared for a different people source. Switch source of truth before reviewing or running it.'),
+        { code: 'SYNC_BATCH_PREPARED', status: 409 }
+      );
+    },
+  }, async (base) => {
+    const response = await requestJson(`${base}/sync-batches/12/plan`);
+    assert.deepEqual(response, {
+      status: 409,
+      body: {
+        error: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
+        code: 'SYNC_BATCH_PREPARED',
+      },
+    });
+  });
+});
+
 test('POST batch apply rejects a direct blind apply and forwards legacy and v2 selections verbatim', async () => {
   const calls = [];
   await withServer({
