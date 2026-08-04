@@ -47,6 +47,19 @@ test('fetchImportSnapshot delegates a selected Category to the existing source r
   });
 });
 
+test('fetchImportSnapshot delegates a selected Group to the existing source read', async () => {
+  let received;
+  const snapshot = { provider: 'elvanto', source: { kind: 'elvanto_group', externalId: 'group-1' }, complete: true, people: [] };
+  const value = adapter({ fetchSourceSnapshot: async (options) => { received = options; return snapshot; } });
+
+  assert.equal(await value.fetchImportSnapshot({
+    credentials: { apiKey: 'secret' }, selection: { kind: 'elvanto_group', externalId: 'group-1' }, signal: 'abort-signal',
+  }), snapshot);
+  assert.deepEqual(received, {
+    apiKey: 'secret', sourceKind: 'elvanto_group', sourceExternalId: 'group-1', signal: 'abort-signal',
+  });
+});
+
 test('listSources delegates just the configured Elvanto credentials', async () => {
   let received;
   const value = adapter({ listSources: async (options) => {
