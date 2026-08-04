@@ -165,6 +165,30 @@ test('source context snapshots are digested in numeric batch order and bind sour
   }
 });
 
+test('authority source context canonicalizes promotions by batch ID', () => {
+  const promotions = [
+    { batchId: 20, expectedBaseRevision: 7, expectedDraftDigest: '2'.repeat(64) },
+    { batchId: 3, expectedBaseRevision: 4, expectedDraftDigest: '3'.repeat(64) },
+  ];
+  const baseline = digestPlan(plan({ sourceContext: {
+    participatingBatchSourceDigest: 'a'.repeat(64),
+    promotions,
+    snapshots: [],
+  } }));
+  const reordered = digestPlan(plan({ sourceContext: {
+    participatingBatchSourceDigest: 'a'.repeat(64),
+    promotions: [...promotions].reverse(),
+    snapshots: [],
+  } }));
+
+  assert.equal(reordered, baseline);
+  assert.notEqual(digestPlan(plan({ sourceContext: {
+    participatingBatchSourceDigest: 'b'.repeat(64),
+    promotions,
+    snapshots: [],
+  } })), baseline);
+});
+
 test('canonical JSON rejects non-finite numbers instead of collapsing them to null', () => {
   assert.throws(() => digestPlan(plan({ updateManagedFields: [{ id: 'bad', localValue: NaN }] })),
     /finite number/i);
@@ -227,6 +251,19 @@ test('review token is bound to its operation kind', () => withSecret('review-sec
   }).ok, false);
   assert.equal(verifyReviewToken(token, {
     operationKind: 'people_import', churchId: 'c1', provider: 'elvanto',
+    batchId: null, planDigest,
+  }).ok, true);
+
+  const authorityToken = createReviewToken({
+    operationKind: 'authority_switch', churchId: 'c1', provider: 'elvanto',
+    batchId: null, planDigest, expiresInSeconds: 60,
+  });
+  assert.equal(verifyReviewToken(authorityToken, {
+    operationKind: 'people_sync', churchId: 'c1', provider: 'elvanto',
+    batchId: null, planDigest,
+  }).ok, false);
+  assert.equal(verifyReviewToken(authorityToken, {
+    operationKind: 'authority_switch', churchId: 'c1', provider: 'elvanto',
     batchId: null, planDigest,
   }).ok, true);
 }));

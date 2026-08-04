@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const INVALID = Object.freeze({ ok: false, code: 'SYNC_REVIEW_INVALID' });
 const EXPIRED = Object.freeze({ ok: false, code: 'SYNC_REVIEW_EXPIRED' });
 const STALE = Object.freeze({ ok: false, code: 'SYNC_PLAN_STALE' });
-const OPERATION_KINDS = new Set(['people_sync', 'people_import']);
+const OPERATION_KINDS = new Set(['people_sync', 'people_import', 'authority_switch']);
 const VOLATILE_PATHS = new Set([
   'snapshot.fetchedAt',
   // A provider's fetch watermark (e.g. Elvanto's max(date_modified) across
@@ -38,7 +38,7 @@ function canonicalize(value, path = []) {
   }
   if (Array.isArray(value)) {
     const normalized = value.map((item, index) => canonicalize(item, [...path, String(index)]));
-    if (path.join('.') === 'sourceContext.snapshots') {
+    if (path.join('.') === 'sourceContext.snapshots' || path.join('.') === 'sourceContext.promotions') {
       normalized.sort((left, right) => Number(left?.batchId) - Number(right?.batchId) ||
         JSON.stringify(left).localeCompare(JSON.stringify(right)));
     }

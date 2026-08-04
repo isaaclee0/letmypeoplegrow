@@ -5,6 +5,8 @@ const {
   normalizeProviderSource,
   digestSourceIdentity,
   digestSourceSnapshot,
+  effectiveAuthorityReviewBatches,
+  digestAuthorityReviewSourceSet,
 } = require('./sourceModel');
 
 const VALID_SOURCES = {
@@ -93,5 +95,94 @@ test('snapshot digest changes when its matching inputs change', () => {
     snapshot({ families: [{ ...base.families[0], primaryContactId: '2' }, base.families[1]] }),
   ]) {
     assert.notEqual(digestSourceSnapshot(base), digestSourceSnapshot(changed));
+  }
+});
+
+function authorityBatch(overrides = {}) {
+  return {
+    id: 1,
+    provider: 'elvanto',
+    enabled: true,
+    sourceRevision: 4,
+    source: { kind: 'elvanto_group', externalId: 'active', name: 'Active' },
+    draftSource: null,
+    draftSourceBaseRevision: null,
+    ...overrides,
+  };
+}
+
+test('authority review candidates prefer drafts, exclude disabled batches, and sort by numeric batch ID', () => {
+  const initialDraft = authorityBatch({
+    id: 20,
+    source: null,
+    draftSource: { kind: 'elvanto_group', externalId: 'initial', name: 'Initial' },
+    draftSourceBaseRevision: 4,
+  });
+  const replacementDraft = authorityBatch({
+    id: 3,
+    source: { kind: 'elvanto_group', externalId: 'old', name: 'Old' },
+    draftSource: { kind: 'elvanto_group', externalId: 'replacement', name: 'Replacement' },
+    draftSourceBaseRevision: 4,
+  });
+  const disabled = authorityBatch({ id: 2, enabled: false });
+
+  const candidates = effectiveAuthorityReviewBatches([initialDraft, disabled, replacementDraft]);
+
+  assert.deepEqual(candidates.map(({ id, effectiveSource, effectiveSourceIsDraft }) => ({
+    id, externalId: effectiveSource.externalId, effectiveSourceIsDraft,
+  })), [
+    { id: 3, externalId: 'replacement', effectiveSourceIsDraft: true },
+    { id: 20, externalId: 'initial', effectiveSourceIsDraft: true },
+  ]);
+});
+
+test('authority review candidates reject missing, malformed, and duplicate effective sources', () => {
+  const duplicate = { kind: 'elvanto_group', externalId: ' shared ', name: 'Shared' };
+  for (const batches of [
+    [authorityBatch({ source: null })],
+    [authorityBatch({ source: { kind: 'elvanto_group', externalId: '', name: 'Empty' } })],
+    [authorityBatch({ source: { kind: 'planning_center_list', externalId: 'wrong', name: 'Wrong' } })],
+    [authorityBatch({ id: 1, source: duplicate }), authorityBatch({
+      id: 2, source: { kind: 'elvanto_group', externalId: 'shared', name: 'Duplicate' },
+    })],
+  ]) {
+    assert.throws(() => effectiveAuthorityReviewBatches(batches), { code: 'SYNC_SOURCE_INVALID' });
+  }
+});
+
+test('authority source-set digest binds participating batch state, source identity, revision, and promotions', () => {
+  const draft = { kind: 'elvanto_group', externalId: 'draft', name: 'Draft' };
+  const batches = [
+    authorityBatch({ id: 20, sourceRevision: 7, draftSource: draft, draftSourceBaseRevision: 7 }),
+    authorityBatch({ id: 3, source: { kind: 'elvanto_category', externalId: 'members', name: 'Members' } }),
+  ];
+  const promotions = [{
+    batchId: 20,
+    expectedBaseRevision: 7,
+    expectedDraftDigest: digestSourceIdentity(draft),
+  }];
+  const baseline = digestAuthorityReviewSourceSet(
+    effectiveAuthorityReviewBatches(batches),
+    promotions,
+  );
+
+  assert.equal(digestAuthorityReviewSourceSet(
+    effectiveAuthorityReviewBatches([...batches].reverse()),
+    [...promotions].reverse(),
+  ), baseline);
+
+  const changedCases = [
+    [[{ ...batches[0], id: 21 }, batches[1]], promotions],
+    [[{ ...batches[0], enabled: false }, batches[1]], []],
+    [[{ ...batches[0], sourceRevision: 8 }, batches[1]], promotions],
+    [[{ ...batches[0], draftSource: { ...draft, externalId: 'changed' } }, batches[1]], promotions],
+    [batches, [{ ...promotions[0], expectedBaseRevision: 6 }]],
+    [batches, [{ ...promotions[0], expectedDraftDigest: 'f'.repeat(64) }]],
+  ];
+  for (const [changedBatches, changedPromotions] of changedCases) {
+    assert.notEqual(digestAuthorityReviewSourceSet(
+      effectiveAuthorityReviewBatches(changedBatches),
+      changedPromotions,
+    ), baseline);
   }
 });

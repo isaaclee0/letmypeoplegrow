@@ -171,7 +171,10 @@ function makeDeps({
     matchPeople,
     computePeopleSyncPlan: (input) => { plans.push(input); return computePeopleSyncPlan(input); },
     applyPeopleSyncPlan: async (input) => {
-      if (input.reviewedApply) assert.equal(input.reviewedApply.operationKind, 'people_sync');
+      if (input.reviewedApply) {
+        assert.equal(input.reviewedApply.operationKind,
+          input.activateAuthority ? 'authority_switch' : 'people_sync');
+      }
       events.push('apply');
       applied.push(input);
       return emptyApplyResult();
@@ -181,11 +184,11 @@ function makeDeps({
     }),
     digestPlan,
     createReviewToken: ({ operationKind, planDigest }) => {
-      assert.equal(operationKind, 'people_sync');
+      assert.ok(['people_sync', 'authority_switch'].includes(operationKind));
       return `review:${planDigest}`;
     },
     verifyReviewToken: (_token, expected) => {
-      assert.equal(expected.operationKind, 'people_sync');
+      assert.ok(['people_sync', 'authority_switch'].includes(expected.operationKind));
       return verifyResult;
     },
     isReviewTokenApplied: async () => false,
@@ -1809,6 +1812,132 @@ test('previewAuthoritySwitch remains review-only and validates sources before st
   });
   assert.equal(applied.length, 0);
   assert.equal(presence.length, 0);
+});
+
+test('authority preview uses an initial source draft and signs its promotion without active-source health writes', async () => {
+  const initialDraft = source('initial-draft');
+  let digested;
+  let tokenContext;
+  const fetched = [];
+  const { deps, finished, availableHealth, failedHealth } = makeDeps({
+    batches: [batch({
+      source: null,
+      sourceRevision: 0,
+      draftSource: initialDraft,
+      draftSourceBaseRevision: 0,
+    })],
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async ({ sourceExternalId }) => {
+      fetched.push(sourceExternalId);
+      return sourceSnapshot(source(sourceExternalId));
+    },
+    extra: {
+      digestPlan: (plan) => { digested = structuredClone(plan); return 'a'.repeat(64); },
+      createReviewToken: (context) => { tokenContext = context; return 'authority-review'; },
+    },
+  });
+
+  await previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'initial-preview',
+  }, deps);
+
+  assert.deepEqual(fetched, ['initial-draft']);
+  assert.deepEqual(finished[0].sourceProvenance.map(({ batchId, sourceExternalId }) => ({
+    batchId, sourceExternalId,
+  })), [{ batchId: 1, sourceExternalId: 'initial-draft' }]);
+  assert.deepEqual(digested.sourceContext.promotions, [{
+    batchId: 1,
+    expectedBaseRevision: 0,
+    expectedDraftDigest: digestSourceIdentity(initialDraft),
+  }]);
+  assert.match(digested.sourceContext.participatingBatchSourceDigest, /^[a-f0-9]{64}$/);
+  assert.equal(tokenContext.operationKind, 'authority_switch');
+  assert.deepEqual(availableHealth, []);
+  assert.deepEqual(failedHealth, []);
+});
+
+test('authority preview fetches and signs every initial draft in deterministic batch order', async () => {
+  const drafts = [source('draft-20'), source('draft-3')];
+  let digested;
+  const fetched = [];
+  const { deps, finished, availableHealth } = makeDeps({
+    batches: [
+      batch({ id: 20, source: null, sourceRevision: 5, draftSource: drafts[0], draftSourceBaseRevision: 5 }),
+      batch({ id: 3, source: null, sourceRevision: 2, draftSource: drafts[1], draftSourceBaseRevision: 2 }),
+    ],
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async ({ sourceExternalId }) => {
+      fetched.push(sourceExternalId);
+      return sourceSnapshot(source(sourceExternalId), { people: [], memberExternalIds: [] });
+    },
+    extra: {
+      digestPlan: (plan) => { digested = structuredClone(plan); return 'a'.repeat(64); },
+    },
+  });
+
+  await previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'two-drafts',
+  }, deps);
+
+  assert.deepEqual(fetched, ['draft-3', 'draft-20']);
+  assert.deepEqual(finished[0].sourceProvenance.map(({ batchId }) => batchId), [3, 20]);
+  assert.deepEqual(digested.sourceContext.promotions, [
+    { batchId: 3, expectedBaseRevision: 2, expectedDraftDigest: digestSourceIdentity(drafts[1]) },
+    { batchId: 20, expectedBaseRevision: 5, expectedDraftDigest: digestSourceIdentity(drafts[0]) },
+  ]);
+  assert.deepEqual(digested.sourceContext.snapshots.map(({ batchId }) => batchId), [3, 20]);
+  assert.deepEqual(availableHealth, []);
+});
+
+test('authority preview uses a replacement draft instead of its active source and excludes disabled batches', async () => {
+  const fetched = [];
+  const { deps, availableHealth } = makeDeps({
+    batches: [
+      batch({ id: 1, source: source('active'), draftSource: source('replacement'), draftSourceBaseRevision: 2 }),
+      batch({ id: 2, enabled: false, source: source('disabled') }),
+    ],
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async ({ sourceExternalId }) => {
+      fetched.push(sourceExternalId);
+      return sourceSnapshot(source(sourceExternalId), { people: [], memberExternalIds: [] });
+    },
+  });
+
+  await previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'replacement-preview',
+  }, deps);
+
+  assert.deepEqual(fetched, ['replacement']);
+  assert.deepEqual(availableHealth, []);
+});
+
+test('invalid authority source sets fail before staging or fetching', async () => {
+  const cases = [
+    [batch({ source: null, draftSource: null })],
+    [batch({ source: { kind: 'elvanto_group', externalId: '', name: 'Empty' } })],
+    [batch({ source: { kind: 'planning_center_list', externalId: 'wrong-provider', name: 'Wrong' } })],
+    [batch({ id: 1, source: source('duplicate') }), batch({ id: 2, source: source('duplicate') })],
+  ];
+
+  for (const batches of cases) {
+    let begins = 0;
+    let fetches = 0;
+    const { deps, events } = makeDeps({
+      batches,
+      authorityState: { active: 'none', pending: null },
+      fetchSourceSnapshot: async () => { fetches += 1; throw new Error('must not fetch'); },
+      extra: {
+        beginAuthoritySwitch: async () => { begins += 1; return { active: 'none', pending: 'elvanto' }; },
+      },
+    });
+
+    await assert.rejects(previewAuthoritySwitch({
+      churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'invalid-source-set',
+    }, deps), { code: 'SYNC_SOURCE_INVALID' });
+    assert.equal(begins, 0);
+    assert.equal(fetches, 0);
+    assert.equal(events.includes('startRun'), false);
+  }
 });
 
 test('a failed authority preview conditionally cancels only the intent it staged', async () => {

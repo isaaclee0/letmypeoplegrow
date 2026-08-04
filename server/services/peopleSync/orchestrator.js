@@ -48,7 +48,12 @@ const { applyPeopleSyncPlan, validateSelections, isReviewTokenApplied } = requir
 const {
   digestPlan, digestReviewToken, createReviewToken, verifyReviewToken, verifyReviewTokenLineage,
 } = require('./planDigest');
-const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
+const {
+  digestSourceIdentity,
+  digestSourceSnapshot,
+  effectiveAuthorityReviewBatches,
+  digestAuthorityReviewSourceSet,
+} = require('./sourceModel');
 const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
 const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRetiredPlanningCenterBatch } = require('./legacyBatch');
@@ -166,7 +171,14 @@ function connectionExpectationFor(provider, connectionGeneration) {
   return provider === 'elvanto' ? { generation: connectionGeneration } : null;
 }
 
-function reviewedSourceContext(provider, batches, batchId, sourceProvenance, connectionGeneration) {
+function reviewedSourceContext(
+  provider,
+  batches,
+  batchId,
+  sourceProvenance,
+  connectionGeneration,
+  authoritySourceSet = null,
+) {
   const batch = batchId === null || batchId === undefined ? null
     : batches.find((candidate) => String(candidate.id) === String(batchId));
   return {
@@ -180,6 +192,29 @@ function reviewedSourceContext(provider, batches, batchId, sourceProvenance, con
         sourceRevision: sourceBatch?.sourceRevision ?? null,
       };
     }).sort((left, right) => Number(left.batchId) - Number(right.batchId)),
+    ...(authoritySourceSet ? {
+      promotions: authoritySourceSet.promotions,
+      participatingBatchSourceDigest: authoritySourceSet.participatingBatchSourceDigest,
+    } : {}),
+  };
+}
+
+function toSourcePromotion(batch) {
+  return {
+    batchId: batch.id,
+    expectedBaseRevision: batch.draftSourceBaseRevision,
+    expectedDraftDigest: digestSourceIdentity(batch.draftSource),
+  };
+}
+
+function authoritySourceSetFor(batches) {
+  const promotions = batches
+    .filter((batch) => batch.effectiveSourceIsDraft)
+    .map(toSourcePromotion)
+    .sort((left, right) => Number(left.batchId) - Number(right.batchId));
+  return {
+    promotions,
+    participatingBatchSourceDigest: digestAuthorityReviewSourceSet(batches, promotions),
   };
 }
 
@@ -1090,6 +1125,8 @@ async function previewAuthoritySwitch({
   // would be confusing, lingering state for a preview that never happened.
   const pre = await loadPreconditions({ churchId, provider, batchId: null, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
+  const reviewBatches = effectiveAuthorityReviewBatches(pre.batches);
+  const authoritySourceSet = authoritySourceSetFor(reviewBatches);
   // beginAuthoritySwitch is the source of truth for the resulting pending
   // state — it does NOT always set pending to `provider` (e.g. re-previewing
   // the CURRENT active authority clears pending back to null; see
@@ -1110,18 +1147,19 @@ async function previewAuthoritySwitch({
     assertAuthorityPreviewActive(signal);
     const body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
-      batchId: null, authoritative: true, activeAuthority: provider, batches: pre.batches,
+      batchId: null, authoritative: true, activeAuthority: provider, batches: reviewBatches,
       connectionExpectation, signal,
     }));
     assertAuthorityPreviewActive(signal);
 
     body.plan.sourceContext = reviewedSourceContext(
-      provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
+      provider, reviewBatches, null, body.sourceProvenance, pre.connectionGeneration,
+      authoritySourceSet,
     );
     if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
-      operationKind: 'people_sync',
+      operationKind: 'authority_switch',
       churchId, provider, batchId: null, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
     });
 
@@ -1199,6 +1237,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const isAuthoritySwitch = batchId === null && pre.authorityState.pending === provider;
+  const operationKind = isAuthoritySwitch ? 'authority_switch' : 'people_sync';
   const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
   if (batchId !== null && batchId !== undefined && !isAuthoritySwitch) {
     assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
@@ -1243,7 +1282,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       );
       if (isAuthoritySwitch && authorityPreviewId) base.plan.authorityPreviewId = authorityPreviewId;
       const lineageVerification = deps.verifyReviewTokenLineage(reviewToken, {
-        operationKind: 'people_sync',
+        operationKind,
         churchId,
         provider,
         batchId,
@@ -1267,7 +1306,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const verification = deps.verifyReviewToken(reviewToken, {
-      operationKind: 'people_sync', churchId, provider, batchId, planDigest,
+      operationKind, churchId, provider, batchId, planDigest,
     });
     if (!verification.ok) {
       throw new OrchestratorError(verification.code, reviewTokenErrorMessage(verification.code), reviewTokenErrorStatus(verification.code));
@@ -1286,7 +1325,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       activateAuthority: isAuthoritySwitch,
       authorityPreviewId,
       reviewedApply: {
-        operationKind: 'people_sync',
+        operationKind,
         reviewToken,
         planDigest,
         batchId,
