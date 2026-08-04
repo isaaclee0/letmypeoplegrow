@@ -33,7 +33,14 @@ vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({
     </div>
   ),
 }));
-vi.mock('../peopleSync/PeopleSourceControl', () => ({ default: () => <div>People source control</div> }));
+vi.mock('../peopleSync/PeopleSourceControl', () => ({
+  default: ({ batches, onRefresh }: { batches: PeopleSyncBatch[]; onRefresh: () => Promise<void> }) => (
+    <section aria-label="People source control">
+      <p>{batches.map((item) => item.operationalState).join(', ')}</p>
+      <button type="button" onClick={() => void onRefresh()}>Refresh people source and batches</button>
+    </section>
+  ),
+}));
 
 const settings: PeopleSyncSettings = {
   authorityProvider: 'none', pendingAuthorityProvider: null, elvantoIncludeContacts: true,
@@ -125,6 +132,25 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Review & sync Members' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+  });
+
+  it('passes the prepared batches to source control and refreshes settings and batches after authority changes', async () => {
+    const refreshPeopleSync = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, operationalState: 'prepared' }] } })
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, operationalState: 'active' }] } });
+    render(<PlanningCenterIntegrationPanel
+      status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church' }}
+      refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={settings} peopleSyncStatus="known"
+      providerConnections={{ planning_center: true, elvanto: true }} refreshPeopleSync={refreshPeopleSync} retryPeopleSync={vi.fn()}
+    />);
+
+    expect(await screen.findByRole('region', { name: 'People source control' })).toHaveTextContent('prepared');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh people source and batches' }));
+
+    await waitFor(() => expect(refreshPeopleSync).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Active')).toBeInTheDocument();
   });
 
   it('uses the server reviewability flag for source review batches', async () => {

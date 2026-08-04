@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { peopleSyncAPI } from '../../services/api';
 import PeopleSourceControl from './PeopleSourceControl';
-import type { PeopleSyncPlan, PeopleSyncReview, PeopleSyncSettings, SyncProvider } from './types';
+import type { PeopleSyncBatch, PeopleSyncPlan, PeopleSyncReview, PeopleSyncSettings, SyncProvider } from './types';
 
 vi.mock('../../services/api', () => ({
   peopleSyncAPI: {
@@ -87,14 +87,44 @@ const initialSettings: PeopleSyncSettings = {
   fullReconciliationDay: 1,
 };
 
+const enabledPreparedBatch = {
+  id: 20,
+  provider: 'elvanto',
+  name: 'Sunday service',
+  enabled: true,
+  source: { kind: 'elvanto_category', externalId: 'members', name: 'Members', memberCount: 30, providerRefreshedAt: null },
+  sourceRevision: 1,
+  draftSource: null,
+  draftSourceBaseRevision: null,
+  draftSourceUpdatedAt: null,
+  needsSourceReview: false,
+  initialSourceReviewPending: false,
+  sourceStatus: 'available',
+  sourceStatusCheckedAt: null,
+  sourceStatusErrorCode: null,
+  operationalState: 'prepared',
+  reviewable: false,
+  runnable: false,
+  defaultPeopleType: 'regular',
+  gatheringTypeId: null,
+  gatheringAutoRemoveEnabled: false,
+  scheduleEnabled: true,
+  scheduleFrequency: 'weekly',
+  scheduleDay: 0,
+  legacyProviderBatchId: null,
+  lastExternalWatermark: null,
+  lastSyncAt: null,
+  lastSyncResult: null,
+} as PeopleSyncBatch;
+
 function Harness({
   provider = 'elvanto',
-  hasEnabledBatch = true,
+  batches = [enabledPreparedBatch],
   connections = { planning_center: true, elvanto: true },
   initialAuthority = 'planning_center',
 }: {
   provider?: SyncProvider;
-  hasEnabledBatch?: boolean;
+  batches?: PeopleSyncBatch[];
   connections?: Record<SyncProvider, boolean>;
   initialAuthority?: PeopleSyncSettings['authorityProvider'];
 }) {
@@ -105,7 +135,7 @@ function Harness({
   return (
     <PeopleSourceControl
       provider={provider}
-      hasEnabledBatch={hasEnabledBatch}
+      batches={batches}
       settings={settings}
       connections={connections}
       onRefresh={async () => {
@@ -156,6 +186,7 @@ describe('PeopleSourceControl', () => {
     expect(dialog).toHaveTextContent('Local edits and lifecycle actions are restricted');
     expect(dialog).toHaveTextContent('Elvanto schedules may run');
     expect(dialog).toHaveTextContent('Planning Center remains connected, but its batches become inactive.');
+    expect(dialog).toHaveTextContent('1 enabled Elvanto batch will be activated by this review.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
@@ -260,7 +291,7 @@ describe('PeopleSourceControl', () => {
     render(
       <PeopleSourceControl
         provider="elvanto"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={initialSettings}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -297,7 +328,7 @@ describe('PeopleSourceControl', () => {
     const { rerender } = render(
       <PeopleSourceControl
         provider="elvanto"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={initialSettings}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -312,7 +343,7 @@ describe('PeopleSourceControl', () => {
     rerender(
       <PeopleSourceControl
         provider="elvanto"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={{ ...initialSettings, authorityProvider: 'elvanto' }}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -727,7 +758,7 @@ describe('PeopleSourceControl', () => {
     render(
       <PeopleSourceControl
         provider="planning_center"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={initialSettings}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -762,7 +793,7 @@ describe('PeopleSourceControl', () => {
     const { rerender } = render(
       <PeopleSourceControl
         provider="planning_center"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={activeSettings}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -778,7 +809,7 @@ describe('PeopleSourceControl', () => {
     rerender(
       <PeopleSourceControl
         provider="planning_center"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={{ ...initialSettings, authorityProvider: 'none' }}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -787,7 +818,7 @@ describe('PeopleSourceControl', () => {
     rerender(
       <PeopleSourceControl
         provider="planning_center"
-        hasEnabledBatch
+        batches={[enabledPreparedBatch]}
         settings={activeSettings}
         connections={{ planning_center: true, elvanto: true }}
         onRefresh={onRefresh}
@@ -808,14 +839,24 @@ describe('PeopleSourceControl', () => {
   });
 
   it('disables a provider without an enabled batch and explains the prerequisite', () => {
-    render(<Harness hasEnabledBatch={false} />);
+    render(<Harness batches={[]} />);
 
     expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeDisabled();
     expect(screen.getByText('Create and enable an Elvanto sync batch first.')).toBeInTheDocument();
   });
 
+  it('blocks a switch when any enabled target batch has neither a source nor a source draft', () => {
+    render(<Harness batches={[
+      enabledPreparedBatch,
+      { ...enabledPreparedBatch, id: 21, name: 'Youth', source: null, draftSource: null },
+    ]} />);
+
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeDisabled();
+    expect(screen.getByText('Every enabled Elvanto batch needs a people source or source draft before switching.')).toBeInTheDocument();
+  });
+
   it('keeps Planning Center batch guidance grammatical', () => {
-    render(<Harness provider="planning_center" initialAuthority="none" hasEnabledBatch={false} />);
+    render(<Harness provider="planning_center" initialAuthority="none" batches={[]} />);
 
     expect(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' })).toBeDisabled();
     expect(screen.getByText('Create a Planning Center sync batch first.')).toBeInTheDocument();
@@ -838,7 +879,7 @@ describe('PeopleSourceControl', () => {
   });
 
   it('keeps an active provider without batches enabled so authority can be turned off', () => {
-    render(<Harness provider="planning_center" initialAuthority="planning_center" hasEnabledBatch={false} />);
+    render(<Harness provider="planning_center" initialAuthority="planning_center" batches={[]} />);
 
     const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     expect(toggle).toBeEnabled();

@@ -3,13 +3,13 @@ import { peopleSyncAPI } from '../../services/api';
 import Modal from '../Modal';
 import AuthorityReviewWorkspace from './AuthorityReviewWorkspace';
 import { peopleSyncErrorMessage } from './apiError';
-import type { PeopleSyncSettings, SyncProvider } from './types';
+import type { PeopleSyncBatch, PeopleSyncSettings, SyncProvider } from './types';
 
 type DisableState = 'idle' | 'disabling' | 'error';
 
 export interface PeopleSourceControlProps {
   provider: SyncProvider;
-  hasEnabledBatch: boolean;
+  batches: PeopleSyncBatch[];
   settings: PeopleSyncSettings;
   connections: Record<SyncProvider, boolean>;
   onRefresh: () => void | Promise<void>;
@@ -20,7 +20,7 @@ const providerName = (provider: SyncProvider) =>
 
 export default function PeopleSourceControl({
   provider,
-  hasEnabledBatch,
+  batches,
   settings,
   connections,
   onRefresh,
@@ -92,14 +92,18 @@ export default function PeopleSourceControl({
   };
 
   const checked = settings.authorityProvider === provider;
+  const enabledBatches = batches.filter((batch) => batch.enabled);
+  const preparedBatchCount = enabledBatches.length;
   const prerequisite = checked
     ? null
     : !connections[provider]
       ? `Connect ${providerName(provider)} before using it as your people source.`
-      : !hasEnabledBatch
+      : enabledBatches.length === 0
         ? provider === 'planning_center'
           ? 'Create a Planning Center sync batch first.'
           : 'Create and enable an Elvanto sync batch first.'
+        : enabledBatches.some((batch) => !batch.source && !batch.draftSource)
+          ? `Every enabled ${providerName(provider)} batch needs a people source or source draft before switching.`
         : null;
   const toggleDisabled = reviewActive || disableState === 'disabling' || prerequisite !== null;
   const otherProvider = settings.authorityProvider !== 'none' && settings.authorityProvider !== provider
@@ -202,7 +206,7 @@ export default function PeopleSourceControl({
             Switch source of truth from {otherProvider ? providerName(otherProvider) : ''} to {providerName(provider)}?
           </h6>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-            Linked people and families become managed by {providerName(provider)}. Local edits and lifecycle actions are restricted, and {providerName(provider)} schedules may run. {otherProvider ? providerName(otherProvider) : 'The other provider'} remains connected, but its batches become inactive.
+            {preparedBatchCount} enabled {providerName(provider)} {preparedBatchCount === 1 ? 'batch will' : 'batches will'} be activated by this review. Linked people and families become managed by {providerName(provider)}. Local edits and lifecycle actions are restricted, and {providerName(provider)} schedules may run. {otherProvider ? providerName(otherProvider) : 'The other provider'} remains connected, but its batches become inactive.
           </p>
           <div className="mt-5 flex gap-3">
             <button

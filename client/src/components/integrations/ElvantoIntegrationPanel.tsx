@@ -286,6 +286,10 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     await loadConnectedData();
   }, [loadConnectedData]);
 
+  const refreshPeopleSourceAndBatches = useCallback(async () => {
+    await Promise.all([refreshPeopleSync(), reloadAfterBatchMutation()]);
+  }, [refreshPeopleSync, reloadAfterBatchMutation]);
+
   useEffect(() => {
     void loadConnectedData();
     return () => {
@@ -314,10 +318,10 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const peopleSourceControl = peopleSyncStatus === 'known' ? (
     <PeopleSourceControl
       provider="elvanto"
-      hasEnabledBatch={status.connected && !loading && batches.some((batch) => batch.enabled)}
+      batches={batches}
       settings={peopleSyncSettings}
       connections={providerConnections}
-      onRefresh={refreshPeopleSync}
+      onRefresh={refreshPeopleSourceAndBatches}
     />
   ) : (
     <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

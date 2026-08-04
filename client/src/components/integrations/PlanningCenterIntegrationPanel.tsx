@@ -128,6 +128,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     await loadSyncStats();
   }, [loadBatches, loadSyncStats]);
 
+  const refreshPeopleSourceAndBatches = useCallback(async () => {
+    await Promise.all([refreshPeopleSync(), reloadAfterBatchMutation()]);
+  }, [refreshPeopleSync, reloadAfterBatchMutation]);
+
   const loadPcSettings = useCallback(async () => {
     const generation = ++settingsGeneration.current;
     setPcSettingsStatus('loading');
@@ -290,10 +294,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const peopleSourceControl = peopleSyncStatus === 'known' ? (
     <PeopleSourceControl
       provider="planning_center"
-      hasEnabledBatch={status.connected && !batchesLoading && modernBatches.length > 0}
+      batches={modernBatches}
       settings={peopleSyncSettings}
       connections={providerConnections}
-      onRefresh={refreshPeopleSync}
+      onRefresh={refreshPeopleSourceAndBatches}
     />
   ) : (
     <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
