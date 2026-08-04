@@ -261,7 +261,7 @@ describe('SyncReview compact V2 workflow', () => {
         renameFamily: [{ id: 'renameFamily:20', familyId: 20, familyName: 'Renamed family' }],
       },
     });
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       batchName="Members"
       sourceName="Active members"
@@ -288,7 +288,7 @@ describe('SyncReview compact V2 workflow', () => {
   it('requires incomplete decisions and focuses guidance on the affected row', async () => {
     const user = userEvent.setup();
     const review = v2Review();
-    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Blair Jones needs a decision');
@@ -311,7 +311,7 @@ describe('SyncReview compact V2 workflow', () => {
       },
     });
     collision.plan.people!.external['ext-other'] = { firstName: 'Other', lastName: 'Person', family: { state: 'none' } };
-    render(<SyncReview provider="planning_center" review={{ ...collision, runId: 3, reviewToken: 'collision' }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={{ ...collision, runId: 3, reviewToken: 'collision' }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
 
     expect(screen.getByRole('alert')).toHaveTextContent(/Alex Smith.*Other Person|Other Person.*Alex Smith/);
     expect(screen.getByRole('button', { name: 'Apply 2 selected changes' })).toBeDisabled();
@@ -323,7 +323,7 @@ describe('SyncReview compact V2 workflow', () => {
     const stale = Object.assign(new Error('The reviewed plan was out of date.'), { code: 'SYNC_PLAN_STALE' });
     const onApply = vi.fn().mockRejectedValueOnce(ordinary).mockRejectedValueOnce(stale);
     const onRefresh = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview provider="planning_center" review={v2Review({ attention: false })} onRefresh={onRefresh} onApply={onApply} applying={false} />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={v2Review({ attention: false })} onRefresh={onRefresh} onApply={onApply} applying={false} />);
 
     const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
     await user.click(apply);
@@ -344,7 +344,7 @@ describe('SyncReview compact V2 workflow', () => {
     const stale = Object.assign(new Error('The reviewed plan was out of date.'), { code: 'SYNC_PLAN_STALE' });
     const onApply = vi.fn().mockRejectedValue(stale);
     const onRefresh = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false })}
       onRefresh={onRefresh}
@@ -370,7 +370,7 @@ describe('SyncReview compact V2 workflow', () => {
       response: { data: { code: 'SYNC_REVIEW_ALREADY_APPLIED', error: 'Refresh before applying another sync.' } },
     });
     const onApply = vi.fn().mockRejectedValue(replay);
-    render(<SyncReview provider="planning_center" review={v2Review({ attention: false })} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={v2Review({ attention: false })} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
 
     await user.click(screen.getByRole('button', { name: 'Apply 1 selected change' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('This review has already been applied.');
@@ -380,13 +380,13 @@ describe('SyncReview compact V2 workflow', () => {
   it('fails closed for malformed V2 review context and disables all interactions on request', () => {
     const malformed = v2Review();
     malformed.plan.reviewContext = undefined;
-    const { rerender } = render(<SyncReview provider="planning_center" review={malformed} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    const { rerender } = render(<SyncReview operationKind="people_sync" provider="planning_center" review={malformed} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
 
     expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
     expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
     expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
 
-    rerender(<SyncReview provider="planning_center" review={v2Review({ attention: false, runId: 5, token: 'disabled' })} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} interactionDisabled />);
+    rerender(<SyncReview operationKind="people_sync" provider="planning_center" review={v2Review({ attention: false, runId: 5, token: 'disabled' })} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} interactionDisabled />);
     expect(screen.getByRole('button', { name: 'Refresh plan' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
   });
@@ -400,7 +400,7 @@ describe('SyncReview compact V2 workflow', () => {
     const malformed = v2Review({ attention: false });
     malformed.plan.reviewContext!.linkCorrections = linkCorrections as never;
 
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={malformed}
       onRefresh={vi.fn()}
@@ -419,7 +419,7 @@ describe('SyncReview compact V2 workflow', () => {
       'ext-established': { individualId: '40' },
     } as never;
 
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={malformed}
       onRefresh={vi.fn()}
@@ -433,11 +433,11 @@ describe('SyncReview compact V2 workflow', () => {
 
   it('resets local decisions for an explicit refreshed review token', async () => {
     const base = v2Review();
-    const { rerender } = render(<SyncReview provider="planning_center" review={base} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    const { rerender } = render(<SyncReview operationKind="people_sync" provider="planning_center" review={base} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
     await chooseAlternativeForAttention();
     expect(screen.getByRole('button', { name: 'Change LMPG match for Blair Jones' })).toHaveTextContent('Taylor Reed');
 
-    rerender(<SyncReview
+    rerender(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ token: 'fresh-token', runId: 6 })}
       onRefresh={vi.fn()}
@@ -453,7 +453,7 @@ describe('SyncReview compact V2 workflow', () => {
       ...v2Review({ attention: false }),
       coverage: { unmatchedActiveLocalRegulars: 208 },
     } as unknown as PeopleSyncReview;
-    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
     expect(screen.queryByText(/208 active LMPG regulars/)).not.toBeInTheDocument();
     expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
   });
@@ -470,7 +470,7 @@ describe('SyncReview compact V2 workflow', () => {
       },
     });
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} requireAllPlannedArchivesAccepted />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} requireAllPlannedArchivesAccepted />);
 
     const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
     expect(apply).toBeDisabled();
@@ -502,7 +502,7 @@ describe('SyncReview compact V2 workflow', () => {
       unlinkedActiveLocalRegulars: 1,
     } as PeopleSyncReview['coverage'];
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={review}
       onRefresh={vi.fn()}
@@ -530,7 +530,7 @@ describe('SyncReview compact V2 workflow', () => {
   });
 
   it('omits lifecycle review when the plan has no archive proposals', () => {
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false })}
       onRefresh={vi.fn()}
@@ -545,7 +545,7 @@ describe('SyncReview compact V2 workflow', () => {
 
 describe('SyncReview correction previews and dirty state', () => {
   it('shows established links read-only when the review owner cannot preview corrections', () => {
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="elvanto"
       review={v2Review({ attention: false, established: true })}
       onRefresh={vi.fn()}
@@ -562,7 +562,7 @@ describe('SyncReview correction previews and dirty state', () => {
     const pending = deferred<PeopleSyncCorrectionPreview>();
     const onPreviewCorrections = vi.fn(() => pending.promise);
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false, established: true })}
       onRefresh={vi.fn()}
@@ -587,7 +587,7 @@ describe('SyncReview correction previews and dirty state', () => {
 
   it('enables apply after a server-canonical correction preview', async () => {
     const onPreviewCorrections = vi.fn().mockResolvedValue(serverCanonicalCorrectionPreview('preview-30'));
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false, established: true })}
       onRefresh={vi.fn()}
@@ -607,7 +607,7 @@ describe('SyncReview correction previews and dirty state', () => {
       'preview-unlink-with-target',
     );
     const onPreviewCorrections = vi.fn().mockResolvedValue(preview);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false, established: true })}
       onRefresh={vi.fn()}
@@ -643,7 +643,7 @@ describe('SyncReview correction previews and dirty state', () => {
       corrections: Record<string, EstablishedLinkCorrection>,
     ) => swapCorrectionPreview(corrections));
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={base}
       onRefresh={vi.fn()}
@@ -685,7 +685,7 @@ describe('SyncReview correction previews and dirty state', () => {
 
   it('keeps apply disabled after preview failure until the correction is reverted', async () => {
     const onPreviewCorrections = vi.fn().mockRejectedValue(new Error('preview unavailable'));
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false, established: true })}
       onRefresh={vi.fn()}
@@ -712,7 +712,7 @@ describe('SyncReview correction previews and dirty state', () => {
     const onPreviewCorrections = vi.fn().mockRejectedValue({
       response: { data: { code, error: 'The signed review can no longer be used.' } },
     });
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false, established: true })}
       onRefresh={onRefresh}
@@ -742,7 +742,7 @@ describe('SyncReview correction previews and dirty state', () => {
       .mockImplementationOnce(() => older.promise)
       .mockImplementationOnce(() => newer.promise);
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review({ attention: false, established: true })}
       onRefresh={vi.fn()}
@@ -771,7 +771,7 @@ describe('SyncReview correction previews and dirty state', () => {
     const user = userEvent.setup();
     const onDirtyChange = vi.fn();
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="planning_center"
       review={v2Review()}
       onRefresh={vi.fn()}
@@ -798,7 +798,7 @@ describe('SyncReview correction previews and dirty state', () => {
     const onRefresh = vi.fn();
     function RefreshOwner() {
       const [ownedReview, setOwnedReview] = React.useState(v2Review());
-      return <SyncReview
+      return <SyncReview operationKind="people_sync"
         provider="planning_center"
         review={ownedReview}
         onRefresh={() => {
@@ -826,7 +826,7 @@ describe('SyncReview legacy compatibility', () => {
     const user = userEvent.setup();
     const review = legacyReview();
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
+    render(<SyncReview operationKind="people_sync"
       provider="elvanto"
       review={review}
       onRefresh={vi.fn()}

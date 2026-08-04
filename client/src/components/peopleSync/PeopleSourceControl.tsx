@@ -446,6 +446,7 @@ export default function PeopleSourceControl({
           ) : (
             <>
               <SyncReview
+                operationKind="authority_switch"
                 provider={pendingProvider}
                 review={pendingReview}
                 onRefresh={refreshPreview}

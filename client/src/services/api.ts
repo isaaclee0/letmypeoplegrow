@@ -22,6 +22,12 @@ import type {
   ElvantoConnection,
   PlanningCenterStatus,
 } from '../components/peopleSync/types';
+import type {
+  ImportSelection,
+  PeopleImportApplyRequest,
+  PeopleImportReview,
+  PeopleImportSourcesResponse,
+} from '../components/peopleImport/types';
 
 // Shared by Planning Center and Elvanto reviewed applies. Keeping this
 // provider-neutral prevents either endpoint from adapting identity IDs or
@@ -1041,6 +1047,23 @@ export const peopleSyncAPI = {
   discardSourceDraft: (provider: SyncProvider, batchId: number) =>
     api.delete<{ success: true; batch: PeopleSyncSourceState }>(
       `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/source-draft`,
+    ),
+};
+
+export const peopleImportAPI = {
+  listSources: (provider: SyncProvider) =>
+    api.get<PeopleImportSourcesResponse>(`/people-imports/${provider}/sources`),
+  preview: (provider: SyncProvider, selection: ImportSelection) =>
+    api.post<PeopleImportReview>(
+      `/people-imports/${provider}/preview`,
+      { selection },
+      { timeout: 120000 },
+    ),
+  apply: (provider: SyncProvider, request: PeopleImportApplyRequest) =>
+    api.post<PeopleSyncApplyResult>(
+      `/people-imports/${provider}/apply`,
+      request,
+      { timeout: 120000 },
     ),
 };
 

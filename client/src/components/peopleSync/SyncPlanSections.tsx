@@ -1,6 +1,6 @@
 import React from 'react';
 import type { SyncSelectionState } from './syncSelections';
-import type { ArchiveAction, IdentityDecision, PeopleSyncReview } from './types';
+import type { ArchiveAction, IdentityDecision, PeopleReviewOperationKind, PeopleSyncReview } from './types';
 
 const ARCHIVE_REASON_COPY: Record<string, string> = {
   provider_state_archived: 'Archived in the provider',
@@ -122,6 +122,7 @@ function DenseChangeList({ children }: { children: React.ReactNode }) {
 }
 
 export interface SyncPlanSectionsProps {
+  operationKind?: PeopleReviewOperationKind;
   review: PeopleSyncReview;
   state: SyncSelectionState;
   archiveActions: ArchiveAction[];
@@ -130,12 +131,14 @@ export interface SyncPlanSectionsProps {
 }
 
 export default function SyncPlanSections({
+  operationKind = 'people_sync',
   review,
   state,
   archiveActions,
   onStateChange,
   onAcceptAllArchives,
 }: SyncPlanSectionsProps) {
+  if (operationKind === 'people_import') return null;
   const view = deriveSyncPlanView(review, state);
   const directory = review.plan.people || { external: {}, local: {} };
   const terminalArchiveActions = archiveActions.filter(isTerminalArchive);

@@ -333,7 +333,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
           </div>
         ) : batchReview && (
           <div role="region" aria-label="Elvanto onboarding batch sync review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
-            <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onPreviewCorrections={previewBatchLinkCorrections} onApply={applyBatch} applying={busy} />
+            <SyncReview operationKind="people_sync" provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onPreviewCorrections={previewBatchLinkCorrections} onApply={applyBatch} applying={busy} />
           </div>
         )}
         <div className="flex flex-wrap gap-3">
@@ -359,7 +359,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         {authorityReview && (
           <div role="region" aria-label="Elvanto onboarding authority review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
-            <SyncReview provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} interactionDisabled={busy} />
+            <SyncReview operationKind="authority_switch" provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} interactionDisabled={busy} />
             <button type="button" onClick={() => void cancelAuthorityReview()} disabled={busy} className="mt-3 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50">
               Cancel authority change
             </button>

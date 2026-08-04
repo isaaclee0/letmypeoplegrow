@@ -17,6 +17,8 @@
 // own PROVIDERS/AUTHORITY_PROVIDERS sets.
 export type SyncProvider = 'planning_center' | 'elvanto';
 
+export type PeopleReviewOperationKind = 'people_sync' | 'authority_switch' | 'people_import';
+
 export type PlanningCenterConnectionErrorCode =
   | 'SYNC_SOURCE_AUTH'
   | 'SYNC_SOURCE_RATE_LIMIT'

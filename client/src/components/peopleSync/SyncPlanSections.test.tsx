@@ -97,6 +97,29 @@ function SectionsHarness({ review, initialState }: { review: PeopleSyncReview; i
 }
 
 describe('SyncPlanSections', () => {
+  it('hides shared sync sections during a people import', () => {
+    const review = reviewFixture({
+      addFamilies: [{
+        id: 'addFamily:source-1', externalFamilyId: 'source-1', familyName: 'Import Household',
+      }],
+      skipped: [{ id: 'skipped:ext-held', externalPersonId: 'ext-held', reason: 'held' }],
+    });
+    const state = initializeSyncSelectionState(review);
+
+    render(<SyncPlanSections
+      operationKind="people_import"
+      review={review}
+      state={state}
+      archiveActions={[]}
+      onStateChange={() => {}}
+      onAcceptAllArchives={() => {}}
+    />);
+
+    expect(screen.queryByLabelText('Planned non-identity changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Family changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Skipped or unchanged')).not.toBeInTheDocument();
+  });
+
   it('omits empty sections and keeps routine managed changes collapsed', () => {
     const review = reviewFixture({
       updateManagedFields: [{

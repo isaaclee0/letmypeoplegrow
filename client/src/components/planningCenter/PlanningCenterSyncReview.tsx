@@ -102,7 +102,7 @@ export default function PlanningCenterSyncReview({
   };
 
   return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}>
-    {!appliedRefreshPending && <SyncReview provider="planning_center" review={review} batchName={batchName} sourceName={sourceName} onRefresh={() => refreshReview()} onPreviewCorrections={previewLinkCorrections} onApply={apply} applying={applying || loading} requireAllPlannedArchivesAccepted />}
+    {!appliedRefreshPending && <SyncReview operationKind="people_sync" provider="planning_center" review={review} batchName={batchName} sourceName={sourceName} onRefresh={() => refreshReview()} onPreviewCorrections={previewLinkCorrections} onApply={apply} applying={applying || loading} requireAllPlannedArchivesAccepted />}
     {appliedRefreshPending && <p role="status" className="text-sm text-gray-600 dark:text-gray-300">Sync applied. Refresh the plan before reviewing another run.</p>}
     {appliedRefreshPending && <button type="button" className={secondaryButtonClass} disabled={applying || loading} onClick={() => void refreshReview(true)}>Retry plan refresh</button>}
     {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}

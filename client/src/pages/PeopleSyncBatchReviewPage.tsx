@@ -159,6 +159,7 @@ export default function PeopleSyncBatchReviewPage() {
 
       {visibleReview && visibleBatch && (
         <SyncReview
+          operationKind="people_sync"
           provider={adapter.provider}
           review={visibleReview}
           batchName={visibleBatch.name}

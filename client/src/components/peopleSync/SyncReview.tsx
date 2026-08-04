@@ -17,6 +17,7 @@ import {
   type VisitorChoice,
 } from './syncSelections';
 import { isReviewDirty, selectedChangeCount } from './syncReviewModel';
+import { hasForbiddenImportMutations } from '../peopleImport/types';
 import type {
   AmbiguousPersonAction,
   EstablishedLinkCorrection,
@@ -24,6 +25,7 @@ import type {
   PeopleSyncCorrectionPreview,
   PeopleSyncReview,
   PeopleSyncSelections,
+  PeopleReviewOperationKind,
   SyncProvider,
 } from './types';
 
@@ -49,6 +51,7 @@ export interface CandidateSearchRenderProps {
 }
 
 export interface SyncReviewProps {
+  operationKind: PeopleReviewOperationKind;
   provider: SyncProvider;
   review: PeopleSyncReview;
   batchName?: string;
@@ -159,13 +162,18 @@ function correctionsForReview(review: PeopleSyncReview): Record<string, Establis
   }));
 }
 
-function stateForReview(review: PeopleSyncReview): SyncSelectionState {
+function stateForReview(
+  review: PeopleSyncReview,
+  operationKind: PeopleReviewOperationKind,
+): SyncSelectionState {
   const validV2Context = hasValidV2Context(review);
   return {
     identityDecisions: review.decisionContractVersion === 2
       ? (validV2Context ? initializeIdentityDecisions(review) : {})
       : undefined,
-    linkCorrections: validV2Context ? correctionsForReview(review) : {},
+    linkCorrections: validV2Context && operationKind !== 'people_import'
+      ? correctionsForReview(review)
+      : {},
     ambiguousChoices: {},
     skippedExternalIds: new Set(),
     visitorChoices: {},
@@ -390,6 +398,7 @@ function recordsMatch(
 }
 
 export default function SyncReview({
+  operationKind,
   provider,
   review,
   batchName,
@@ -405,7 +414,7 @@ export default function SyncReview({
   resolveAmbiguousArchiveIndividualId,
   requireAllPlannedArchivesAccepted = false,
 }: SyncReviewProps) {
-  const initialState = stateForReview(review);
+  const initialState = stateForReview(review, operationKind);
   const [effectiveReview, setEffectiveReview] = useState(review);
   const [state, setState] = useState<SyncSelectionState>(initialState);
   const [confirmedDestructiveChanges, setConfirmedDestructiveChanges] = useState(false);
@@ -425,14 +434,14 @@ export default function SyncReview({
     externalReviewKeyRef.current = externalReviewKey;
     baseReviewRef.current = review;
     setEffectiveReview(review);
-    const nextState = stateForReview(review);
+    const nextState = stateForReview(review, operationKind);
     baselineStateRef.current = nextState;
     setState(nextState);
     setBaselineVersion((version) => version + 1);
     setConfirmedDestructiveChanges(false);
     setApplyError(null);
     setPreviewing(false);
-  }, [externalReviewKey, review]);
+  }, [externalReviewKey, operationKind, review]);
 
   const dirty = useMemo(
     () => isReviewDirty(baselineStateRef.current, state),
@@ -454,10 +463,14 @@ export default function SyncReview({
   const declaresV2 = effectiveReview.decisionContractVersion === 2;
   const validV2Context = hasValidV2Context(effectiveReview);
   const malformedV2 = declaresV2 && !validV2Context;
+  const isPeopleImport = operationKind === 'people_import';
+  const malformedImport = isPeopleImport && hasForbiddenImportMutations(effectiveReview);
+  const unsafeReview = malformedV2 || malformedImport;
   const reviewContext = validV2Context ? plan.reviewContext : undefined;
   const isV2 = declaresV2 && validV2Context;
   const establishedLinksReadOnly = isV2 && !onPreviewCorrections;
-  const identityTableReview = establishedLinksReadOnly && reviewContext
+  const hideEstablishedLinks = isPeopleImport || establishedLinksReadOnly;
+  const identityTableReview = hideEstablishedLinks && reviewContext
     ? {
       ...effectiveReview,
       plan: {
@@ -510,13 +523,17 @@ export default function SyncReview({
       ...planView.archive.map((action) => action.individualId),
     ]),
   }));
-  const signedCorrections = validV2Context ? correctionsForReview(effectiveReview) : {};
+  const signedCorrections = validV2Context && !isPeopleImport
+    ? correctionsForReview(effectiveReview)
+    : {};
   const correctionsReady = recordsMatch(state.linkCorrections, signedCorrections);
-  const requiresConfirmation = planView.archive.length > 0
+  const requiresConfirmation = !isPeopleImport && (
+    planView.archive.length > 0
     || planView.removeFromGathering.length > 0
     || state.acceptedFamilyRenameIds.size > 0
-    || state.acceptedArchiveIds.size > 0;
-  const allPlannedArchivesAccepted = !requireAllPlannedArchivesAccepted
+    || state.acceptedArchiveIds.size > 0
+  );
+  const allPlannedArchivesAccepted = isPeopleImport || !requireAllPlannedArchivesAccepted
     || planView.archive.every((action) => state.acceptedArchiveIds.has(action.individualId));
 
   const refreshOnlyError = isRefreshOnlyReviewError(applyError);
@@ -527,7 +544,7 @@ export default function SyncReview({
     || interactionDisabled
     || previewing
     || refreshOnlyError
-    || malformedV2
+    || unsafeReview
     || !correctionsReady
     || incompleteExternalIds.length > 0
     || collisions.length > 0
@@ -536,6 +553,8 @@ export default function SyncReview({
   const selectedCount = selectedChangeCount(effectiveReview, state);
   const applyLabel = applying
     ? 'Applying…'
+    : isPeopleImport
+      ? 'Apply import'
     : isV2
       ? `Apply ${selectedCount} selected ${selectedCount === 1 ? 'change' : 'changes'}`
       : 'Apply sync';
@@ -649,7 +668,9 @@ export default function SyncReview({
         <header className="rounded-xl border border-stone-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-lg font-semibold text-gray-950 dark:text-white">{providerLabel(provider)} sync review</h3>
+              <h3 className="text-lg font-semibold text-gray-950 dark:text-white">
+                {isPeopleImport ? 'Import people' : `${providerLabel(provider)} sync review`}
+              </h3>
               {(batchName || sourceName) && (
                 <p className="mt-1 text-sm text-gray-700 dark:text-gray-200">
                   {batchName && <span className="font-medium">{batchName}</span>}
@@ -678,10 +699,10 @@ export default function SyncReview({
               tone={affectedExternalId ? 'amber' : 'neutral'}
               onClick={affectedExternalId ? () => focusAffected() : undefined}
             />
-            <SummaryChip label="Managed updates" count={managedCount} />
-            <SummaryChip label="Family changes" count={familyCount} />
-            <SummaryChip label="Gathering changes" count={gatheringCount} />
-            <SummaryChip label="Destructive changes" count={destructiveCount} tone={destructiveCount > 0 ? 'amber' : 'neutral'} />
+            {!isPeopleImport && <SummaryChip label="Managed updates" count={managedCount} />}
+            {!isPeopleImport && <SummaryChip label="Family changes" count={familyCount} />}
+            {!isPeopleImport && <SummaryChip label="Gathering changes" count={gatheringCount} />}
+            {!isPeopleImport && <SummaryChip label="Destructive changes" count={destructiveCount} tone={destructiveCount > 0 ? 'amber' : 'neutral'} />}
           </div>
         </header>
 
@@ -691,13 +712,15 @@ export default function SyncReview({
           </p>
         )}
 
-        {malformedV2 && (
+        {unsafeReview && (
           <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
-            This sync review could not be safely loaded. Refresh the plan before applying it.
+            {isPeopleImport
+              ? 'This import review could not be safely loaded. Refresh the plan before applying it.'
+              : 'This sync review could not be safely loaded. Refresh the plan before applying it.'}
           </div>
         )}
 
-        {isV2 && reviewContext && (
+        {isV2 && reviewContext && !unsafeReview && (
           <div ref={identityReviewRootRef}>
             <IdentityReviewTable
               ref={tableRef}
@@ -712,7 +735,7 @@ export default function SyncReview({
           </div>
         )}
 
-        {establishedLinksReadOnly && reviewContext && Object.keys(reviewContext.establishedLinks || {}).length > 0 && (
+        {!isPeopleImport && establishedLinksReadOnly && reviewContext && Object.keys(reviewContext.establishedLinks || {}).length > 0 && (
           <LegacySection title="Already linked (read-only)" count={Object.keys(reviewContext.establishedLinks || {}).length}>
             <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-200">
               {Object.entries(reviewContext.establishedLinks || {}).map(([externalId, established]) => {
@@ -748,6 +771,7 @@ export default function SyncReview({
         )}
 
         <SyncPlanSections
+          operationKind={operationKind}
           review={effectiveReview}
           state={state}
           archiveActions={planView.archive}
@@ -771,7 +795,7 @@ export default function SyncReview({
           <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
             {incompleteExternalIds.map((externalId) => (
               <p key={externalId}>
-                {externalPerson(externalId)} needs a decision before you can apply this sync.{' '}
+                {externalPerson(externalId)} needs a decision before you can apply this {isPeopleImport ? 'import' : 'sync'}.{' '}
                 <button type="button" className="font-semibold underline underline-offset-2" onClick={() => focusAffected(externalId)}>
                   Review {externalPerson(externalId)}
                 </button>
@@ -808,7 +832,7 @@ export default function SyncReview({
                 )}
                 <button type="button" className="mt-3 font-semibold underline underline-offset-2" onClick={() => void guardedRefresh()}>Refresh plan</button>
               </>
-            ) : peopleSyncErrorMessage(applyError, 'Failed to apply sync.')}
+            ) : peopleSyncErrorMessage(applyError, isPeopleImport ? 'Failed to apply import.' : 'Failed to apply sync.')}
           </div>
         )}
 
