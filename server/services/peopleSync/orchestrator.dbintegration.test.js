@@ -97,6 +97,24 @@ async function countPeople(churchId) {
   return Number(row.count);
 }
 
+async function countReviewApplications(churchId) {
+  const [row] = await Database.query(
+    'SELECT COUNT(*) AS count FROM people_sync_review_applications WHERE church_id = ?', [churchId]
+  );
+  return Number(row.count);
+}
+
+async function assertNoAuthorityApplyPartialCommits(churchId, batchIds, expectedPeople = 0) {
+  assert.equal(await countPeople(churchId), expectedPeople);
+  assert.equal(await countReviewApplications(churchId), 0);
+  assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'elvanto' });
+  for (const batchId of batchIds) {
+    const current = await batchRepository.getBatch(churchId, 'elvanto', batchId);
+    assert.equal(current.source, null, `batch ${batchId} source must remain unpromoted`);
+    assert.notEqual(current.draftSource, null, `batch ${batchId} draft must remain available for review`);
+  }
+}
+
 async function seedIndividual(churchId, overrides = {}) {
   const result = await Database.query(
     `INSERT INTO individuals (church_id, first_name, last_name, family_id, people_type, is_active, is_child)
@@ -442,6 +460,7 @@ test('a missing active source records health and every later run attempts the st
 test('transient source transport and rate-limit failures record error health without missing-source notifications', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
+    await setAuthority(churchId);
     const selected = source('members', 'Members');
     const batch = await reviewedBatch(churchId, selected);
     await Database.query(
@@ -471,6 +490,7 @@ test('transient source transport and rate-limit failures record error health wit
 test('a mismatched returned stable source is unavailable, marks active health missing, and notifies admins', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
+    await setAuthority(churchId);
     const selected = source('secret-members-id', 'Members');
     const batch = await reviewedBatch(churchId, selected);
     await Database.query(
@@ -578,11 +598,13 @@ test('source runs ignore a legacy watermark and remain full snapshot reconciliat
   });
 });
 
-test('authority preview remains pending until its source reconciliation applies', async () => {
+test('first-batch authority apply creates people, promotes its initial source, activates authority, and consumes its token', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     const selected = source('members', 'Members');
-    await reviewedBatch(churchId, selected);
+    const pending = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: selected,
+    });
     scenarios = new Map([['members', snapshot(selected, { people: [person('one')], memberExternalIds: ['one'] })]]);
     const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
     assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'elvanto' });
@@ -593,6 +615,196 @@ test('authority preview remains pending until its source reconciliation applies'
     assert.equal(applied.status, 'applied');
     assert.deepEqual(await authority.getAuthority(churchId), { active: 'elvanto', pending: null });
     assert.equal(await countPeople(churchId), 1);
+    assert.equal(await countReviewApplications(churchId), 1);
+    const promoted = await batchRepository.getBatch(churchId, 'elvanto', pending.id);
+    assert.deepEqual(promoted.source, selected);
+    assert.equal(promoted.draftSource, null);
+  });
+});
+
+test('a two-batch authority switch promotes both reviewed drafts in the reconciliation transaction', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const firstSource = source('first', 'First');
+    const secondSource = source('second', 'Second');
+    const first = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'First', initialDraftSource: firstSource,
+    });
+    const second = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Second', initialDraftSource: secondSource,
+    });
+    scenarios = new Map([
+      ['first', snapshot(firstSource, { people: [person('first-person')], memberExternalIds: ['first-person'] })],
+      ['second', snapshot(secondSource, { people: [person('second-person')], memberExternalIds: ['second-person'] })],
+    ]);
+
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    const applied = await orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    });
+
+    assert.equal(applied.status, 'applied');
+    assert.equal(await countPeople(churchId), 2);
+    assert.equal(await countReviewApplications(churchId), 1);
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'elvanto', pending: null });
+    assert.deepEqual((await batchRepository.getBatch(churchId, 'elvanto', first.id)).source, firstSource);
+    assert.deepEqual((await batchRepository.getBatch(churchId, 'elvanto', second.id)).source, secondSource);
+  });
+});
+
+test('a stale second authority draft rolls back people, both promotions, authority, and token consumption', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const firstSource = source('first-stale', 'First stale');
+    const secondSource = source('second-stale', 'Second stale');
+    const first = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'First stale', initialDraftSource: firstSource,
+    });
+    const second = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Second stale', initialDraftSource: secondSource,
+    });
+    scenarios = new Map([
+      ['first-stale', snapshot(firstSource, { people: [person('late-person')], memberExternalIds: ['late-person'] })],
+      ['second-stale', snapshot(secondSource, { people: [], memberExternalIds: [] })],
+    ]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    const secondFetchEntered = deferred();
+    const releaseSecondFetch = deferred();
+    scenarios.set('second-stale', async () => {
+      secondFetchEntered.resolve();
+      await releaseSecondFetch.promise;
+      return snapshot(secondSource, { people: [], memberExternalIds: [] });
+    });
+
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    });
+    const reachedSecondFetch = await Promise.race([
+      secondFetchEntered.promise.then(() => true),
+      applying.then(() => false, () => false),
+    ]);
+    assert.equal(reachedSecondFetch, true, 'apply must rebuild both reviewed draft sources before the transaction');
+    await batchRepository.saveSourceDraft({
+      churchId, provider: 'elvanto', batchId: second.id,
+      source: source('second-replaced', 'Second replaced'),
+    });
+    releaseSecondFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    await assertNoAuthorityApplyPartialCommits(churchId, [first.id, second.id]);
+  });
+});
+
+test('authority apply rejects a changed enabled batch set without partial commits', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const firstSource = source('enabled-first', 'Enabled first');
+    const secondSource = source('enabled-second', 'Enabled second');
+    const first = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Enabled first', initialDraftSource: firstSource,
+    });
+    const second = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Enabled second', initialDraftSource: secondSource,
+    });
+    scenarios = new Map([
+      ['enabled-first', snapshot(firstSource, { people: [person('new-person')], memberExternalIds: ['new-person'] })],
+      ['enabled-second', snapshot(secondSource, { people: [], memberExternalIds: [] })],
+    ]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    await batchRepository.updateBatch({ churchId, provider: 'elvanto', batchId: second.id, enabled: false });
+
+    await assert.rejects(orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    }), (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+
+    await assertNoAuthorityApplyPartialCommits(churchId, [first.id, second.id]);
+  });
+});
+
+test('authority apply rejects a replaced preview ID without partial commits', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const selected = source('preview-id', 'Preview ID');
+    const pending = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Preview ID', initialDraftSource: selected,
+    });
+    scenarios = new Map([['preview-id', snapshot(selected, { people: [person('new-person')], memberExternalIds: ['new-person'] })]]);
+    const preview = await orchestrator.previewAuthoritySwitch({
+      churchId, provider: 'elvanto', authorityPreviewId: 'original-preview-id',
+    });
+    await authority.beginAuthoritySwitch(churchId, 'elvanto', 'replacement-preview-id');
+
+    await assert.rejects(orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    }), (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+
+    await assertNoAuthorityApplyPartialCommits(churchId, [pending.id]);
+  });
+});
+
+test('authority apply rejects an Elvanto connection generation change without partial commits', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const selected = source('connection-change', 'Connection change');
+    const pending = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Connection change', initialDraftSource: selected,
+    });
+    scenarios = new Map([['connection-change', snapshot(selected, { people: [person('new-person')], memberExternalIds: ['new-person'] })]]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    await replaceElvantoConnectionGeneration(churchId, 50, 'replacement-account-key');
+
+    await assert.rejects(orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    }), (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+
+    await assertNoAuthorityApplyPartialCommits(churchId, [pending.id]);
+  });
+});
+
+test('authority apply rejects a changed local identity context without partial commits', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const selected = source('local-change', 'Local change');
+    const pending = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Local change', initialDraftSource: selected,
+    });
+    scenarios = new Map([['local-change', snapshot(selected, { people: [], memberExternalIds: [] })]]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    await seedIndividual(churchId, { firstName: 'Changed', lastName: 'Locally' });
+
+    await assert.rejects(orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    }), (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+
+    await assertNoAuthorityApplyPartialCommits(churchId, [pending.id], 1);
+  });
+});
+
+test('authority apply rejects changed provider membership without partial commits', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const selected = source('membership-change', 'Membership change');
+    const pending = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Membership change', initialDraftSource: selected,
+    });
+    scenarios = new Map([['membership-change', snapshot(selected, { people: [], memberExternalIds: [] })]]);
+    const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
+    scenarios.set('membership-change', snapshot(selected, {
+      people: [person('provider-added')], memberExternalIds: ['provider-added'],
+    }));
+
+    await assert.rejects(orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
+    }), (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+
+    await assertNoAuthorityApplyPartialCommits(churchId, [pending.id]);
   });
 });
 
@@ -769,6 +981,7 @@ test('a failed old-account fetch cannot publish missing source health or notific
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await replaceElvantoConnectionGeneration(churchId, 21, 'old-account-key');
+    await setAuthority(churchId);
     const selected = source('members', 'Members');
     const batch = await reviewedBatch(churchId, selected);
     await Database.query(

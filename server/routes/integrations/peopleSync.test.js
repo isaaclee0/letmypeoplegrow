@@ -675,3 +675,22 @@ test('POST /people-authority/apply times out with a safe 503 rather than hanging
     assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
   });
 });
+
+test('POST /people-authority/apply reports committed authority success when post-commit refresh times out', async () => {
+  await withServer({
+    routeTimeoutMs: 20,
+    applyReviewed: async ({ onCriticalCommit }) => {
+      onCriticalCommit({ runId: 1, status: 'applied' });
+      return neverResolvesForTimeoutTest();
+    },
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/people-authority/apply`, {
+      method: 'POST', body: { provider: 'elvanto', reviewToken: 'committed-review' },
+    });
+    assert.equal(status, 200);
+    assert.equal(body.success, true);
+    assert.equal(body.status, 'applied');
+    assert.equal(body.refreshRequired, true);
+    assert.equal(body.message, 'Authority applied; refresh status.');
+  });
+});

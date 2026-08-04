@@ -474,6 +474,7 @@ function createPeopleSyncRouter(overrides = {}) {
   });
 
   router.post('/people-authority/apply', async (req, res) => {
+    let criticalCommit = null;
     try {
       const body = req.body || {};
       const provider = body.provider;
@@ -491,11 +492,21 @@ function createPeopleSyncRouter(overrides = {}) {
         deps.applyReviewed({
           churchId: req.user.church_id, provider, batchId: null,
           reviewToken, selections, userId: req.user.id,
+          onCriticalCommit: (result) => { criticalCommit = result; },
         }),
         deps.routeTimeoutMs
       );
       res.json({ success: true, ...result });
     } catch (err) {
+      if (criticalCommit) {
+        res.json({
+          success: true,
+          ...criticalCommit,
+          refreshRequired: true,
+          message: 'Authority applied; refresh status.',
+        });
+        return;
+      }
       respondWithError(res, err, 'people-sync POST /people-authority/apply');
     }
   });

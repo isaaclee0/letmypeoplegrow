@@ -1222,7 +1222,9 @@ function reviewTokenErrorMessage(code) {
 // 'failed' — that would misrepresent a successful import/archive as
 // having not happened. Authority activation is committed inside that same
 // apply transaction; only finishRun remains after it returns.
-async function applyReviewed({ churchId, provider, batchId = null, reviewToken, selections = {}, userId } = {}, overrides = {}) {
+async function applyReviewed({
+  churchId, provider, batchId = null, reviewToken, selections = {}, userId, onCriticalCommit = null,
+} = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
   assertProvider(provider);
@@ -1235,8 +1237,14 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
-  const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const isAuthoritySwitch = batchId === null && pre.authorityState.pending === provider;
+  const reviewBatches = isAuthoritySwitch
+    ? effectiveAuthorityReviewBatches(pre.batches)
+    : effectiveReviewBatches(pre.batches, batchId);
+  const authoritySourceSet = isAuthoritySwitch ? authoritySourceSetFor(reviewBatches) : null;
+  const sourcePromotions = isAuthoritySwitch
+    ? authoritySourceSet.promotions
+    : reviewBatches.filter((batch) => batch.effectiveSourceIsDraft).map(toSourcePromotion);
   const operationKind = isAuthoritySwitch ? 'authority_switch' : 'people_sync';
   const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
   if (batchId !== null && batchId !== undefined && !isAuthoritySwitch) {
@@ -1278,7 +1286,8 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     } catch (selectionErr) {
       const base = computePipelineProjection(acquired, { linkCorrections: {} });
       base.plan.sourceContext = reviewedSourceContext(
-        provider, pre.batches, batchId, base.sourceProvenance, pre.connectionGeneration
+        provider, reviewBatches, batchId, base.sourceProvenance, pre.connectionGeneration,
+        authoritySourceSet,
       );
       if (isAuthoritySwitch && authorityPreviewId) base.plan.authorityPreviewId = authorityPreviewId;
       const lineageVerification = deps.verifyReviewTokenLineage(reviewToken, {
@@ -1301,7 +1310,8 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     body = computePipelineProjection(acquired, { linkCorrections });
 
     body.plan.sourceContext = reviewedSourceContext(
-      provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
+      provider, reviewBatches, batchId, body.sourceProvenance, pre.connectionGeneration,
+      authoritySourceSet,
     );
     if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
@@ -1331,11 +1341,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
         batchId,
         verifyReviewToken: deps.verifyReviewToken,
       },
-      sourcePromotions: reviewedBatch?.draftSource ? [{
-        batchId: reviewedBatch.id,
-        expectedBaseRevision: reviewedBatch.draftSourceBaseRevision,
-        expectedDraftDigest: digestSourceIdentity(reviewedBatch.draftSource),
-      }] : [],
+      sourcePromotions,
       authorityExpectation,
       sourceExpectations,
       connectionExpectation,
@@ -1356,6 +1362,19 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       : err;
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: reportedError });
     throw reportedError;
+  }
+
+  // This synchronous handoff lets the HTTP authority route distinguish a
+  // timeout in optional post-commit work from a failed critical apply. A
+  // broken observer must never relabel or undo the committed transaction.
+  if (typeof onCriticalCommit === 'function') {
+    try {
+      onCriticalCommit({ runId: run.id, status: 'applied' });
+    } catch (callbackError) {
+      logger.warn(
+        `peopleSync orchestrator: post-commit observer failed for church ${churchId} run ${run.id}: ${safeErrorMessage(callbackError)}`
+      );
+    }
   }
 
   applyResult = {

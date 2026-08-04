@@ -239,9 +239,10 @@ test('reviewed PCO apply refreshes supplementary background checks after roster 
   const result = await applyReviewed({
     churchId: 'church-a', provider: 'planning_center', batchId: 1,
     reviewToken: 'valid-review', selections: {}, userId: 1,
+    onCriticalCommit: () => { order.push('commit'); },
   }, deps);
 
-  assert.deepEqual(order, ['apply', 'background']);
+  assert.deepEqual(order, ['apply', 'commit', 'background']);
   assert.deepEqual(refreshedChurches, ['church-a']);
   assert.equal(result.applied.backgroundCheckSynced, 7);
   assert.equal(result.applied.backgroundCheckSyncFailed, 0);
@@ -1712,6 +1713,41 @@ test('legacy authority apply requires no owned intent and does not schedule a pr
     active: 'none', pending: 'elvanto', authorityPreviewId: null,
   });
   assert.equal(presence.length, 0);
+});
+
+test('authority apply rebuilds every draft-aware candidate and sends all signed promotions atomically', async () => {
+  const firstDraft = source('draft-20');
+  const secondDraft = source('draft-3');
+  const fetched = [];
+  const batches = [
+    batch({ id: 20, source: null, sourceRevision: 0, draftSource: firstDraft, draftSourceBaseRevision: 0 }),
+    batch({ id: 3, source: source('active-3'), sourceRevision: 4, draftSource: secondDraft, draftSourceBaseRevision: 4 }),
+  ];
+  const { deps, applied } = makeDeps({
+    batches,
+    authorityState: { active: 'none', pending: 'elvanto' },
+    fetchSourceSnapshot: async ({ sourceExternalId }) => {
+      fetched.push(sourceExternalId);
+      return sourceSnapshot(source(sourceExternalId), { people: [], memberExternalIds: [] });
+    },
+    extra: {
+      getAuthorityPreviewIntent: async () => ({ provider: 'elvanto', authorityPreviewId: 'authority-preview-1' }),
+    },
+  });
+
+  await applyReviewed({
+    churchId: 'church-a', provider: 'elvanto', batchId: null,
+    reviewToken: 'authority-review-token', selections: {}, userId: 5,
+  }, deps);
+
+  assert.deepEqual(fetched, ['draft-3', 'draft-20']);
+  assert.deepEqual(applied[0].sourcePromotions, [
+    { batchId: 3, expectedBaseRevision: 4, expectedDraftDigest: digestSourceIdentity(secondDraft) },
+    { batchId: 20, expectedBaseRevision: 0, expectedDraftDigest: digestSourceIdentity(firstDraft) },
+  ]);
+  assert.deepEqual(applied[0].plan.sourceContext.promotions, applied[0].sourcePromotions);
+  assert.equal(applied[0].plan.authorityPreviewId, 'authority-preview-1');
+  assert.equal(applied[0].activateAuthority, true);
 });
 
 test('a one-time review replay remains a typed refreshable failure and is recorded on the run', async () => {
