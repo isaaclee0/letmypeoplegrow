@@ -242,13 +242,14 @@ function createPeopleImportsRouter(overrides = {}) {
       return invalidRequest(res);
     }
     try {
-      const result = await runWithDeadline(req, res, deps, () => deps.applyImport({
+      const result = await runWithDeadline(req, res, deps, (signal) => deps.applyImport({
         churchId: req.user.church_id,
         provider: req.params.provider,
         selection,
         reviewToken: req.body.reviewToken,
         selections: req.body.selections,
         userId: req.user.id,
+        signal,
       }));
       return res.json(result);
     } catch (error) {

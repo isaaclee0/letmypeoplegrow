@@ -16,6 +16,14 @@ const {
   previewImport, applyImport, groupMembersByFamily, memberOnlyMatcherResult,
 } = require('./orchestrator');
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function person(id, overrides = {}) {
   return {
     id, firstName: 'Ada', lastName: 'Lovelace', state: 'active', child: false,
@@ -368,4 +376,123 @@ test('apply is one-time and forwards only additive mutation authority', async ()
 
   await assert.rejects(applyImport(request, state.deps), { code: 'SYNC_REVIEW_ALREADY_APPLIED' });
   assert.equal(state.failed.length, 1);
+});
+
+test('apply cancellation after a late provider read stops before local reads, token claim, and transaction apply', async () => {
+  const state = makeDeps();
+  const review = await previewImport(input, state.deps);
+  const providerReadStarted = deferred();
+  const releaseProviderRead = deferred();
+  state.deps.getProvider = () => ({
+    provider: 'elvanto',
+    async fetchImportSnapshot() {
+      providerReadStarted.resolve();
+      await releaseProviderRead.promise;
+      return snapshot();
+    },
+  });
+  const controller = new AbortController();
+  const applying = applyImport({
+    ...input,
+    reviewToken: review.reviewToken,
+    selections: {},
+    userId: 7,
+    signal: controller.signal,
+  }, state.deps);
+  await providerReadStarted.promise;
+  controller.abort();
+  releaseProviderRead.resolve();
+
+  await assert.rejects(applying, (error) => {
+    assert.equal(error.code, 'SYNC_ROUTE_TIMEOUT');
+    assert.equal(error.status, 503);
+    assert.equal(error.message, 'The people import request was cancelled before it could be applied.');
+    assert.equal(/secret|stack|credential/i.test(error.message), false);
+    return true;
+  });
+  assert.deepEqual(state.applied, []);
+  assert.equal(state.events.filter((event) => event === 'local').length, 1);
+  assert.equal(state.failed.at(-1).errorCode, 'SYNC_ROUTE_TIMEOUT');
+  assert.deepEqual(state.finished.map(({ status }) => status), ['review_required']);
+});
+
+test('apply cancellation after a late local read stops before token claim and transaction apply', async () => {
+  const state = makeDeps();
+  const review = await previewImport(input, state.deps);
+  const localReadStarted = deferred();
+  const releaseLocalRead = deferred();
+  state.deps.loadLocalProjectionState = async () => {
+    localReadStarted.resolve();
+    await releaseLocalRead.promise;
+    return {
+      individuals: [], families: [], personLinks: [], familyLinks: [], gatheringMemberships: [],
+      matchReviewState: { exclusions: [], holds: [] },
+    };
+  };
+  const controller = new AbortController();
+  const applying = applyImport({
+    ...input,
+    reviewToken: review.reviewToken,
+    selections: {},
+    userId: 7,
+    signal: controller.signal,
+  }, state.deps);
+  await localReadStarted.promise;
+  controller.abort();
+  releaseLocalRead.resolve();
+
+  await assert.rejects(applying, { code: 'SYNC_ROUTE_TIMEOUT', status: 503 });
+  assert.deepEqual(state.applied, []);
+  assert.equal(state.failed.at(-1).errorCode, 'SYNC_ROUTE_TIMEOUT');
+  assert.deepEqual(state.finished.map(({ status }) => status), ['review_required']);
+});
+
+test('apply rechecks cancellation immediately before invoking the transactional collaborator', async () => {
+  const controller = new AbortController();
+  const state = makeDeps({
+    extra: {
+      verifyReviewToken(token, expected) {
+        const verified = verifyReviewToken(token, expected);
+        controller.abort();
+        return verified;
+      },
+    },
+  });
+  const review = await previewImport(input, state.deps);
+
+  await assert.rejects(applyImport({
+    ...input,
+    reviewToken: review.reviewToken,
+    selections: {},
+    userId: 7,
+    signal: controller.signal,
+  }, state.deps), { code: 'SYNC_ROUTE_TIMEOUT', status: 503 });
+
+  assert.deepEqual(state.applied, []);
+  assert.equal(state.failed.at(-1).errorCode, 'SYNC_ROUTE_TIMEOUT');
+  assert.deepEqual(state.finished.map(({ status }) => status), ['review_required']);
+});
+
+test('cancellation after the transactional apply returns does not relabel a completed commit', async () => {
+  const controller = new AbortController();
+  const state = makeDeps({
+    apply: async () => {
+      controller.abort();
+      return emptyApplyResult({ addPeople: 1 });
+    },
+  });
+  const review = await previewImport(input, state.deps);
+
+  const result = await applyImport({
+    ...input,
+    reviewToken: review.reviewToken,
+    selections: {},
+    userId: 7,
+    signal: controller.signal,
+  }, state.deps);
+
+  assert.equal(result.status, 'applied');
+  assert.equal(result.applied.addPeople, 1);
+  assert.equal(state.failed.length, 0);
+  assert.deepEqual(state.finished.map(({ status }) => status), ['review_required', 'applied']);
 });

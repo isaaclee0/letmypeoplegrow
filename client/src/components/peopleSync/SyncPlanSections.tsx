@@ -1,4 +1,5 @@
 import React from 'react';
+import PeopleImportOutcomeSections from '../peopleImport/PeopleImportOutcomeSections';
 import type { SyncSelectionState } from './syncSelections';
 import type { ArchiveAction, IdentityDecision, PeopleReviewOperationKind, PeopleSyncReview } from './types';
 
@@ -138,6 +139,9 @@ export default function SyncPlanSections({
   onStateChange,
   onAcceptAllArchives,
 }: SyncPlanSectionsProps) {
+  if (operationKind === 'people_import') {
+    return <PeopleImportOutcomeSections review={review} state={state} />;
+  }
   if (operationKind !== 'people_sync' && operationKind !== 'authority_switch') return null;
   const view = deriveSyncPlanView(review, state);
   const directory = review.plan.people || { external: {}, local: {} };

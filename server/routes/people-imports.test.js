@@ -15,6 +15,14 @@ const {
 const ADMIN = { id: 7, church_id: 'churcha1', role: 'admin' };
 const NON_ADMIN = { id: 8, church_id: 'churcha1', role: 'attendance_taker' };
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function verifyAs(user) {
   return (req, res, next) => {
     if (!user) return res.status(401).json({ error: 'Authentication required.' });
@@ -269,14 +277,16 @@ test('POST apply forwards only reviewed import inputs and the verified user iden
     assert.deepEqual(response.body, applied);
   });
 
-  assert.deepEqual(applyCalls, [{
+  assert.ok(applyCalls[0].signal instanceof AbortSignal);
+  const [{ signal: _signal, ...forwarded }] = applyCalls;
+  assert.deepEqual(forwarded, {
     churchId: ADMIN.church_id,
     provider: 'elvanto',
     selection: { kind: 'elvanto_group', externalId: 'group-9' },
     reviewToken: 'signed-review',
     selections: { skipExternalPersonIds: ['person-2'] },
     userId: ADMIN.id,
-  }]);
+  });
 });
 
 test('preview accepts exactly the four provider-compatible selection shapes', async () => {
@@ -378,6 +388,76 @@ test('the route owns a 120-second abortable deadline and aborts provider work wh
   });
   assert.ok(capturedSignal instanceof AbortSignal);
   assert.equal(capturedSignal.aborted, true);
+});
+
+test('a timed-out apply aborts late provider work before it can continue', async () => {
+  const providerRead = deferred();
+  const observedAfterProviderRead = deferred();
+  await withServer(dependencies({
+    routeTimeoutMs: 15,
+    async applyImport({ signal }) {
+      await providerRead.promise;
+      observedAfterProviderRead.resolve({
+        isAbortSignal: signal instanceof AbortSignal,
+        aborted: signal?.aborted,
+      });
+      return { runId: 2, status: 'applied', applied: {}, summary: {} };
+    },
+  }), {}, async (base) => {
+    const response = await requestJson(`${base}/elvanto/apply`, {
+      method: 'POST',
+      body: { selection: { kind: 'all' }, reviewToken: 'review-token', selections: {} },
+    });
+    assert.equal(response.status, 503);
+    assert.deepEqual(response.body, {
+      error: 'The people import took too long to complete. Please try again.',
+      code: 'SYNC_ROUTE_TIMEOUT',
+    });
+    providerRead.resolve();
+    assert.deepEqual(await observedAfterProviderRead.promise, {
+      isAbortSignal: true,
+      aborted: true,
+    });
+  });
+});
+
+test('a disconnected apply aborts provider work that resolves after the client leaves', async () => {
+  const providerRead = deferred();
+  const applyStarted = deferred();
+  const observedAfterProviderRead = deferred();
+  await withServer(dependencies({
+    routeTimeoutMs: 1000,
+    async applyImport({ signal }) {
+      applyStarted.resolve();
+      await providerRead.promise;
+      if (signal instanceof AbortSignal && !signal.aborted) {
+        await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      }
+      observedAfterProviderRead.resolve({
+        isAbortSignal: signal instanceof AbortSignal,
+        aborted: signal?.aborted,
+      });
+      return { runId: 2, status: 'applied', applied: {}, summary: {} };
+    },
+  }), {}, async (base) => {
+    const client = new AbortController();
+    const request = fetch(`${base}/elvanto/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selection: { kind: 'all' }, reviewToken: 'review-token', selections: {},
+      }),
+      signal: client.signal,
+    }).catch((error) => error);
+    await applyStarted.promise;
+    client.abort();
+    await request;
+    providerRead.resolve();
+    assert.deepEqual(await observedAfterProviderRead.promise, {
+      isAbortSignal: true,
+      aborted: true,
+    });
+  });
 });
 
 test('provider work receives the production 120,000 ms aggregate deadline', async () => {

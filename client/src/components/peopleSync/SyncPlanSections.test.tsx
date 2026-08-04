@@ -119,16 +119,54 @@ describe('SyncPlanSections', () => {
     expect(screen.queryByLabelText('Planned non-identity changes')).not.toBeInTheDocument();
   });
 
-  it('hides shared sync sections during a people import', () => {
+  it('shows every read-only import outcome without exposing raw reasons or sync-only controls', () => {
     const review = reviewFixture({
+      addPeople: [
+        {
+          id: 'add:ext-match', externalPersonId: 'ext-match', firstName: 'Source', lastName: 'Match',
+          isChild: false, familyId: null, peopleType: 'regular',
+          reason: 'sync_archive_managed_fields_correction', reviewRequired: true,
+        },
+        {
+          id: 'add:ext-held', externalPersonId: 'ext-held', firstName: 'Source', lastName: 'Held',
+          isChild: false, familyId: 'source-1', peopleType: 'local_visitor',
+          reason: 'authority_requires_visitor', reviewRequired: true,
+        },
+      ],
+      linkFamilies: [{
+        id: 'linkFamily:source-2', externalFamilyId: 'source-2', familyId: 20,
+        reason: 'sync_archive_managed_fields_correction',
+      }],
       addFamilies: [{
         id: 'addFamily:source-1', externalFamilyId: 'source-1', familyName: 'Import Household',
+        reason: 'sync_archive_managed_fields_correction',
       }],
-      skipped: [{ id: 'skipped:ext-held', externalPersonId: 'ext-held', reason: 'held' }],
+      familyConflicts: [{
+        id: 'familyConflict:source-3',
+        externalFamilyId: 'source-3',
+        memberExternalIds: ['ext-match', 'ext-held'],
+        reason: 'sync_archive_managed_fields_correction',
+      }],
+      skipped: [{
+        id: 'skipped:ext-skipped', externalPersonId: 'ext-skipped',
+        reason: 'sync_archive_managed_fields_correction',
+      }],
     });
+    review.plan.people!.external['ext-skipped'] = {
+      firstName: 'Source', lastName: 'Skipped', family: { state: 'none' },
+    };
+    review.plan.reviewContext!.identities['ext-held'].held = false;
+    review.plan.reviewContext!.identities['ext-held'].createPerson!.peopleType = 'local_visitor';
+    (review as PeopleSyncReview & { operationKind: string }).operationKind = 'people_import';
+    (review.plan as PeopleSyncPlan & { operationKind: string }).operationKind = 'people_import';
     const state = initializeSyncSelectionState(review);
+    state.identityDecisions = {
+      ...state.identityDecisions,
+      'ext-match': { outcome: 'create' },
+      'ext-held': { outcome: 'create' },
+    };
 
-    render(<SyncPlanSections
+    const { container } = render(<SyncPlanSections
       operationKind="people_import"
       review={review}
       state={state}
@@ -137,9 +175,41 @@ describe('SyncPlanSections', () => {
       onAcceptAllArchives={() => {}}
     />);
 
-    expect(screen.queryByLabelText('Planned non-identity changes')).not.toBeInTheDocument();
-    expect(screen.queryByText('Family changes')).not.toBeInTheDocument();
-    expect(screen.queryByText('Skipped or unchanged')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Planned import outcomes')).toBeInTheDocument();
+    expect(screen.getByText('Add Source Match as a regular.')).toBeInTheDocument();
+    expect(screen.getByText('Add Source Held as a local visitor.')).toBeInTheDocument();
+    expect(screen.getByText('Add family Import Household.')).toBeInTheDocument();
+    expect(screen.getByText('Link a provider household to an existing LMPG family.')).toBeInTheDocument();
+    expect(screen.getByText('The household containing Source Match and Source Held needs review and will not be added or linked.')).toBeInTheDocument();
+    expect(screen.getByText('Source Skipped will not be imported in this review.')).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/sync_archive|managed_fields|authority_requires_visitor/i);
+    expect(screen.queryByText('Managed person updates')).not.toBeInTheDocument();
+    expect(screen.queryByText('Gathering changes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reactivations')).not.toBeInTheDocument();
+    expect(container.querySelector('button, input, select, textarea')).toBeNull();
+  });
+
+  it('fails closed when an import outcome section receives mismatched operation markers', () => {
+    const review = reviewFixture({
+      addFamilies: [{
+        id: 'addFamily:source-1', externalFamilyId: 'source-1', familyName: 'Private Household',
+      }],
+    });
+    (review as PeopleSyncReview & { operationKind: string }).operationKind = 'people_import';
+    (review.plan as PeopleSyncPlan & { operationKind: string }).operationKind = 'people_sync';
+
+    const { container } = render(<SyncPlanSections
+      operationKind="people_import"
+      review={review}
+      state={initializeSyncSelectionState(review)}
+      archiveActions={[]}
+      onStateChange={() => {}}
+      onAcceptAllArchives={() => {}}
+    />);
+
+    expect(screen.queryByLabelText('Planned import outcomes')).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent('Private Household');
   });
 
   it('omits empty sections and keeps routine managed changes collapsed', () => {

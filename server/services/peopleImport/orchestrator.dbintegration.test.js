@@ -15,6 +15,14 @@ const { previewImport, applyImport } = require('./orchestrator');
 let currentSnapshot;
 let fetchHook = null;
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function person(id, overrides = {}) {
   return {
     id, firstName: 'Ada', lastName: 'Lovelace', state: 'active', child: false,
@@ -388,5 +396,67 @@ test('authority changed during the fresh provider read rolls back the reviewed t
     assert.equal(Number(people.count), 0);
     assert.equal(Number(claims.count), 0);
     fetchHook = null;
+  });
+});
+
+test('a route cancellation while the apply provider read is in flight leaves no import writes or token claim', async () => {
+  await withTestChurchDb(async (churchId) => {
+    fetchHook = null;
+    await seedChurch(churchId);
+    currentSnapshot = importSnapshot();
+    const review = await previewImport({ churchId, provider: 'elvanto', selection });
+    const providerReadStarted = deferred();
+    const releaseProviderRead = deferred();
+    let applySignal;
+    fetchHook = async ({ signal }) => {
+      applySignal = signal;
+      providerReadStarted.resolve();
+      await releaseProviderRead.promise;
+    };
+    const controller = new AbortController();
+    const applying = applyImport({
+      churchId,
+      provider: 'elvanto',
+      selection,
+      reviewToken: review.reviewToken,
+      selections: selectionsFor(review),
+      userId: null,
+      signal: controller.signal,
+    });
+    await providerReadStarted.promise;
+    controller.abort();
+    releaseProviderRead.resolve();
+
+    try {
+      await assert.rejects(applying, { code: 'SYNC_ROUTE_TIMEOUT', status: 503 });
+      assert.equal(applySignal, controller.signal);
+      for (const table of [
+        'individuals',
+        'families',
+        'external_person_links',
+        'external_family_links',
+        'people_sync_review_applications',
+      ]) {
+        const [row] = await Database.queryForChurch(
+          churchId, `SELECT COUNT(*) AS count FROM ${table} WHERE church_id = ?`, [churchId]
+        );
+        assert.equal(Number(row.count), 0, `${table} must remain empty after cancellation`);
+      }
+      const runs = await Database.queryForChurch(
+        churchId,
+        `SELECT status, error_code
+           FROM people_sync_runs
+          WHERE church_id = ? AND trigger = 'people_import'
+          ORDER BY id`,
+        [churchId]
+      );
+      assert.deepEqual(runs, [
+        { status: 'review_required', error_code: null },
+        { status: 'failed', error_code: 'SYNC_ROUTE_TIMEOUT' },
+      ]);
+      assert.equal(runs.some(({ status }) => status === 'applied'), false);
+    } finally {
+      fetchHook = null;
+    }
   });
 });

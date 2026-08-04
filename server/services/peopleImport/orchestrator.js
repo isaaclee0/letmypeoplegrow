@@ -176,7 +176,7 @@ function reviewError(code) {
 function assertNotAborted(signal) {
   if (signal?.aborted) {
     throw new OrchestratorError(
-      'SYNC_ROUTE_TIMEOUT', 'The people import was cancelled after its request timed out.', 503
+      'SYNC_ROUTE_TIMEOUT', 'The people import request was cancelled before it could be applied.', 503
     );
   }
 }
@@ -384,7 +384,7 @@ async function finishAppliedRun(deps, input) {
 }
 
 async function applyImport({
-  churchId, provider, selection, reviewToken, selections = {}, userId,
+  churchId, provider, selection, reviewToken, selections = {}, userId, signal = null,
 } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -393,7 +393,9 @@ async function applyImport({
   if (typeof reviewToken !== 'string' || !reviewToken) {
     throw new OrchestratorError('SYNC_REVIEW_INVALID', 'A review token is required', 400);
   }
+  assertNotAborted(signal);
   const preconditions = await loadPreconditions({ churchId, provider, deps });
+  assertNotAborted(signal);
   const authorityExpectation = {
     active: preconditions.authorityState.active,
     pending: preconditions.authorityState.pending,
@@ -407,7 +409,7 @@ async function applyImport({
   let applyResult;
   try {
     body = await buildFreshPlan({
-      churchId, provider, selection: normalizedSelection, signal: null, preconditions, deps,
+      churchId, provider, selection: normalizedSelection, signal, preconditions, deps,
     });
     const planDigest = deps.digestPlan(body.plan);
     const verification = deps.verifyReviewToken(reviewToken, {
@@ -419,6 +421,7 @@ async function applyImport({
     });
     if (!verification?.ok) throw reviewError(verification?.code);
 
+    assertNotAborted(signal);
     applyResult = await deps.applyPeopleSyncPlan({
       churchId,
       provider,

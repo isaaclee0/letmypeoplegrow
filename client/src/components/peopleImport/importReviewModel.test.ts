@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import SyncReview from '../peopleSync/SyncReview';
-import type { PeopleImportReview } from './types';
+import { hasForbiddenImportMutations, type PeopleImportReview } from './types';
 import type {
   IdentityReviewEntry,
   PeopleReviewToken,
@@ -84,6 +84,21 @@ const handlers = {
 };
 
 describe('people import review model', () => {
+  it.each([
+    'linkPeople',
+    'linkFamilies',
+    'addPeople',
+    'addFamilies',
+    'ambiguousPeople',
+    'familyConflicts',
+    'skipped',
+  ] as const)('accepts a non-empty additive %s bucket', (bucket) => {
+    const review = reviewFixture();
+    review.plan[bucket] = [{ id: `allowed:${bucket}` }] as never;
+
+    expect(hasForbiddenImportMutations(review)).toBe(false);
+  });
+
   it('uses import-only copy and hides established-link and sync-only controls', () => {
     const { container } = render(React.createElement(SyncReview, {
       operationKind: 'people_import',
