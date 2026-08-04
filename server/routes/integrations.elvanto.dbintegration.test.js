@@ -25,6 +25,9 @@ providerRegistry.registerProvider('elvanto', {
       : [];
   },
   fetchSourceSnapshot: async () => ({ provider: 'elvanto', complete: true, people: [], memberExternalIds: [] }),
+  fetchImportSnapshot: async () => {
+    throw new Error('Import snapshots are not configured for Elvanto sync-batch route integration tests');
+  },
   isLifecycleEligible: () => true,
 });
 

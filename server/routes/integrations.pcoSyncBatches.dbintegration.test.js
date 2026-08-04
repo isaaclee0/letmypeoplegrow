@@ -19,6 +19,9 @@ providerRegistry.registerProvider('planning_center', {
   validateConnection: async () => ({ valid: true }),
   listSources: async () => [{ kind: 'planning_center_list', externalId: 'list-1', name: 'Members' }],
   fetchSourceSnapshot: async () => ({ provider: 'planning_center', complete: true, people: [], memberExternalIds: [] }),
+  fetchImportSnapshot: async () => {
+    throw new Error('Import snapshots are not configured for Planning Center sync-batch route integration tests');
+  },
   isLifecycleEligible: () => true,
 });
 
