@@ -866,7 +866,10 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   const plan = acquired.deps.computePeopleSyncPlan({
     provider: acquired.provider,
     externalPeople: planningPeople,
+    externalFamilies: acquired.snapshot.families,
+    householdPeople: [...planningPeople, ...acquired.contextPeople],
     localPeople: acquired.individuals,
+    localFamilies: acquired.families,
     matcher: matcherResult,
     batches: acquired.batches,
     eligibleByBatch: acquired.eligibleByBatch,
@@ -878,6 +881,7 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
       externalPersonId: link.externalPersonId,
       individualId: link.individualId,
     })),
+    familyLinks: acquired.familyLinks,
     snapshot: {
       fetchedAt: acquired.snapshot.fetchedAt,
       watermark: acquired.snapshot.watermark,

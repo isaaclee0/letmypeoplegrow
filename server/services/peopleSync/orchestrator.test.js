@@ -930,6 +930,11 @@ test('household context can corroborate a member match but never becomes eligibl
     { id: 3, firstName: 'Bob', lastName: 'Smith', familyId: 10, peopleType: 'regular', isChild: false, isActive: true },
   ];
   const personLinks = [{ externalPersonId: 'context', individualId: 3, missingFullSyncCount: 0 }];
+  const localFamilies = [
+    { id: 10, familyName: 'Smith, Bob' },
+    { id: 20, familyName: 'Other Smiths' },
+  ];
+  const familyLinks = [];
   const { deps, plans, presence, applied } = makeDeps({
     localIndividuals: locals,
     personLinks,
@@ -937,12 +942,23 @@ test('household context can corroborate a member match but never becomes eligibl
       people: [member], memberExternalIds: ['member'], contextPeople: [context],
       families: [{ id: 'external-family', memberExternalIds: ['member', 'context'], primaryContactExternalId: 'context' }],
     }),
+    extra: {
+      listLocalFamilies: async () => localFamilies,
+      listFamilyLinks: async () => familyLinks,
+    },
   });
 
   await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
 
   assert.deepEqual([...plans[0].eligibleByBatch.get(1)], ['member']);
   assert.deepEqual(plans[0].externalPeople.map((item) => item.id), ['member']);
+  assert.deepEqual(plans[0].externalFamilies, [{
+    id: 'external-family', memberExternalIds: ['member', 'context'],
+    primaryContactExternalId: 'context',
+  }]);
+  assert.deepEqual(plans[0].householdPeople.map((item) => item.id).sort(), ['context', 'member']);
+  assert.deepEqual(plans[0].localFamilies, localFamilies);
+  assert.deepEqual(plans[0].familyLinks, familyLinks);
   assert.deepEqual(applied[0].plan.linkPeople.map((item) => [item.externalPersonId, item.individualId]), [['member', 1]]);
   for (const bucketName of ['addPeople', 'reactivate', 'addToGathering']) {
     assert.equal(applied[0].plan[bucketName].some((item) => item.externalPersonId === 'context'), false);
