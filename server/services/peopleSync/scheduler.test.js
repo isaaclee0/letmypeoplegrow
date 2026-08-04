@@ -27,10 +27,32 @@ function baseBatch(overrides = {}) {
     scheduleEnabled: true,
     scheduleFrequency: 'weekly',
     scheduleDay: 1,
+    source: { kind: 'list', externalId: 'list-1', name: 'Members' },
     lastExternalWatermark: null,
     ...overrides,
   };
 }
+
+test('prepared, source-review, and disabled batches skip due checks, connection access, and run creation', async () => {
+  for (const batch of [
+    baseBatch({ id: 201, provider: 'elvanto' }),
+    baseBatch({ id: 202, needsSourceReview: true }),
+    baseBatch({ id: 203, enabled: false }),
+  ]) {
+    Object.defineProperty(batch, 'scheduleFrequency', {
+      get() { throw new Error('ineligible batches must not have their due date checked'); },
+    });
+    let connectionReads = 0;
+    let executions = 0;
+    await runChurch('church-a', baseOptions({
+      listBatches: async () => [batch],
+      getConnection: async () => { connectionReads += 1; return { connectionStatus: 'connected' }; },
+      runUnattended: async () => { executions += 1; return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
+    }));
+    assert.equal(connectionReads, 0, `batch ${batch.id} must not access provider credentials`);
+    assert.equal(executions, 0, `batch ${batch.id} must not create a scheduled run`);
+  }
+});
 
 function baseOptions(overrides = {}) {
   return {

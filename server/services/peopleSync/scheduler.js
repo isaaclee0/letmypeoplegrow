@@ -30,6 +30,7 @@ const batchRepository = require('./batchRepository');
 const connectionStore = require('./connectionStore');
 const orchestrator = require('./orchestrator');
 const unattendedPolicy = require('./unattendedPolicy');
+const { isBatchRunnable } = require('./batchOperationalState');
 
 const PROVIDERS = ['planning_center', 'elvanto'];
 
@@ -139,7 +140,7 @@ async function runChurch(churchId, options = {}) {
       }
 
       const dueBatches = (batches || []).filter((batch) =>
-        batch.enabled && batch.scheduleEnabled &&
+        isBatchRunnable(batch, authorityState.active) && batch.scheduleEnabled &&
         (skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay, now)));
       if (!dueBatches.length) continue;
 
