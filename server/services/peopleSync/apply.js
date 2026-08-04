@@ -416,7 +416,7 @@ async function applyPeopleSyncPlan({
   userId,
   activateAuthority = false,
   authorityPreviewId = null,
-  sourcePromotion = null,
+  sourcePromotions = [],
   reviewedApply = null,
   authorityExpectation = null,
   sourceExpectations = null,
@@ -424,6 +424,7 @@ async function applyPeopleSyncPlan({
   requireConnection = false,
   allowedMutationBuckets = null,
   markLinksSeen = true,
+  ...unsupportedInput
 }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
@@ -431,6 +432,10 @@ async function applyPeopleSyncPlan({
   if (plan.provider && plan.provider !== provider) {
     throw new Error(`Plan was computed for provider "${plan.provider}", not "${provider}"`);
   }
+  if (Object.hasOwn(unsupportedInput, 'sourcePromotion')) {
+    throw new Error('sourcePromotion has been replaced by sourcePromotions');
+  }
+  if (!Array.isArray(sourcePromotions)) throw new Error('sourcePromotions must be an array');
   assertAllowedMutationBuckets(plan, allowedMutationBuckets);
 
   return Database.transactionForChurch(churchId, async (conn) => {
@@ -874,13 +879,20 @@ async function applyPeopleSyncPlan({
       });
     }
 
-    if (sourcePromotion) {
-      await batchRepository.promoteSourceDraftWithConnection(conn, {
-        churchId, provider,
-        batchId: sourcePromotion.batchId,
-        expectedBaseRevision: sourcePromotion.expectedBaseRevision,
-        expectedDraftDigest: sourcePromotion.expectedDraftDigest,
-      });
+    if (sourcePromotions.length > 0) {
+      try {
+        await batchRepository.promoteSourceDraftsWithConnection(conn, {
+          churchId, provider, promotions: sourcePromotions,
+        });
+      } catch (error) {
+        if (error?.code === 'SYNC_SOURCE_DRAFT_STALE') {
+          throw reviewedApplyError(
+            'SYNC_PLAN_STALE',
+            'A reviewed source draft changed before this plan could be applied.'
+          );
+        }
+        throw error;
+      }
     }
 
     // Authority activation is part of this same critical transaction. If

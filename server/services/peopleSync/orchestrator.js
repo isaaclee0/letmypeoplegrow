@@ -1292,11 +1292,11 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
         batchId,
         verifyReviewToken: deps.verifyReviewToken,
       },
-      sourcePromotion: reviewedBatch?.draftSource ? {
+      sourcePromotions: reviewedBatch?.draftSource ? [{
         batchId: reviewedBatch.id,
         expectedBaseRevision: reviewedBatch.draftSourceBaseRevision,
         expectedDraftDigest: digestSourceIdentity(reviewedBatch.draftSource),
-      } : null,
+      }] : [],
       authorityExpectation,
       sourceExpectations,
       connectionExpectation,

@@ -232,6 +232,60 @@ async function promoteSourceDraftWithConnection(conn, {
     WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]));
 }
 
+function normalizeSourcePromotions(promotions) {
+  if (!Array.isArray(promotions)) throw new Error('Source promotions must be an array');
+  const seenBatchIds = new Set();
+  const normalized = promotions.map((promotion) => {
+    if (!promotion || typeof promotion !== 'object' || Array.isArray(promotion) ||
+        !Number.isSafeInteger(promotion.batchId) || promotion.batchId <= 0 ||
+        !Number.isSafeInteger(promotion.expectedBaseRevision) || promotion.expectedBaseRevision < 0 ||
+        typeof promotion.expectedDraftDigest !== 'string' || !/^[a-f0-9]{64}$/.test(promotion.expectedDraftDigest)) {
+      throw new Error('Invalid source promotion batch, revision, or digest');
+    }
+    if (seenBatchIds.has(promotion.batchId)) throw new Error('Duplicate source promotion batch ID');
+    seenBatchIds.add(promotion.batchId);
+    return {
+      batchId: promotion.batchId,
+      expectedBaseRevision: promotion.expectedBaseRevision,
+      expectedDraftDigest: promotion.expectedDraftDigest,
+    };
+  });
+  return normalized.sort((left, right) => left.batchId - right.batchId);
+}
+
+async function promoteSourceDraftsWithConnection(conn, { churchId, provider, promotions }) {
+  assertProvider(provider);
+  const normalized = normalizeSourcePromotions(promotions);
+  const readOne = async (sql, params) => typeof conn.query === 'function'
+    ? (await conn.query(sql, params))[0]
+    : conn.prepare(sql).get(...params);
+
+  // Validate the entire set before the first compare-and-swap write. The
+  // caller owns the surrounding transaction, so a later CAS race still rolls
+  // back every promotion and all people-sync mutations with it.
+  for (const promotion of normalized) {
+    const row = await readOne(`SELECT * FROM people_sync_batches
+      WHERE id = ? AND church_id = ? AND provider = ?`, [promotion.batchId, churchId, provider]);
+    assertPlanningCenterBatchOperational(toBatch(row));
+    const draft = row ? sourceFromColumns(row, 'draft_') : null;
+    if (!row || !draft || row.source_revision !== promotion.expectedBaseRevision ||
+        row.draft_source_base_revision !== promotion.expectedBaseRevision ||
+        digestSourceIdentity(draft) !== promotion.expectedDraftDigest) {
+      const error = new Error('Sync source draft is stale');
+      error.code = 'SYNC_SOURCE_DRAFT_STALE';
+      throw error;
+    }
+  }
+
+  const promoted = [];
+  for (const promotion of normalized) {
+    promoted.push(await promoteSourceDraftWithConnection(conn, {
+      churchId, provider, ...promotion,
+    }));
+  }
+  return promoted;
+}
+
 async function updateBatch(input) {
   const { churchId, provider, batchId } = input || {};
   assertProvider(provider);
@@ -328,6 +382,6 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 
 module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
-  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, recordActiveSourceHealthWithConnection,
+  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, promoteSourceDraftsWithConnection, recordActiveSourceHealthWithConnection,
   assertSourceExpectationsWithConnection,
 };

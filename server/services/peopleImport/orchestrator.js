@@ -429,7 +429,7 @@ async function applyImport({
       selections,
       userId,
       activateAuthority: false,
-      sourcePromotion: null,
+      sourcePromotions: [],
       sourceExpectations: null,
       authorityExpectation,
       connectionExpectation,

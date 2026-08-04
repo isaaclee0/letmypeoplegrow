@@ -361,7 +361,7 @@ test('apply is one-time and forwards only additive mutation authority', async ()
   assert.equal(result.applied.addPeople, 1);
   const forwarded = state.applied[0];
   assert.equal(forwarded.activateAuthority, false);
-  assert.equal(forwarded.sourcePromotion, null);
+  assert.deepEqual(forwarded.sourcePromotions, []);
   assert.equal(forwarded.sourceExpectations, null);
   assert.deepEqual(forwarded.authorityExpectation, { active: 'none', pending: null });
   assert.deepEqual(forwarded.connectionExpectation, { generation: 17 });

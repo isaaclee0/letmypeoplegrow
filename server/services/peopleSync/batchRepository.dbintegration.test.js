@@ -5,7 +5,7 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { digestSourceIdentity } = require('./sourceModel');
 const {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
-  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, recordActiveSourceHealthWithConnection,
+  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, promoteSourceDraftsWithConnection, recordActiveSourceHealthWithConnection,
   assertSourceExpectationsWithConnection,
 } = require('./batchRepository');
 
@@ -68,6 +68,88 @@ test('saving a source draft captures the active revision and a normal draft can 
     const discarded = await discardSourceDraft(churchId, 'elvanto', batch.id);
     assert.equal(discarded.draftSource, null);
     assert.equal(discarded.needsSourceReview, false);
+  });
+});
+
+test('source draft promotion sets validate completely before promoting every draft', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstDraft = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };
+    const secondDraft = { kind: 'elvanto_category', externalId: 'youth', name: 'Youth' };
+    const first = await createBatch({ churchId, provider: 'elvanto', name: 'Members', initialDraftSource: firstDraft });
+    const second = await createBatch({ churchId, provider: 'elvanto', name: 'Youth', initialDraftSource: secondDraft });
+    const promotions = [
+      { batchId: second.id, expectedBaseRevision: second.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(secondDraft) },
+      { batchId: first.id, expectedBaseRevision: first.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(firstDraft) },
+    ];
+
+    const promoted = await promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+      churchId, provider: 'elvanto', promotions,
+    });
+
+    assert.deepEqual(promoted.map((batch) => batch.id), [first.id, second.id]);
+    assert.deepEqual((await getBatch(churchId, 'elvanto', first.id)).source, firstDraft);
+    assert.deepEqual((await getBatch(churchId, 'elvanto', second.id)).source, secondDraft);
+  });
+});
+
+test('source draft promotion sets reject invalid members before changing any draft', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstDraft = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };
+    const secondDraft = { kind: 'elvanto_category', externalId: 'youth', name: 'Youth' };
+    const first = await createBatch({ churchId, provider: 'elvanto', name: 'Members', initialDraftSource: firstDraft });
+    const second = await createBatch({ churchId, provider: 'elvanto', name: 'Youth', initialDraftSource: secondDraft });
+    const validFirst = { batchId: first.id, expectedBaseRevision: first.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(firstDraft) };
+    const staleSecond = { batchId: second.id, expectedBaseRevision: second.draftSourceBaseRevision, expectedDraftDigest: '0'.repeat(64) };
+
+    await assert.rejects(
+      promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+        churchId, provider: 'elvanto', promotions: [validFirst, staleSecond],
+      }),
+      (error) => error?.code === 'SYNC_SOURCE_DRAFT_STALE',
+    );
+    assert.deepEqual((await getBatch(churchId, 'elvanto', first.id)).draftSource, firstDraft);
+    assert.deepEqual((await getBatch(churchId, 'elvanto', second.id)).draftSource, secondDraft);
+
+    await assert.rejects(
+      promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+        churchId, provider: 'elvanto', promotions: [{ ...validFirst, expectedDraftDigest: '0'.repeat(64) }, {
+          batchId: second.id,
+          expectedBaseRevision: second.draftSourceBaseRevision,
+          expectedDraftDigest: digestSourceIdentity(secondDraft),
+        }],
+      }),
+      (error) => error?.code === 'SYNC_SOURCE_DRAFT_STALE',
+    );
+    assert.deepEqual((await getBatch(churchId, 'elvanto', first.id)).draftSource, firstDraft);
+    assert.deepEqual((await getBatch(churchId, 'elvanto', second.id)).draftSource, secondDraft);
+
+    await assert.rejects(
+      promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+        churchId, provider: 'elvanto', promotions: [validFirst, validFirst],
+      }),
+      /duplicate.*batch/i,
+    );
+    await assert.rejects(
+      promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+        churchId, provider: 'elvanto', promotions: [{ ...validFirst, expectedDraftDigest: 'not-a-digest' }],
+      }),
+      /digest/i,
+    );
+    await assert.rejects(
+      promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+        churchId, provider: 'planning_center', promotions: [validFirst],
+      }),
+      (error) => error?.code === 'SYNC_SOURCE_DRAFT_STALE',
+    );
+    const otherChurchId = `${churchId}_other`;
+    Database.getChurchDb(otherChurchId);
+    await assert.rejects(
+      promoteSourceDraftsWithConnection(Database.getChurchDb(churchId), {
+        churchId: otherChurchId, provider: 'elvanto', promotions: [validFirst],
+      }),
+      (error) => error?.code === 'SYNC_SOURCE_DRAFT_STALE',
+    );
+    assert.deepEqual((await getBatch(churchId, 'elvanto', first.id)).draftSource, firstDraft);
   });
 });
 

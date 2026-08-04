@@ -328,11 +328,11 @@ test('reviewed corrections atomically retarget managed effects while preserving 
         userId,
         reviewedApply: signedReview,
         authorityExpectation: { active: 'none', pending: null },
-        sourcePromotion: {
+        sourcePromotions: [{
           batchId: batch.id,
           expectedBaseRevision: batch.draftSourceBaseRevision,
           expectedDraftDigest: digestSourceIdentity(draft),
-        },
+        }],
       }),
       /signed.*version 2.*selection contract|decision contract version 2/i,
       'a corrected signed plan must never execute through legacy selection validation',
@@ -363,11 +363,11 @@ test('reviewed corrections atomically retarget managed effects while preserving 
       userId,
       reviewedApply: signedReview,
       authorityExpectation: { active: 'none', pending: null },
-      sourcePromotion: {
+      sourcePromotions: [{
         batchId: batch.id,
         expectedBaseRevision: batch.draftSourceBaseRevision,
         expectedDraftDigest: digestSourceIdentity(draft),
-      },
+      }],
     });
 
     const links = await Database.query(
@@ -584,7 +584,7 @@ test('a later apply failure rolls back corrections, review state, managed fields
   });
 });
 
-test('reviewed people mutations and source-draft promotion commit atomically', async () => {
+test('reviewed people mutations and source-draft promotions commit atomically', async () => {
   await withTestChurchDb(async (churchId) => {
     const draft = { kind: 'elvanto_group', externalId: 'group-1', name: 'Members' };
     const batch = await batchRepository.createBatch({
@@ -594,7 +594,7 @@ test('reviewed people mutations and source-draft promotion commit atomically', a
     await applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({ addPeople: [{ id: 'add:one', externalPersonId: 'one', firstName: 'Ada', lastName: 'Lovelace', isChild: false, familyId: null, peopleType: 'regular' }] }),
-      sourcePromotion: { batchId: batch.id, expectedBaseRevision: batch.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(draft) },
+      sourcePromotions: [{ batchId: batch.id, expectedBaseRevision: batch.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(draft) }],
     });
 
     assert.equal((await counts(churchId)).individuals, 1);
@@ -615,13 +615,41 @@ test('a stale source promotion rolls back preceding people mutations and retains
     await assert.rejects(() => applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({ addPeople: [{ id: 'add:one', externalPersonId: 'one', firstName: 'Ada', lastName: 'Lovelace', isChild: false, familyId: null, peopleType: 'regular' }] }),
-      sourcePromotion: { batchId: batch.id, expectedBaseRevision: batch.draftSourceBaseRevision, expectedDraftDigest: '0'.repeat(64) },
-    }), (error) => error.code === 'SYNC_SOURCE_DRAFT_STALE');
+      sourcePromotions: [{ batchId: batch.id, expectedBaseRevision: batch.draftSourceBaseRevision, expectedDraftDigest: '0'.repeat(64) }],
+    }), (error) => error.code === 'SYNC_PLAN_STALE');
 
     assert.equal((await counts(churchId)).individuals, 0);
     const retained = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
     assert.deepEqual(retained.draftSource, draft);
     assert.equal(retained.sourceRevision, 1);
+  });
+});
+
+test('a stale promotion in a set rolls back people, links, and every source draft', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstDraft = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };
+    const secondDraft = { kind: 'elvanto_category', externalId: 'youth', name: 'Youth' };
+    const first = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: firstDraft,
+    });
+    const second = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Youth', initialDraftSource: secondDraft,
+    });
+
+    await assert.rejects(() => applyPeopleSyncPlan({
+      churchId, provider: 'elvanto',
+      plan: emptyPlan({
+        addPeople: [{ id: 'add:one', externalPersonId: 'one', firstName: 'Ada', lastName: 'Lovelace', isChild: false, familyId: null, peopleType: 'regular' }],
+      }),
+      sourcePromotions: [
+        { batchId: first.id, expectedBaseRevision: first.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(firstDraft) },
+        { batchId: second.id, expectedBaseRevision: second.draftSourceBaseRevision, expectedDraftDigest: '0'.repeat(64) },
+      ],
+    }), { code: 'SYNC_PLAN_STALE' });
+
+    assert.deepEqual(await counts(churchId), { individuals: 0, families: 0, links: 0 });
+    assert.deepEqual((await batchRepository.getBatch(churchId, 'elvanto', first.id)).draftSource, firstDraft);
+    assert.deepEqual((await batchRepository.getBatch(churchId, 'elvanto', second.id)).draftSource, secondDraft);
   });
 });
 
@@ -2036,10 +2064,10 @@ test('a later source-promotion failure rolls back every v2 identity and durable 
         'ext-create': { outcome: 'create' },
         'ext-reject': { outcome: 'defer', excludeIndividualId: rejectedIndividualId },
       }),
-      sourcePromotion: {
+      sourcePromotions: [{
         batchId: 999999, expectedBaseRevision: 1, expectedDraftDigest: '0'.repeat(64),
-      },
-    }), (error) => error.code === 'SYNC_SOURCE_DRAFT_STALE');
+      }],
+    }), (error) => error.code === 'SYNC_PLAN_STALE');
 
     assert.deepEqual(await counts(churchId), before);
     assert.deepEqual(await Database.query(

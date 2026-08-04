@@ -328,6 +328,26 @@ test('allowed mutation buckets reject forbidden actions before opening a transac
   }
 });
 
+test('apply rejects the retired singular source promotion input before opening a transaction', async () => {
+  const originalTransactionForChurch = Database.transactionForChurch;
+  let transactionOpened = false;
+  Database.transactionForChurch = async () => {
+    transactionOpened = true;
+  };
+  try {
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId: 'c1', provider: 'elvanto', plan: emptyPlan(),
+        sourcePromotion: { batchId: 1, expectedBaseRevision: 1, expectedDraftDigest: 'a'.repeat(64) },
+      }),
+      /sourcePromotion.*sourcePromotions/i,
+    );
+    assert.equal(transactionOpened, false);
+  } finally {
+    Database.transactionForChurch = originalTransactionForChurch;
+  }
+});
+
 test('review verification receives the operation kind again inside apply', async () => {
   const originalTransactionForChurch = Database.transactionForChurch;
   const plan = emptyPlan();

@@ -1670,9 +1670,9 @@ test('reviewed apply sends source promotion CAS data without scheduling a presen
   }, deps);
 
   assert.equal(result.status, 'applied');
-  assert.deepEqual(applied[0].sourcePromotion, {
+  assert.deepEqual(applied[0].sourcePromotions, [{
     batchId: 1, expectedBaseRevision: 6, expectedDraftDigest: digestSourceIdentity(draft),
-  });
+  }]);
   assert.deepEqual(applied[0].authorityExpectation, { active: 'elvanto', pending: null });
   assert.deepEqual(applied[0].sourceExpectations, [{
     batchId: 1,
