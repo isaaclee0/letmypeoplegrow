@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SyncReview from '../peopleSync/SyncReview';
-import type { EstablishedLinkCorrection, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
+import {
+  tagLegacyPeopleReview,
+  type EstablishedLinkCorrection,
+  type PeopleReviewToken,
+  type PeopleSyncOperationReview,
+  type PeopleSyncSelections,
+} from '../peopleSync/types';
 import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import { isRetiredLegacyBatchError, planningCenterBatchErrorMessage, RETIRED_LEGACY_BATCH_MESSAGE } from '../../utils/pcoBatchError';
@@ -25,7 +31,7 @@ export default function PlanningCenterSyncReview({
   onApplied,
 }: PlanningCenterSyncReviewProps) {
   const navigate = useNavigate();
-  const [review, setReview] = useState<PeopleSyncReview | null>(null);
+  const [review, setReview] = useState<PeopleSyncOperationReview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -38,7 +44,7 @@ export default function PlanningCenterSyncReview({
     if (!opts?.preserveResult) setResult(null);
     try {
       const response = await integrationsAPI.getPlanningCenterBatchPlan(batchId, { force: opts?.force });
-      setReview(response.data);
+      setReview(tagLegacyPeopleReview(response.data, 'people_sync'));
       return true;
     } catch (caught: any) {
       logger.error('Failed to compute Planning Center batch sync plan', caught);
@@ -60,7 +66,7 @@ export default function PlanningCenterSyncReview({
   if (error && !review) return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}><p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p><button className={secondaryButtonClass} onClick={() => void loadReview()}>Refresh plan</button></div>;
   if (!review) return null;
 
-  const apply = async (reviewToken: string, selections: PeopleSyncSelections) => {
+  const apply = async (reviewToken: PeopleReviewToken<'people_sync'>, selections: PeopleSyncSelections) => {
     setApplying(true);
     setError(null);
     try {
@@ -91,14 +97,14 @@ export default function PlanningCenterSyncReview({
   };
 
   const previewLinkCorrections = async (
-    baseReviewToken: string,
+    baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
   ) => {
     const response = await integrationsAPI.previewPlanningCenterLinkCorrections(batchId, {
       baseReviewToken,
       linkCorrections,
     });
-    return response.data;
+    return tagLegacyPeopleReview(response.data, 'people_sync');
   };
 
   return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}>

@@ -156,8 +156,9 @@ describe('ElvantoOnboarding source review', () => {
   });
 
   it('wires onboarding batch correction previews through the saved batch owner', async () => {
+    const { runId: _runId, ...correctionReview } = review;
     vi.mocked(elvantoSyncAPI.previewLinkCorrections).mockResolvedValue({
-      data: { reviewToken: 'signed-onboarding-correction' },
+      data: { ...correctionReview, reviewToken: 'signed-onboarding-correction' },
     } as never);
     render(<Harness />);
 

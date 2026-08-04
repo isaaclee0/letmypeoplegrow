@@ -2,7 +2,15 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
 import SyncReview from '../peopleSync/SyncReview';
-import type { EstablishedLinkCorrection, PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
+import {
+  tagLegacyPeopleReview,
+  type AuthoritySwitchReview,
+  type EstablishedLinkCorrection,
+  type PeopleReviewToken,
+  type PeopleSyncBatch,
+  type PeopleSyncOperationReview,
+  type PeopleSyncSelections,
+} from '../peopleSync/types';
 import {
   cancelAuthorityPreviewWithRetry,
   type AuthorityPreviewCancellation,
@@ -36,14 +44,14 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   const [{ apiKey, connected }, dispatchConnection] = useReducer(reduceElvantoConnection, { apiKey: '', connected: false });
   const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
   const [batch, setBatch] = useState<PeopleSyncBatch | null>(null);
-  const [batchReview, setBatchReview] = useState<PeopleSyncReview | null>(null);
-  const [authorityReview, setAuthorityReview] = useState<PeopleSyncReview | null>(null);
+  const [batchReview, setBatchReview] = useState<PeopleSyncOperationReview | null>(null);
+  const [authorityReview, setAuthorityReview] = useState<AuthoritySwitchReview | null>(null);
   const [authorityStarted, setAuthorityStarted] = useState(false);
   const [batchApplyCommitted, setBatchApplyCommitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const authorityPreviewGenerationRef = useRef(0);
-  const activeAuthorityReviewTokenRef = useRef<string | null>(null);
+  const activeAuthorityReviewTokenRef = useRef<PeopleReviewToken<'authority_switch'> | null>(null);
   const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
 
   const cancelExactAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
@@ -69,7 +77,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     }
   }, []);
 
-  const discardAuthorityPreviewResponse = (discardedReview: PeopleSyncReview) => {
+  const discardAuthorityPreviewResponse = (discardedReview: AuthoritySwitchReview) => {
     if (!discardedReview.authorityPreviewId) return;
     cancelExactAuthorityPreview({ provider: 'elvanto', authorityPreviewId: discardedReview.authorityPreviewId });
   };
@@ -111,7 +119,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     setError(null);
     try {
       const response = await elvantoSyncAPI.getBatchPlan(savedBatch.id);
-      setBatchReview(response.data);
+      setBatchReview(tagLegacyPeopleReview(response.data, 'people_sync'));
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to prepare the Elvanto sync review.'));
     } finally {
@@ -150,7 +158,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     }
   };
 
-  const applyBatch = async (reviewToken: string, selections: PeopleSyncSelections) => {
+  const applyBatch = async (reviewToken: PeopleReviewToken<'people_sync'>, selections: PeopleSyncSelections) => {
     if (!batch) return;
     setBusy(true);
     setError(null);
@@ -167,7 +175,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   };
 
   const previewBatchLinkCorrections = async (
-    baseReviewToken: string,
+    baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
   ) => {
     if (!batch) throw new Error('The Elvanto batch is no longer available.');
@@ -175,7 +183,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
       baseReviewToken,
       linkCorrections,
     });
-    return response.data;
+    return tagLegacyPeopleReview(response.data, 'people_sync');
   };
 
   const retryAppliedBatchRefresh = async () => {
@@ -197,19 +205,20 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     setError(null);
     try {
       const response = await peopleSyncAPI.previewAuthority('elvanto');
+      const nextReview = tagLegacyPeopleReview(response.data, 'authority_switch');
       if (generation !== authorityPreviewGenerationRef.current) {
-        discardAuthorityPreviewResponse(response.data);
+        discardAuthorityPreviewResponse(nextReview);
         return;
       }
       if (previousPreview
-        && previousPreview.authorityPreviewId !== response.data.authorityPreviewId) {
+        && previousPreview.authorityPreviewId !== nextReview.authorityPreviewId) {
         cancelExactAuthorityPreview(previousPreview);
       }
-      ownedAuthorityPreviewRef.current = response.data.authorityPreviewId
-        ? { provider: 'elvanto', authorityPreviewId: response.data.authorityPreviewId }
+      ownedAuthorityPreviewRef.current = nextReview.authorityPreviewId
+        ? { provider: 'elvanto', authorityPreviewId: nextReview.authorityPreviewId }
         : null;
-      activeAuthorityReviewTokenRef.current = response.data.reviewToken;
-      setAuthorityReview(response.data);
+      activeAuthorityReviewTokenRef.current = nextReview.reviewToken;
+      setAuthorityReview(nextReview);
     } catch (cause) {
       if (generation !== authorityPreviewGenerationRef.current) return;
       if (previousPreview) cancelExactAuthorityPreview(previousPreview);
@@ -220,7 +229,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     }
   };
 
-  const applyAuthority = async (reviewToken: string, selections: PeopleSyncSelections) => {
+  const applyAuthority = async (reviewToken: PeopleReviewToken<'authority_switch'>, selections: PeopleSyncSelections) => {
     if (activeAuthorityReviewTokenRef.current !== reviewToken) return;
     const generation = ++authorityPreviewGenerationRef.current;
     activeAuthorityReviewTokenRef.current = null;

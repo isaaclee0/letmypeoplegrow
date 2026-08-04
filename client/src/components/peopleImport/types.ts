@@ -1,4 +1,6 @@
 import type {
+  OperationTaggedPeopleReview,
+  PeopleReviewToken,
   PeopleSyncPlan,
   PeopleSyncReview,
   PeopleSyncSelections,
@@ -18,15 +20,14 @@ export interface PeopleImportSourcesResponse {
   allOption: { kind: 'all'; name: 'Everyone' };
 }
 
-export interface PeopleImportReview extends PeopleSyncReview {
-  operationKind: 'people_import';
+export interface PeopleImportReview extends OperationTaggedPeopleReview<PeopleSyncReview, 'people_import'> {
   selection: ImportSelection;
   plan: PeopleSyncPlan & { operationKind: 'people_import' };
 }
 
 export interface PeopleImportApplyRequest {
   selection: ImportSelection;
-  reviewToken: string;
+  reviewToken: PeopleReviewToken<'people_import'>;
   selections: PeopleSyncSelections;
 }
 

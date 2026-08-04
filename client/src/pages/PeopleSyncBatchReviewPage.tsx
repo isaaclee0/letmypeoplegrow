@@ -5,9 +5,10 @@ import { peopleSyncErrorMessage } from '../components/peopleSync/apiError';
 import { batchReviewApi } from '../components/peopleSync/batchReviewApi';
 import type {
   EstablishedLinkCorrection,
+  PeopleReviewToken,
   PeopleSyncBatch,
-  PeopleSyncCorrectionPreview,
-  PeopleSyncReview,
+  PeopleSyncOperationCorrectionPreview,
+  PeopleSyncOperationReview,
   PeopleSyncSelections,
 } from '../components/peopleSync/types';
 import { useToast } from '../components/ToastContainer';
@@ -29,7 +30,7 @@ export default function PeopleSyncBatchReviewPage() {
   const batchId = positiveBatchId(batchIdParam);
   const requestGeneration = useRef(0);
   const [batch, setBatch] = useState<PeopleSyncBatch | null>(null);
-  const [review, setReview] = useState<PeopleSyncReview | null>(null);
+  const [review, setReview] = useState<PeopleSyncOperationReview | null>(null);
   const [loadedContextKey, setLoadedContextKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -100,14 +101,14 @@ export default function PeopleSyncBatchReviewPage() {
   }, [confirmAction, loadReview]);
 
   const previewCorrections = useCallback((
-    baseReviewToken: string,
+    baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
-  ): Promise<PeopleSyncCorrectionPreview> => {
+  ): Promise<PeopleSyncOperationCorrectionPreview> => {
     if (!adapter || batchId === null) return Promise.reject(new Error('This sync review link is invalid.'));
     return adapter.previewCorrections(batchId, baseReviewToken, linkCorrections);
   }, [adapter, batchId]);
 
-  const applyReview = useCallback(async (reviewToken: string, selections: PeopleSyncSelections) => {
+  const applyReview = useCallback(async (reviewToken: PeopleReviewToken<'people_sync'>, selections: PeopleSyncSelections) => {
     if (!adapter || batchId === null) throw new Error('This sync review link is invalid.');
     const generation = ++requestGeneration.current;
     setApplying(true);

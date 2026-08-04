@@ -6,6 +6,7 @@ import SyncReview from '../peopleSync/SyncReview';
 import type { PeopleImportReview } from './types';
 import type {
   IdentityReviewEntry,
+  PeopleReviewToken,
   PeopleSyncPlan,
   PeopleSyncPlanSummary,
 } from '../peopleSync/types';
@@ -68,7 +69,7 @@ function reviewFixture(): PeopleImportReview {
     runId: 1,
     operationKind: 'people_import',
     selection: { kind: 'all' },
-    reviewToken: 'import-review-token',
+    reviewToken: 'import-review-token' as PeopleReviewToken<'people_import'>,
     decisionContractVersion: 2,
     summary,
     plan,
@@ -150,7 +151,7 @@ describe('people import review model', () => {
     } as never));
 
     expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
-    expect(screen.getByRole('button', { name: 'Apply import' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Apply import' })).not.toBeInTheDocument();
     expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
     expect(container).not.toHaveTextContent(/sync|archive|managed fields|correction/i);
   });
@@ -159,7 +160,7 @@ describe('people import review model', () => {
     'rejects an import-marked review rendered as %s',
     (operationKind) => {
       const review = reviewFixture();
-      render(React.createElement(SyncReview, {
+      const { container } = render(React.createElement(SyncReview, {
         operationKind,
         provider: 'elvanto',
         review,
@@ -167,10 +168,46 @@ describe('people import review model', () => {
       } as never));
 
       expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
-      expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+      expect(container).not.toHaveTextContent(/sync|authority|identity|famil|skipped|lifecycle|correction|apply/i);
     },
   );
+
+  it.each(['people_sync', 'authority_switch'] as const)(
+    'rejects a %s-marked review rendered as a people import',
+    (reviewKind) => {
+      const review = reviewFixture();
+      (review as { operationKind: string }).operationKind = reviewKind;
+      (review.plan as { operationKind: string }).operationKind = reviewKind;
+      const { container } = render(React.createElement(SyncReview, {
+        operationKind: 'people_import',
+        provider: 'elvanto',
+        review,
+        ...handlers,
+      } as never));
+
+      expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+      expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+      expect(container).not.toHaveTextContent(/sync|authority|identity|famil|skipped|lifecycle|correction|apply/i);
+    },
+  );
+
+  it('passes the import review token only through the import callback', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(React.createElement(SyncReview, {
+      operationKind: 'people_import',
+      provider: 'elvanto',
+      review: reviewFixture(),
+      ...handlers,
+      onApply,
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Apply import' }));
+    expect(onApply).toHaveBeenCalledWith('import-review-token', expect.any(Object));
+  });
 
   it.each([
     ['SYNC_PLAN_STALE', 'This import review is out of date.'],

@@ -112,9 +112,17 @@ describe('batchReviewApi', () => {
     expect(adapter?.provider).toBe('planning_center');
     expect(adapter?.returnTo).toBe('/app/settings?tab=integrations&integration=planning-center');
     await expect(adapter?.listBatches()).resolves.toEqual([batch]);
-    await expect(adapter?.loadReview(7)).resolves.toEqual(review);
-    await expect(adapter?.previewCorrections(7, 'pco-base-token', corrections)).resolves.toEqual(preview);
-    await expect(adapter?.applyReview(7, 'pco-preview-token', selections)).resolves.toMatchObject({
+    await expect(adapter?.loadReview(7)).resolves.toEqual({
+      ...review,
+      operationKind: 'people_sync',
+      plan: { ...review.plan, operationKind: 'people_sync' },
+    });
+    await expect(adapter?.previewCorrections(7, 'pco-base-token' as never, corrections)).resolves.toEqual({
+      ...preview,
+      operationKind: 'people_sync',
+      plan: { ...preview.plan, operationKind: 'people_sync' },
+    });
+    await expect(adapter?.applyReview(7, 'pco-preview-token' as never, selections)).resolves.toMatchObject({
       runId: 41,
       status: 'applied',
     });
@@ -154,9 +162,17 @@ describe('batchReviewApi', () => {
     expect(adapter?.provider).toBe('elvanto');
     expect(adapter?.returnTo).toBe('/app/settings?tab=integrations&integration=elvanto');
     await expect(adapter?.listBatches()).resolves.toEqual([batch]);
-    await expect(adapter?.loadReview(7)).resolves.toEqual(review);
-    await expect(adapter?.previewCorrections(7, 'base-token', corrections)).resolves.toEqual(preview);
-    await expect(adapter?.applyReview(7, 'elvanto-preview-token', selections)).resolves.toMatchObject({
+    await expect(adapter?.loadReview(7)).resolves.toEqual({
+      ...review,
+      operationKind: 'people_sync',
+      plan: { ...review.plan, operationKind: 'people_sync' },
+    });
+    await expect(adapter?.previewCorrections(7, 'base-token' as never, corrections)).resolves.toEqual({
+      ...preview,
+      operationKind: 'people_sync',
+      plan: { ...preview.plan, operationKind: 'people_sync' },
+    });
+    await expect(adapter?.applyReview(7, 'elvanto-preview-token' as never, selections)).resolves.toMatchObject({
       runId: 42,
       status: 'applied',
     });
@@ -169,5 +185,21 @@ describe('batchReviewApi', () => {
       reviewToken: 'elvanto-preview-token',
       selections,
     });
+  });
+
+  it('rejects a review already marked for another operation at the batch boundary', async () => {
+    const review = reviewFor('elvanto', 'wrong-operation-token');
+    vi.mocked(elvantoSyncAPI.getBatchPlan).mockResolvedValue({
+      data: {
+        success: true,
+        ...review,
+        operationKind: 'authority_switch',
+        plan: { ...review.plan, operationKind: 'authority_switch' },
+      },
+    } as never);
+
+    await expect(batchReviewApi('elvanto')?.loadReview(7)).rejects.toThrow(
+      'belongs to a different operation',
+    );
   });
 });

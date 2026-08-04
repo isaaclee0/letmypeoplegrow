@@ -1,10 +1,12 @@
 import { elvantoSyncAPI, integrationsAPI } from '../../services/api';
+import { tagLegacyPeopleReview } from './types';
 import type {
   EstablishedLinkCorrection,
+  PeopleReviewToken,
   PeopleSyncApplyResult,
   PeopleSyncBatch,
-  PeopleSyncCorrectionPreview,
-  PeopleSyncReview,
+  PeopleSyncOperationCorrectionPreview,
+  PeopleSyncOperationReview,
   PeopleSyncSelections,
   SyncProvider,
 } from './types';
@@ -15,15 +17,15 @@ export interface BatchReviewAdapter {
   provider: SyncProvider;
   returnTo: string;
   listBatches: () => Promise<PeopleSyncBatch[]>;
-  loadReview: (batchId: number) => Promise<PeopleSyncReview>;
+  loadReview: (batchId: number) => Promise<PeopleSyncOperationReview>;
   previewCorrections: (
     batchId: number,
-    baseReviewToken: string,
+    baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
-  ) => Promise<PeopleSyncCorrectionPreview>;
+  ) => Promise<PeopleSyncOperationCorrectionPreview>;
   applyReview: (
     batchId: number,
-    reviewToken: string,
+    reviewToken: PeopleReviewToken<'people_sync'>,
     selections: PeopleSyncSelections,
   ) => Promise<PeopleSyncApplyResult>;
 }
@@ -42,14 +44,14 @@ const planningCenterAdapter: BatchReviewAdapter = {
   },
   async loadReview(batchId) {
     const response = await integrationsAPI.getPlanningCenterBatchPlan(batchId);
-    return responseBody<PeopleSyncReview>(response.data);
+    return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
   async previewCorrections(batchId, baseReviewToken, linkCorrections) {
     const response = await integrationsAPI.previewPlanningCenterLinkCorrections(batchId, {
       baseReviewToken,
       linkCorrections,
     });
-    return responseBody<PeopleSyncCorrectionPreview>(response.data);
+    return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
   async applyReview(batchId, reviewToken, selections) {
     const response = await integrationsAPI.applyPlanningCenterBatch(batchId, { reviewToken, selections });
@@ -66,14 +68,14 @@ const elvantoAdapter: BatchReviewAdapter = {
   },
   async loadReview(batchId) {
     const response = await elvantoSyncAPI.getBatchPlan(batchId);
-    return responseBody<PeopleSyncReview>(response.data);
+    return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
   async previewCorrections(batchId, baseReviewToken, linkCorrections) {
     const response = await elvantoSyncAPI.previewLinkCorrections(batchId, {
       baseReviewToken,
       linkCorrections,
     });
-    return responseBody<PeopleSyncCorrectionPreview>(response.data);
+    return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
   },
   async applyReview(batchId, reviewToken, selections) {
     const response = await elvantoSyncAPI.applyBatch(batchId, { reviewToken, selections });

@@ -8,11 +8,13 @@ import {
   type AuthorityPreviewCancellation,
 } from './authorityPreviewCancellation';
 import type {
-  PeopleSyncReview,
+  AuthoritySwitchReview,
+  PeopleReviewToken,
   PeopleSyncSelections,
   PeopleSyncSettings,
   SyncProvider,
 } from './types';
+import { tagLegacyPeopleReview } from './types';
 
 type SourceControlState =
   | 'idle'
@@ -45,7 +47,7 @@ export default function PeopleSourceControl({
 }: PeopleSourceControlProps) {
   const [state, setState] = useState<SourceControlState>('idle');
   const [pendingProvider, setPendingProvider] = useState<SyncProvider | null>(null);
-  const [pendingReview, setPendingReview] = useState<PeopleSyncReview | null>(null);
+  const [pendingReview, setPendingReview] = useState<AuthoritySwitchReview | null>(null);
   const [confirmSwitch, setConfirmSwitch] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +59,7 @@ export default function PeopleSourceControl({
   const reviewRegionRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
   const previewGenerationRef = useRef(0);
-  const activeReviewTokenRef = useRef<string | null>(null);
+  const activeReviewTokenRef = useRef<PeopleReviewToken<'authority_switch'> | null>(null);
   const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
   const dialogWasOpen = useRef(false);
   const restoreSwitchOnDialogClose = useRef(true);
@@ -137,7 +139,7 @@ export default function PeopleSourceControl({
     }
   }, [pendingProvider, settings.authorityProvider, state]);
 
-  const discardSupersededPreview = (discardedProvider: SyncProvider, discardedReview: PeopleSyncReview) => {
+  const discardSupersededPreview = (discardedProvider: SyncProvider, discardedReview: AuthoritySwitchReview) => {
     if (!discardedReview.authorityPreviewId) return;
     void retireAuthorityPreview({
       provider: discardedProvider,
@@ -155,13 +157,14 @@ export default function PeopleSourceControl({
     setPendingProvider(nextProvider);
     try {
       const response = await peopleSyncAPI.previewAuthority(nextProvider);
+      const nextReview = tagLegacyPeopleReview(response.data, 'authority_switch');
       if (generation !== previewGenerationRef.current) {
-        discardSupersededPreview(nextProvider, response.data);
+        discardSupersededPreview(nextProvider, nextReview);
         return;
       }
-      activeReviewTokenRef.current = response.data.reviewToken;
-      const nextOwnedPreview = response.data.authorityPreviewId
-        ? { provider: nextProvider, authorityPreviewId: response.data.authorityPreviewId }
+      activeReviewTokenRef.current = nextReview.reviewToken;
+      const nextOwnedPreview = nextReview.authorityPreviewId
+        ? { provider: nextProvider, authorityPreviewId: nextReview.authorityPreviewId }
         : null;
       const previousOwnedPreview = ownedAuthorityPreviewRef.current;
       if (previousOwnedPreview && (!nextOwnedPreview
@@ -170,7 +173,7 @@ export default function PeopleSourceControl({
         void retireAuthorityPreview(previousOwnedPreview);
       }
       ownedAuthorityPreviewRef.current = nextOwnedPreview;
-      setPendingReview(response.data);
+      setPendingReview(nextReview);
       setState('reviewing');
     } catch (cause) {
       if (generation !== previewGenerationRef.current) return;
@@ -206,7 +209,7 @@ export default function PeopleSourceControl({
     setState('idle');
   };
 
-  const apply = async (reviewToken: string, selections: PeopleSyncSelections) => {
+  const apply = async (reviewToken: PeopleReviewToken<'authority_switch'>, selections: PeopleSyncSelections) => {
     if (!pendingProvider || activeReviewTokenRef.current !== reviewToken) return;
     const generation = ++previewGenerationRef.current;
     activeReviewTokenRef.current = null;

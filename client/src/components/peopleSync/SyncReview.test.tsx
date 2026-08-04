@@ -3,13 +3,16 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import SyncReview from './SyncReview';
-import type {
-  EstablishedLinkCorrection,
-  IdentityReviewEntry,
-  PeopleSyncCorrectionPreview,
-  PeopleSyncPlan,
-  PeopleSyncPlanSummary,
-  PeopleSyncReview,
+import {
+  tagLegacyPeopleReview,
+  type AuthoritySwitchReview,
+  type EstablishedLinkCorrection,
+  type IdentityReviewEntry,
+  type PeopleSyncOperationCorrectionPreview,
+  type PeopleSyncOperationReview,
+  type PeopleSyncPlan,
+  type PeopleSyncPlanSummary,
+  type PeopleSyncReview,
 } from './types';
 
 const emptyBuckets = (): Omit<PeopleSyncPlan, 'provider' | 'authoritative' | 'snapshot'> => ({
@@ -50,7 +53,7 @@ function v2Review({
   planOverrides?: Partial<PeopleSyncPlan>;
   token?: string;
   runId?: number;
-} = {}): PeopleSyncReview {
+} = {}): PeopleSyncOperationReview {
   const identities: Record<string, IdentityReviewEntry> = {
     'ext-auto': identity(),
     ...(attention ? {
@@ -107,20 +110,20 @@ function v2Review({
     } : {}),
     ...planOverrides,
   };
-  return {
+  return tagLegacyPeopleReview({
     runId,
     reviewToken: token,
     decisionContractVersion: 2,
     summary: summaryFor(plan),
     plan,
     snapshot: plan.snapshot,
-  };
+  }, 'people_sync');
 }
 
 function correctionPreview(
   correction: EstablishedLinkCorrection,
   token: string,
-): PeopleSyncCorrectionPreview {
+): PeopleSyncOperationCorrectionPreview {
   const target = correction.outcome === 'relink' ? correction.individualId : null;
   const review = v2Review({
     attention: false,
@@ -144,7 +147,7 @@ function correctionPreview(
 
 function serverCanonicalCorrectionPreview(
   token: string,
-): PeopleSyncCorrectionPreview {
+): PeopleSyncOperationCorrectionPreview {
   const preview = correctionPreview(
     { outcome: 'relink', fromIndividualId: 40, individualId: 30 },
     token,
@@ -161,7 +164,7 @@ function serverCanonicalCorrectionPreview(
 
 function swapCorrectionPreview(
   corrections: Record<string, EstablishedLinkCorrection>,
-): PeopleSyncCorrectionPreview {
+): PeopleSyncOperationCorrectionPreview {
   const review = v2Review({ attention: false, established: true, token: 'swap-preview' });
   review.plan.people!.external['ext-second-established'] = {
     firstName: 'Second', lastName: 'Source', family: { state: 'none' },
@@ -194,7 +197,7 @@ function swapCorrectionPreview(
   return preview;
 }
 
-function legacyReview(): PeopleSyncReview {
+function legacyReview(): PeopleSyncOperationReview {
   const plan: PeopleSyncPlan = {
     ...emptyBuckets(),
     provider: 'elvanto',
@@ -213,7 +216,10 @@ function legacyReview(): PeopleSyncReview {
       reason: 'duplicate_name', candidateIndividualIds: [11],
     }],
   };
-  return { runId: 2, reviewToken: 'legacy-token', summary: summaryFor(plan), plan, snapshot: plan.snapshot };
+  return tagLegacyPeopleReview(
+    { runId: 2, reviewToken: 'legacy-token', summary: summaryFor(plan), plan, snapshot: plan.snapshot },
+    'people_sync',
+  );
 }
 
 function deferred<T>() {
@@ -311,7 +317,7 @@ describe('SyncReview compact V2 workflow', () => {
       },
     });
     collision.plan.people!.external['ext-other'] = { firstName: 'Other', lastName: 'Person', family: { state: 'none' } };
-    render(<SyncReview operationKind="people_sync" provider="planning_center" review={{ ...collision, runId: 3, reviewToken: 'collision' }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={tagLegacyPeopleReview({ ...collision, runId: 3, reviewToken: 'collision' }, 'people_sync')} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
 
     expect(screen.getByRole('alert')).toHaveTextContent(/Alex Smith.*Other Person|Other Person.*Alex Smith/);
     expect(screen.getByRole('button', { name: 'Apply 2 selected changes' })).toBeDisabled();
@@ -452,7 +458,7 @@ describe('SyncReview compact V2 workflow', () => {
     const review = {
       ...v2Review({ attention: false }),
       coverage: { unmatchedActiveLocalRegulars: 208 },
-    } as unknown as PeopleSyncReview;
+    } as unknown as PeopleSyncOperationReview;
     render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
     expect(screen.queryByText(/208 active LMPG regulars/)).not.toBeInTheDocument();
     expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
@@ -559,7 +565,7 @@ describe('SyncReview correction previews and dirty state', () => {
   });
 
   it('uses the base token, disables apply while pending, and applies the signed preview token', async () => {
-    const pending = deferred<PeopleSyncCorrectionPreview>();
+    const pending = deferred<PeopleSyncOperationCorrectionPreview>();
     const onPreviewCorrections = vi.fn(() => pending.promise);
     const onApply = vi.fn().mockResolvedValue(undefined);
     render(<SyncReview operationKind="people_sync"
@@ -603,7 +609,7 @@ describe('SyncReview correction previews and dirty state', () => {
 
   it('does not treat an unlink preview with an unexpected target as signed', async () => {
     const preview = correctionPreview(
-      { outcome: 'unlink', fromIndividualId: 40, individualId: 30 },
+      { outcome: 'unlink', fromIndividualId: 40, individualId: 30 } as never,
       'preview-unlink-with-target',
     );
     const onPreviewCorrections = vi.fn().mockResolvedValue(preview);
@@ -736,8 +742,8 @@ describe('SyncReview correction previews and dirty state', () => {
   });
 
   it('does not let an older API response replace the latest effective review', async () => {
-    const older = deferred<PeopleSyncCorrectionPreview>();
-    const newer = deferred<PeopleSyncCorrectionPreview>();
+    const older = deferred<PeopleSyncOperationCorrectionPreview>();
+    const newer = deferred<PeopleSyncOperationCorrectionPreview>();
     const onPreviewCorrections = vi.fn()
       .mockImplementationOnce(() => older.promise)
       .mockImplementationOnce(() => newer.promise);
@@ -843,5 +849,122 @@ describe('SyncReview legacy compatibility', () => {
     await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
     await user.click(screen.getByRole('button', { name: 'Apply sync' }));
     expect(onApply).toHaveBeenCalledWith('legacy-token', expect.objectContaining({ acceptArchiveIndividualIds: [11] }));
+  });
+});
+
+describe('SyncReview operation isolation', () => {
+  function markedReview(
+    review: PeopleSyncReview,
+    operationKind: 'people_sync' | 'authority_switch',
+  ): PeopleSyncOperationReview | AuthoritySwitchReview {
+    return {
+      ...review,
+      operationKind,
+      plan: { ...review.plan, operationKind },
+    } as unknown as PeopleSyncOperationReview | AuthoritySwitchReview;
+  }
+
+  function expectRecoveryOnly(container: HTMLElement) {
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    expect(screen.getByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/sync|authority|identity|famil|skipped|lifecycle|correction|apply/i);
+  }
+
+  it.each([
+    ['people_sync', 'authority_switch'],
+    ['authority_switch', 'people_sync'],
+  ] as const)('renders only recovery UI when a %s surface receives a %s review', (surface, reviewKind) => {
+    const review = markedReview(v2Review({ attention: false }), reviewKind);
+    const { container } = render(React.createElement(SyncReview, {
+      operationKind: surface,
+      provider: 'planning_center',
+      review,
+      onRefresh: vi.fn(),
+      onApply: vi.fn(),
+      applying: false,
+    } as never));
+
+    expectRecoveryOnly(container);
+  });
+
+  it.each([
+    ['people_sync', 'top'],
+    ['people_sync', 'plan'],
+    ['authority_switch', 'top'],
+    ['authority_switch', 'plan'],
+  ] as const)('renders only recovery UI when a %s review is missing its %s marker', (operationKind, missing) => {
+    const review = markedReview(v2Review({ attention: false }), operationKind);
+    if (missing === 'top') delete (review as { operationKind?: string }).operationKind;
+    else delete (review.plan as { operationKind?: string }).operationKind;
+    const { container } = render(React.createElement(SyncReview, {
+      operationKind,
+      provider: 'planning_center',
+      review,
+      onRefresh: vi.fn(),
+      onApply: vi.fn(),
+      applying: false,
+    } as never));
+
+    expectRecoveryOnly(container);
+  });
+
+  it.each([
+    ['people_sync', 'authority_switch', 'people_sync'],
+    ['people_sync', 'people_sync', 'authority_switch'],
+    ['authority_switch', 'people_sync', 'authority_switch'],
+    ['authority_switch', 'authority_switch', 'people_sync'],
+  ] as const)(
+    'renders only recovery UI when a %s surface receives top-level %s and plan %s markers',
+    (surface, topMarker, planMarker) => {
+      const review = markedReview(v2Review({ attention: false }), topMarker);
+      (review.plan as { operationKind: string }).operationKind = planMarker;
+      const { container } = render(React.createElement(SyncReview, {
+        operationKind: surface,
+        provider: 'planning_center',
+        review,
+        onRefresh: vi.fn(),
+        onApply: vi.fn(),
+        applying: false,
+      } as never));
+
+      expectRecoveryOnly(container);
+    },
+  );
+
+  it('does not leak legacy review details across an operation mismatch', () => {
+    const review = markedReview(legacyReview(), 'authority_switch');
+    const { container } = render(React.createElement(SyncReview, {
+      operationKind: 'people_sync',
+      provider: 'elvanto',
+      review,
+      onRefresh: vi.fn(),
+      onApply: vi.fn(),
+      applying: false,
+      resolveAmbiguousArchiveIndividualId: () => 11,
+    } as never));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    expect(screen.queryByRole('radio', { name: 'Archive this person' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/Legacy Person|Local Archived|sync|authority|identity|famil|skipped|lifecycle|correction|apply/i);
+  });
+
+  it('passes the authority-switch review token only through the authority callback', async () => {
+    const user = userEvent.setup();
+    const review = markedReview(v2Review({ attention: false, token: 'authority-review-token' }), 'authority_switch');
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(React.createElement(SyncReview, {
+      operationKind: 'authority_switch',
+      provider: 'planning_center',
+      review,
+      onRefresh: vi.fn(),
+      onApply,
+      applying: false,
+    } as never));
+
+    await user.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(onApply).toHaveBeenCalledWith('authority-review-token', expect.any(Object));
   });
 });

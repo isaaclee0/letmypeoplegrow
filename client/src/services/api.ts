@@ -13,6 +13,7 @@ import type {
   PeopleSyncAuthorityState,
   PeopleSyncReview,
   PeopleSyncCorrectionPreview,
+  PeopleReviewToken,
   PeopleSyncApplyResult,
   PeopleSyncRun,
   PeopleSyncSelections,
@@ -32,8 +33,8 @@ import type {
 // Shared by Planning Center and Elvanto reviewed applies. Keeping this
 // provider-neutral prevents either endpoint from adapting identity IDs or
 // quietly falling back to a provider-specific selection shape.
-export interface PeopleSyncApplyRequest {
-  reviewToken: string;
+export interface PeopleSyncApplyRequest<Operation extends 'people_sync' | 'authority_switch' = 'people_sync'> {
+  reviewToken: PeopleReviewToken<Operation>;
   selections?: PeopleSyncSelections;
 }
 
@@ -935,14 +936,14 @@ export const integrationsAPI = {
     }),
   previewPlanningCenterLinkCorrections: (
     id: number,
-    data: { baseReviewToken: string; linkCorrections: Record<string, EstablishedLinkCorrection> },
+    data: { baseReviewToken: PeopleReviewToken<'people_sync'>; linkCorrections: Record<string, EstablishedLinkCorrection> },
   ) =>
     api.post<{ success: true } & PeopleSyncCorrectionPreview>(
       `/integrations/planning-center/sync-batches/${id}/preview-link-corrections`,
       data,
       { timeout: 120000 },
     ),
-  applyPlanningCenterBatch: (id: number, data: PeopleSyncApplyRequest) =>
+  applyPlanningCenterBatch: (id: number, data: PeopleSyncApplyRequest<'people_sync'>) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
   getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
@@ -1016,7 +1017,7 @@ export const peopleSyncAPI = {
   // default (every field is read defensively via asArray/asRecord there), so
   // an authority-switch apply with nothing left to review doesn't force
   // callers to pass an empty object explicitly.
-  applyAuthority: (provider: SyncProvider, reviewToken: string, selections: PeopleSyncSelections = {}) =>
+  applyAuthority: (provider: SyncProvider, reviewToken: PeopleReviewToken<'authority_switch'>, selections: PeopleSyncSelections = {}) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(
       '/integrations/people-sync/people-authority/apply',
       { provider, reviewToken, selections },
@@ -1096,7 +1097,7 @@ export const elvantoSyncAPI = {
 
   previewLinkCorrections: (
     id: number,
-    data: { baseReviewToken: string; linkCorrections: Record<string, EstablishedLinkCorrection> },
+    data: { baseReviewToken: PeopleReviewToken<'people_sync'>; linkCorrections: Record<string, EstablishedLinkCorrection> },
   ) =>
     api.post<{ success: true } & PeopleSyncCorrectionPreview>(
       `/integrations/elvanto/sync-batches/${id}/preview-link-corrections`,
@@ -1107,7 +1108,7 @@ export const elvantoSyncAPI = {
   // `selections` is optional here (mirroring applyAuthority's own default
   // above) since the server treats a missing/non-object `selections` the
   // same as `{}` (see elvanto.js's POST /sync-batches/:id/apply handler).
-  applyBatch: (id: number, data: PeopleSyncApplyRequest) =>
+  applyBatch: (id: number, data: PeopleSyncApplyRequest<'people_sync'>) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(
       `/integrations/elvanto/sync-batches/${id}/apply`,
       data,

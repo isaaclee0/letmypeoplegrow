@@ -21,9 +21,12 @@ import { hasForbiddenImportMutations } from '../peopleImport/types';
 import type { PeopleImportReview } from '../peopleImport/types';
 import type {
   AmbiguousPersonAction,
+  AuthoritySwitchReview,
   EstablishedLinkCorrection,
   IdentityDecision,
-  PeopleSyncCorrectionPreview,
+  PeopleReviewToken,
+  PeopleSyncOperationCorrectionPreview,
+  PeopleSyncOperationReview,
   PeopleSyncReview,
   PeopleSyncSelections,
   PeopleReviewOperationKind,
@@ -56,11 +59,6 @@ interface SyncReviewCommonProps {
   batchName?: string;
   sourceName?: string;
   onRefresh: () => void | Promise<void>;
-  onPreviewCorrections?: (
-    baseReviewToken: string,
-    corrections: Record<string, EstablishedLinkCorrection>,
-  ) => Promise<PeopleSyncCorrectionPreview>;
-  onApply: (reviewToken: string, selections: PeopleSyncSelections) => void | Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   applying: boolean;
   interactionDisabled?: boolean;
@@ -70,10 +68,37 @@ interface SyncReviewCommonProps {
   requireAllPlannedArchivesAccepted?: boolean;
 }
 
-export type SyncReviewProps = SyncReviewCommonProps & (
-  | { operationKind: 'people_import'; review: PeopleImportReview }
-  | { operationKind: Exclude<PeopleReviewOperationKind, 'people_import'>; review: PeopleSyncReview }
-);
+export type SyncReviewProps =
+  | SyncReviewCommonProps & {
+    operationKind: 'people_sync';
+    review: PeopleSyncOperationReview;
+    onPreviewCorrections?: (
+      baseReviewToken: PeopleReviewToken<'people_sync'>,
+      corrections: Record<string, EstablishedLinkCorrection>,
+    ) => Promise<PeopleSyncOperationCorrectionPreview>;
+    onApply: (
+      reviewToken: PeopleReviewToken<'people_sync'>,
+      selections: PeopleSyncSelections,
+    ) => void | Promise<void>;
+  }
+  | SyncReviewCommonProps & {
+    operationKind: 'authority_switch';
+    review: AuthoritySwitchReview;
+    onPreviewCorrections?: never;
+    onApply: (
+      reviewToken: PeopleReviewToken<'authority_switch'>,
+      selections: PeopleSyncSelections,
+    ) => void | Promise<void>;
+  }
+  | SyncReviewCommonProps & {
+    operationKind: 'people_import';
+    review: PeopleImportReview;
+    onPreviewCorrections?: never;
+    onApply: (
+      reviewToken: PeopleReviewToken<'people_import'>,
+      selections: PeopleSyncSelections,
+    ) => void | Promise<void>;
+  };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -85,10 +110,7 @@ function operationKindMatchesReview(
 ): boolean {
   const reviewOperationKind = (review as PeopleSyncReview & { operationKind?: unknown }).operationKind;
   const planOperationKind = (review.plan as PeopleSyncReview['plan'] & { operationKind?: unknown }).operationKind;
-  if (operationKind === 'people_import') {
-    return reviewOperationKind === 'people_import' && planOperationKind === 'people_import';
-  }
-  return reviewOperationKind !== 'people_import' && planOperationKind !== 'people_import';
+  return reviewOperationKind === operationKind && planOperationKind === operationKind;
 }
 
 function peopleImportRefreshErrorTitle(code: string | undefined): string {
@@ -414,12 +436,49 @@ function recordsMatch(
       || !isValidEstablishedLinkCorrection(rightCorrection)) return false;
     if (leftCorrection.outcome !== rightCorrection.outcome
       || leftCorrection.fromIndividualId !== rightCorrection.fromIndividualId) return false;
-    return leftCorrection.outcome === 'unlink'
-      || leftCorrection.individualId === rightCorrection.individualId;
+    if (leftCorrection.outcome === 'unlink') return true;
+    return rightCorrection.outcome === 'relink'
+      && leftCorrection.individualId === rightCorrection.individualId;
   });
 }
 
-export default function SyncReview({
+function ReviewOperationMismatch({
+  onRefresh,
+  applying,
+  interactionDisabled = false,
+}: Pick<SyncReviewCommonProps, 'onRefresh' | 'applying' | 'interactionDisabled'>) {
+  const refresh = async () => {
+    try {
+      await onRefresh();
+    } catch {
+      // The review owner exposes endpoint-specific refresh failures.
+    }
+  };
+  return (
+    <div className="space-y-3">
+      <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+        This review could not be safely loaded. Refresh the plan and review again.
+      </div>
+      <button
+        type="button"
+        onClick={() => void refresh()}
+        disabled={applying || interactionDisabled}
+        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+      >
+        Refresh plan
+      </button>
+    </div>
+  );
+}
+
+export default function SyncReview(props: SyncReviewProps) {
+  if (!operationKindMatchesReview(props.operationKind, props.review)) {
+    return <ReviewOperationMismatch {...props} />;
+  }
+  return <SafeSyncReview {...props} />;
+}
+
+function SafeSyncReview({
   operationKind,
   provider,
   review,
@@ -487,8 +546,7 @@ export default function SyncReview({
   const malformedV2 = declaresV2 && !validV2Context;
   const isPeopleImport = operationKind === 'people_import';
   const malformedImport = isPeopleImport && hasForbiddenImportMutations(effectiveReview);
-  const operationKindMismatch = !operationKindMatchesReview(operationKind, effectiveReview);
-  const unsafeReview = malformedV2 || malformedImport || operationKindMismatch;
+  const unsafeReview = malformedV2 || malformedImport;
   const reviewContext = validV2Context ? plan.reviewContext : undefined;
   const isV2 = declaresV2 && validV2Context;
   const establishedLinksReadOnly = isV2 && !onPreviewCorrections;
@@ -586,7 +644,23 @@ export default function SyncReview({
     if (applyDisabled) return;
     setApplyError(null);
     try {
-      await onApply(effectiveReview.reviewToken, buildSyncSelections(state));
+      const selections = buildSyncSelections(state);
+      if (operationKind === 'people_sync') {
+        await (onApply as Extract<SyncReviewProps, { operationKind: 'people_sync' }>['onApply'])(
+          effectiveReview.reviewToken as PeopleReviewToken<'people_sync'>,
+          selections,
+        );
+      } else if (operationKind === 'authority_switch') {
+        await (onApply as Extract<SyncReviewProps, { operationKind: 'authority_switch' }>['onApply'])(
+          effectiveReview.reviewToken as PeopleReviewToken<'authority_switch'>,
+          selections,
+        );
+      } else {
+        await (onApply as Extract<SyncReviewProps, { operationKind: 'people_import' }>['onApply'])(
+          effectiveReview.reviewToken as PeopleReviewToken<'people_import'>,
+          selections,
+        );
+      }
       markClean();
     } catch (error) {
       setApplyError(error);
@@ -609,7 +683,10 @@ export default function SyncReview({
     const requestBase = baseReviewRef.current;
     setPreviewing(true);
     try {
-      const preview = await onPreviewCorrections(requestBase.reviewToken, corrections);
+      const preview = await onPreviewCorrections(
+        requestBase.reviewToken as PeopleReviewToken<'people_sync'>,
+        corrections,
+      );
       const nextReview: PeopleSyncReview = { ...preview, runId: requestBase.runId };
       if (request.isCurrent()
         && baseReviewRef.current.reviewToken === requestBase.reviewToken

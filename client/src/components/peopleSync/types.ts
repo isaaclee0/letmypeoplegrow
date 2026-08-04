@@ -19,6 +19,17 @@ export type SyncProvider = 'planning_center' | 'elvanto';
 
 export type PeopleReviewOperationKind = 'people_sync' | 'authority_switch' | 'people_import';
 
+declare const peopleReviewTokenOperation: unique symbol;
+
+/**
+ * Compile-time proof that an opaque review token came from the same review
+ * workflow that is about to consume it. This is client-side contract
+ * isolation only; the server remains responsible for authenticating tokens.
+ */
+export type PeopleReviewToken<Operation extends PeopleReviewOperationKind> = string & {
+  readonly [peopleReviewTokenOperation]: Operation;
+};
+
 export type PlanningCenterConnectionErrorCode =
   | 'SYNC_SOURCE_AUTH'
   | 'SYNC_SOURCE_RATE_LIMIT'
@@ -521,6 +532,46 @@ export interface PeopleSyncReview {
 }
 
 export type PeopleSyncCorrectionPreview = Omit<PeopleSyncReview, 'runId'>;
+
+export type OperationTaggedPeopleReview<
+  Review extends PeopleSyncReview | PeopleSyncCorrectionPreview,
+  Operation extends PeopleReviewOperationKind,
+> = Omit<Review, 'operationKind' | 'reviewToken' | 'plan'> & {
+  operationKind: Operation;
+  reviewToken: PeopleReviewToken<Operation>;
+  plan: Review['plan'] & { operationKind: Operation };
+};
+
+export type PeopleSyncOperationReview = OperationTaggedPeopleReview<PeopleSyncReview, 'people_sync'>;
+export type AuthoritySwitchReview = OperationTaggedPeopleReview<PeopleSyncReview, 'authority_switch'>;
+export type PeopleSyncOperationCorrectionPreview = OperationTaggedPeopleReview<
+  PeopleSyncCorrectionPreview,
+  'people_sync'
+>;
+
+/**
+ * Tags one legacy sync/authority response at its endpoint-aware owner
+ * boundary. Missing legacy markers are filled in, while a marker belonging
+ * to another workflow is rejected before the review can enter component
+ * state. Do not use this as a substitute for server token verification.
+ */
+export function tagLegacyPeopleReview<
+  Review extends PeopleSyncReview | PeopleSyncCorrectionPreview,
+  Operation extends 'people_sync' | 'authority_switch',
+>(review: Review, operationKind: Operation): OperationTaggedPeopleReview<Review, Operation> {
+  const reviewMarker = (review as Review & { operationKind?: unknown }).operationKind;
+  const planMarker = (review.plan as Review['plan'] & { operationKind?: unknown }).operationKind;
+  if ((reviewMarker !== undefined && reviewMarker !== operationKind)
+    || (planMarker !== undefined && planMarker !== operationKind)) {
+    throw new Error('The received people review belongs to a different operation.');
+  }
+  return {
+    ...review,
+    operationKind,
+    reviewToken: review.reviewToken as PeopleReviewToken<Operation>,
+    plan: { ...review.plan, operationKind },
+  } as OperationTaggedPeopleReview<Review, Operation>;
+}
 
 // applyReviewed()'s return shape -- used by both POST
 // /people-sync/people-authority/apply and POST
