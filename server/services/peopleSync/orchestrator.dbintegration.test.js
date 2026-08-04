@@ -54,6 +54,9 @@ providerRegistry.registerProvider('elvanto', {
     if (typeof value === 'function') return value({ sourceKind, sourceExternalId });
     return value || snapshot({ kind: sourceKind, externalId: sourceExternalId, name: sourceExternalId });
   },
+  async fetchImportSnapshot() {
+    throw new Error('Import snapshots are not configured for sync orchestrator integration tests');
+  },
   isLifecycleEligible(value, settings = {}) {
     return !!value && value.state !== 'archived' && value.state !== 'deceased' &&
       (value.state !== 'contact' || settings.includeContacts !== false);
