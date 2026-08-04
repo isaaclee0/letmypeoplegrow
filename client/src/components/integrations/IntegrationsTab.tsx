@@ -47,6 +47,7 @@ const IntegrationsTab: React.FC = () => {
   const [pendingDisconnect, setPendingDisconnect] = useState<IntegrationKey | null>(null);
   const [peopleSyncSettings, setPeopleSyncSettings] = useState(defaultPeopleSyncSettings);
   const [peopleSyncStatus, setPeopleSyncStatus] = useState<'loading' | 'error' | 'known'>('loading');
+  const [peopleSyncBatchRevision, setPeopleSyncBatchRevision] = useState(0);
 
   const fetchElvantoStatus = useCallback(async () => {
     try {
@@ -134,6 +135,7 @@ const IntegrationsTab: React.FC = () => {
 
   const refreshPeopleSync = useCallback(async () => {
     await Promise.all([fetchPeopleSyncSettings(), fetchElvantoStatus(), fetchPlanningCenterStatus()]);
+    setPeopleSyncBatchRevision((revision) => revision + 1);
   }, [fetchPeopleSyncSettings, fetchElvantoStatus, fetchPlanningCenterStatus]);
 
   // Handle Planning Center OAuth callback
@@ -171,6 +173,7 @@ const IntegrationsTab: React.FC = () => {
         peopleSyncSettings={peopleSyncSettings}
         peopleSyncStatus={peopleSyncStatus}
         providerConnections={providerConnections}
+        peopleSyncBatchRevision={peopleSyncBatchRevision}
         refreshPeopleSync={refreshPeopleSync}
         retryPeopleSync={retryPeopleSync}
       />
@@ -198,6 +201,7 @@ const IntegrationsTab: React.FC = () => {
         peopleSyncSettings={peopleSyncSettings}
         peopleSyncStatus={peopleSyncStatus}
         providerConnections={providerConnections}
+        peopleSyncBatchRevision={peopleSyncBatchRevision}
         refreshPeopleSync={refreshPeopleSync}
         retryPeopleSync={retryPeopleSync}
       />

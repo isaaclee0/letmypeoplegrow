@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,10 @@ vi.mock('../../services/api', () => ({
   integrationsAPI: { connectElvanto: vi.fn(), disconnectElvanto: vi.fn() },
   elvantoSyncAPI: { listBatches: vi.fn(), deleteBatch: vi.fn(), getBatchPlan: vi.fn(), previewLinkCorrections: vi.fn(), applyBatch: vi.fn() },
   gatheringsAPI: { getAll: vi.fn(), create: vi.fn() },
-  peopleSyncAPI: { getRuns: vi.fn(), discardSourceDraft: vi.fn(), updateSettings: vi.fn() },
+  peopleSyncAPI: {
+    getRuns: vi.fn(), discardSourceDraft: vi.fn(), updateSettings: vi.fn(),
+    disableAuthority: vi.fn(), previewAuthority: vi.fn(), cancelAuthorityPreview: vi.fn(), applyAuthority: vi.fn(),
+  },
 }));
 vi.mock('../elvanto/ElvantoBatchEditor', () => ({
   default: ({ onSaved }: { onSaved: (savedBatch: PeopleSyncBatch) => void }) => (
@@ -28,12 +31,9 @@ vi.mock('../elvanto/ElvantoBatchEditor', () => ({
   ),
 }));
 vi.mock('../elvanto/ElvantoGatheringImport', () => ({ default: () => null }));
-vi.mock('../peopleSync/PeopleSourceControl', () => ({
-  default: ({ batches, onRefresh }: { batches: PeopleSyncBatch[]; onRefresh: () => Promise<void> }) => (
-    <section aria-label="People source control">
-      <p>{batches.map((item) => item.operationalState).join(', ')}</p>
-      <button type="button" onClick={() => void onRefresh()}>Refresh people source and batches</button>
-    </section>
+vi.mock('../peopleSync/AuthorityReviewWorkspace', () => ({
+  default: ({ onApplied }: { onApplied: () => void | Promise<void> }) => (
+    <button type="button" onClick={() => void onApplied()}>Complete authority review</button>
   ),
 }));
 
@@ -57,7 +57,7 @@ function renderPanel(peopleSyncSettings: PeopleSyncSettings = settings) {
   return render(<ElvantoIntegrationPanel
     status={{ connected: true, loading: false, elvantoAccount: 'Example church' }} refreshStatus={vi.fn()} onBack={vi.fn()}
     peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }}
-    refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
+    peopleSyncBatchRevision={0} refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
   />);
 }
 
@@ -106,21 +106,31 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
   });
 
-  it('passes the prepared batches to source control and refreshes settings and batches after authority changes', async () => {
-    const refreshPeopleSync = vi.fn().mockResolvedValue(undefined);
+  it('refreshes the target batch to its server-derived active state after the real source-control switch completes', async () => {
     vi.mocked(elvantoSyncAPI.listBatches)
-      .mockResolvedValueOnce({ data: { batches: [{ ...batch, operationalState: 'prepared' }] } })
-      .mockResolvedValueOnce({ data: { batches: [{ ...batch, operationalState: 'active' }] } });
-    render(<ElvantoIntegrationPanel
-      status={{ connected: true, loading: false, elvantoAccount: 'Example church' }} refreshStatus={vi.fn()} onBack={vi.fn()}
-      peopleSyncSettings={settings} peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }}
-      refreshPeopleSync={refreshPeopleSync} retryPeopleSync={vi.fn()}
-    />);
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'prepared' }] } })
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'active' }] } });
+    function Harness() {
+      const [peopleSyncSettings, setPeopleSyncSettings] = useState<PeopleSyncSettings>({ ...settings, authorityProvider: 'planning_center' });
+      const [peopleSyncBatchRevision, setPeopleSyncBatchRevision] = useState(0);
+      return <ElvantoIntegrationPanel
+        status={{ connected: true, loading: false, elvantoAccount: 'Example church' }} refreshStatus={vi.fn()} onBack={vi.fn()}
+        peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }}
+        peopleSyncBatchRevision={peopleSyncBatchRevision}
+        refreshPeopleSync={async () => {
+          setPeopleSyncSettings((current) => ({ ...current, authorityProvider: 'elvanto' }));
+          setPeopleSyncBatchRevision((revision) => revision + 1);
+        }}
+        retryPeopleSync={vi.fn()}
+      />;
+    }
+    render(<Harness />);
 
-    expect(await screen.findByRole('region', { name: 'People source control' })).toHaveTextContent('prepared');
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh people source and batches' }));
+    expect(await screen.findByText('Prepared for source switch')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Complete authority review' }));
 
-    await waitFor(() => expect(refreshPeopleSync).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('Active')).toBeInTheDocument();
   });

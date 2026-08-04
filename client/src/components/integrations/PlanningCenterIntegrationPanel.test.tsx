@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
 import PlanningCenterIntegrationPanel from './PlanningCenterIntegrationPanel';
+import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
 
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
@@ -21,7 +22,10 @@ vi.mock('../../services/api', () => ({
     getPlanningCenterBatchPlan: vi.fn(), previewPlanningCenterLinkCorrections: vi.fn(),
     applyPlanningCenterBatch: vi.fn(),
   },
-  peopleSyncAPI: { discardSourceDraft: vi.fn() },
+  peopleSyncAPI: {
+    discardSourceDraft: vi.fn(), disableAuthority: vi.fn(), previewAuthority: vi.fn(),
+    cancelAuthorityPreview: vi.fn(), applyAuthority: vi.fn(),
+  },
   settingsAPI: { getIntegrationSettings: vi.fn(), updateIntegrationSettings: vi.fn() },
 }));
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
@@ -33,12 +37,9 @@ vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({
     </div>
   ),
 }));
-vi.mock('../peopleSync/PeopleSourceControl', () => ({
-  default: ({ batches, onRefresh }: { batches: PeopleSyncBatch[]; onRefresh: () => Promise<void> }) => (
-    <section aria-label="People source control">
-      <p>{batches.map((item) => item.operationalState).join(', ')}</p>
-      <button type="button" onClick={() => void onRefresh()}>Refresh people source and batches</button>
-    </section>
+vi.mock('../peopleSync/AuthorityReviewWorkspace', () => ({
+  default: ({ onApplied }: { onApplied: () => void | Promise<void> }) => (
+    <button type="button" onClick={() => void onApplied()}>Complete authority review</button>
   ),
 }));
 
@@ -69,7 +70,7 @@ function renderPanel({
   return render(<PlanningCenterIntegrationPanel
     status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church', ...status }}
     refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known"
-    providerConnections={{ planning_center: true, elvanto: true }} refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
+    providerConnections={{ planning_center: true, elvanto: true }} peopleSyncBatchRevision={0} refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
   />);
 }
 
@@ -134,23 +135,74 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
   });
 
-  it('passes the prepared batches to source control and refreshes settings and batches after authority changes', async () => {
-    const refreshPeopleSync = vi.fn().mockResolvedValue(undefined);
+  it('refreshes the current batch to its server-derived prepared state after the real source-control disable completes', async () => {
+    vi.mocked(peopleSyncAPI.disableAuthority).mockResolvedValue({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    });
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
-      .mockResolvedValueOnce({ data: { batches: [{ ...batch, operationalState: 'prepared' }] } })
-      .mockResolvedValueOnce({ data: { batches: [{ ...batch, operationalState: 'active' }] } });
-    render(<PlanningCenterIntegrationPanel
-      status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church' }}
-      refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={settings} peopleSyncStatus="known"
-      providerConnections={{ planning_center: true, elvanto: true }} refreshPeopleSync={refreshPeopleSync} retryPeopleSync={vi.fn()}
-    />);
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'active' }] } })
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'prepared' }] } });
+    function Harness() {
+      const [peopleSyncSettings, setPeopleSyncSettings] = useState<PeopleSyncSettings>({ ...settings, authorityProvider: 'planning_center' });
+      const [peopleSyncBatchRevision, setPeopleSyncBatchRevision] = useState(0);
+      return <PlanningCenterIntegrationPanel
+        status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church' }}
+        refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known"
+        providerConnections={{ planning_center: true, elvanto: true }} peopleSyncBatchRevision={peopleSyncBatchRevision}
+        refreshPeopleSync={async () => {
+          setPeopleSyncSettings((current) => ({ ...current, authorityProvider: 'none' }));
+          setPeopleSyncBatchRevision((revision) => revision + 1);
+        }}
+        retryPeopleSync={vi.fn()}
+      />;
+    }
+    render(<Harness />);
 
-    expect(await screen.findByRole('region', { name: 'People source control' })).toHaveTextContent('prepared');
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh people source and batches' }));
-
-    await waitFor(() => expect(refreshPeopleSync).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('Active')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+
+    await waitFor(() => expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Prepared for source switch')).toBeInTheDocument();
+  });
+
+  it('refreshes the former provider batch to the server-derived prepared state after the real source-control switch', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'active' }] } })
+      .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'prepared' }] } });
+    function Harness() {
+      const [peopleSyncSettings, setPeopleSyncSettings] = useState<PeopleSyncSettings>({ ...settings, authorityProvider: 'planning_center' });
+      const [peopleSyncBatchRevision, setPeopleSyncBatchRevision] = useState(0);
+      const refreshPeopleSync = async () => {
+        setPeopleSyncSettings((current) => ({ ...current, authorityProvider: 'elvanto' }));
+        setPeopleSyncBatchRevision((revision) => revision + 1);
+      };
+      return <>
+        <PeopleSourceControl
+          provider="elvanto"
+          batches={[{ ...batch, id: 13, provider: 'elvanto', source: { ...batch.source!, kind: 'elvanto_category' } }]}
+          settings={peopleSyncSettings}
+          connections={{ planning_center: true, elvanto: true }}
+          onRefresh={refreshPeopleSync}
+        />
+        <PlanningCenterIntegrationPanel
+          status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church' }}
+          refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known"
+          providerConnections={{ planning_center: true, elvanto: true }} peopleSyncBatchRevision={peopleSyncBatchRevision}
+          refreshPeopleSync={refreshPeopleSync} retryPeopleSync={vi.fn()}
+        />
+      </>;
+    }
+    render(<Harness />);
+
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Complete authority review' }));
+
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Prepared for source switch')).toBeInTheDocument();
   });
 
   it('uses the server reviewability flag for source review batches', async () => {

@@ -64,6 +64,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   peopleSyncSettings,
   peopleSyncStatus,
   providerConnections,
+  peopleSyncBatchRevision,
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
@@ -94,6 +95,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [peopleLinked, setPeopleLinked] = useState(true);
   const reconnectRequired = status.reconnectRequired === true;
   const batchLoadGeneration = useRef(0);
+  const lastSeenPeopleSyncBatchRevision = useRef(peopleSyncBatchRevision);
   const settingsGeneration = useRef(0);
   const settingsMutationInFlight = useRef(false);
 
@@ -127,10 +129,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     await loadBatches();
     await loadSyncStats();
   }, [loadBatches, loadSyncStats]);
-
-  const refreshPeopleSourceAndBatches = useCallback(async () => {
-    await Promise.all([refreshPeopleSync(), reloadAfterBatchMutation()]);
-  }, [refreshPeopleSync, reloadAfterBatchMutation]);
 
   const loadPcSettings = useCallback(async () => {
     const generation = ++settingsGeneration.current;
@@ -288,6 +286,12 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     };
   }, [status.connected, loadBatches, loadSyncStats, loadPcSettings]);
 
+  useEffect(() => {
+    if (lastSeenPeopleSyncBatchRevision.current === peopleSyncBatchRevision) return;
+    lastSeenPeopleSyncBatchRevision.current = peopleSyncBatchRevision;
+    if (status.connected) void reloadAfterBatchMutation();
+  }, [peopleSyncBatchRevision, reloadAfterBatchMutation, status.connected]);
+
   const modernBatches = batches.filter((batch) => batch.legacyProviderBatchId === null);
   const legacyBatches = batches.filter((batch) => batch.legacyProviderBatchId !== null);
 
@@ -297,7 +301,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       batches={modernBatches}
       settings={peopleSyncSettings}
       connections={providerConnections}
-      onRefresh={refreshPeopleSourceAndBatches}
+      onRefresh={refreshPeopleSync}
     />
   ) : (
     <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

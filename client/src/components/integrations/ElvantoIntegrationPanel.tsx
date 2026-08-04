@@ -226,6 +226,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   peopleSyncSettings,
   peopleSyncStatus,
   providerConnections,
+  peopleSyncBatchRevision,
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
@@ -240,6 +241,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const [connectionRevision, setConnectionRevision] = useState(0);
   const connectedRef = useRef(status.connected);
   const connectedDataGeneration = useRef(0);
+  const lastSeenPeopleSyncBatchRevision = useRef(peopleSyncBatchRevision);
   connectedRef.current = status.connected;
 
   const loadConnectedData = useCallback(async () => {
@@ -286,16 +288,18 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     await loadConnectedData();
   }, [loadConnectedData]);
 
-  const refreshPeopleSourceAndBatches = useCallback(async () => {
-    await Promise.all([refreshPeopleSync(), reloadAfterBatchMutation()]);
-  }, [refreshPeopleSync, reloadAfterBatchMutation]);
-
   useEffect(() => {
     void loadConnectedData();
     return () => {
       connectedDataGeneration.current += 1;
     };
   }, [loadConnectedData, status.connected]);
+
+  useEffect(() => {
+    if (lastSeenPeopleSyncBatchRevision.current === peopleSyncBatchRevision) return;
+    lastSeenPeopleSyncBatchRevision.current = peopleSyncBatchRevision;
+    if (status.connected) void reloadAfterBatchMutation();
+  }, [peopleSyncBatchRevision, reloadAfterBatchMutation, status.connected]);
 
   const deleteBatch = async (batch: PeopleSyncBatch) => {
     try {
@@ -321,7 +325,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
       batches={batches}
       settings={peopleSyncSettings}
       connections={providerConnections}
-      onRefresh={refreshPeopleSourceAndBatches}
+      onRefresh={refreshPeopleSync}
     />
   ) : (
     <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

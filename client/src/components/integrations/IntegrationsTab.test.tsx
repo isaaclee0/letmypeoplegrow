@@ -18,17 +18,39 @@ vi.mock('../../utils/logger', () => ({
 }));
 
 vi.mock('./PlanningCenterIntegrationPanel', () => ({
-  default: ({ status, onBack }: { status: { connectionErrorCode?: string | null }; onBack: () => void }) => (
+  default: ({
+    status,
+    onBack,
+    peopleSyncBatchRevision,
+    refreshPeopleSync,
+  }: {
+    status: { connectionErrorCode?: string | null };
+    onBack: () => void;
+    peopleSyncBatchRevision: number;
+    refreshPeopleSync: () => Promise<void>;
+  }) => (
     <section aria-label="Planning Center integration panel">
       <div data-testid="planning-center-status-code">{status.connectionErrorCode ?? 'none'}</div>
+      <div data-testid="planning-center-batch-revision">{peopleSyncBatchRevision}</div>
+      <button type="button" onClick={() => void refreshPeopleSync()}>Refresh provider batches</button>
       <button type="button" onClick={onBack}>Back to integrations</button>
     </section>
   ),
 }));
 
 vi.mock('./ElvantoIntegrationPanel', () => ({
-  default: ({ onBack }: { onBack: () => void }) => (
+  default: ({
+    onBack,
+    peopleSyncBatchRevision,
+    refreshPeopleSync,
+  }: {
+    onBack: () => void;
+    peopleSyncBatchRevision: number;
+    refreshPeopleSync: () => Promise<void>;
+  }) => (
     <section aria-label="Elvanto integration panel">
+      <div data-testid="elvanto-batch-revision">{peopleSyncBatchRevision}</div>
+      <button type="button" onClick={() => void refreshPeopleSync()}>Refresh provider batches</button>
       <button type="button" onClick={onBack}>Back to integrations</button>
     </section>
   ),
@@ -105,6 +127,25 @@ describe('IntegrationsTab authority status', () => {
 
     await waitFor(() => expect(screen.getByText('Authoritative people source')).toBeInTheDocument());
     screen.getAllByRole('button', { name: 'Disconnect' }).forEach((button) => expect(button).toBeEnabled());
+  });
+
+  it('invalidates both provider batch views after a people-source refresh', async () => {
+    window.history.replaceState({}, '', '/app/settings?tab=integrations&integration=elvanto');
+    vi.mocked(peopleSyncAPI.getSettings)
+      .mockResolvedValueOnce({ data: { success: true, settings } })
+      .mockResolvedValueOnce({ data: { success: true, settings: { ...settings, authorityProvider: 'elvanto' } } });
+    render(<IntegrationsTab />);
+
+    expect(await screen.findByTestId('elvanto-batch-revision')).toHaveTextContent('0');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh provider batches' }));
+    await waitFor(() => expect(screen.getByTestId('elvanto-batch-revision')).toHaveTextContent('1'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to integrations' }));
+    const planningCenterCard = screen.getByText('Planning Center').closest('.border');
+    expect(planningCenterCard).not.toBeNull();
+    fireEvent.click(within(planningCenterCard!).getByRole('button', { name: 'Edit Planning Center settings' }));
+
+    expect(await screen.findByTestId('planning-center-batch-revision')).toHaveTextContent('1');
   });
 
   it.each([

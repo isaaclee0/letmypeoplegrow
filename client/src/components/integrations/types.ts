@@ -31,6 +31,8 @@ export interface PeopleSyncPanelProps {
   peopleSyncSettings: PeopleSyncSettings;
   peopleSyncStatus: 'loading' | 'error' | 'known';
   providerConnections: Record<SyncProvider, boolean>;
+  /** Increments after an authority change so each provider view reloads its server-derived batches. */
+  peopleSyncBatchRevision: number;
   refreshPeopleSync: () => void | Promise<void>;
   retryPeopleSync: () => void | Promise<void>;
 }
