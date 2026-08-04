@@ -65,6 +65,7 @@ function makeDeps({
   const failed = [];
   const applied = [];
   const tokenContexts = [];
+  const digestedPlans = [];
   let fetchIndex = 0;
   let authorityIndex = 0;
   let localIndex = 0;
@@ -106,7 +107,10 @@ function makeDeps({
     computePeopleImportPlan,
     assertAdditiveImportPlan,
     buildReviewContext,
-    digestPlan,
+    digestPlan(plan) {
+      digestedPlans.push(structuredClone(plan));
+      return digestPlan(plan);
+    },
     createReviewToken(context) {
       tokenContexts.push(context);
       return createReviewToken(context);
@@ -125,7 +129,7 @@ function makeDeps({
     refreshBackgroundCheckStatuses() { throw new Error('must not run provider extras'); },
     ...extra,
   };
-  return { deps, events, finished, failed, applied, tokenContexts };
+  return { deps, events, finished, failed, applied, tokenContexts, digestedPlans };
 }
 
 const input = { churchId: 'church-a', provider: 'elvanto', selection: { kind: 'all' } };
@@ -159,13 +163,14 @@ test('groups family members and removes household-only matcher identities', () =
 });
 
 test('preview imports without reading or creating batches', async () => {
-  const { deps, events, finished, tokenContexts } = makeDeps();
+  const { deps, events, finished, tokenContexts, digestedPlans } = makeDeps();
   const review = await previewImport(input, deps);
 
   assert.equal(review.operationKind, 'people_import');
   assert.deepEqual(review.selection, { kind: 'all' });
   assert.equal(review.plan.operationKind, 'people_import');
   assert.equal(review.plan.authoritative, false);
+  assert.deepEqual(digestedPlans[0].sourceContext.authorityExpectation, { active: 'none', pending: null });
   assert.equal(JSON.stringify(review).includes('attributes'), false);
   assert.equal(tokenContexts[0].operationKind, 'people_import');
   assert.equal(tokenContexts[0].batchId, null);
@@ -286,8 +291,17 @@ test('an audit rejection of a token-shaped error retries with a safe fallback me
 
 for (const changed of [
   {
-    name: 'authority',
-    options: { authorityStates: [{ active: 'none', pending: null }, { active: 'planning_center', pending: null }] },
+    name: 'pending authority',
+    options: { authorityStates: [{ active: 'none', pending: null }, { active: 'none', pending: 'elvanto' }] },
+  },
+  {
+    name: 'active authority even when import actions are identical',
+    options: {
+      authorityStates: [
+        { active: 'planning_center', pending: null },
+        { active: 'elvanto', pending: null },
+      ],
+    },
   },
   {
     name: 'local identity',

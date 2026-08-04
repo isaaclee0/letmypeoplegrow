@@ -189,43 +189,87 @@ test('finished runs persist and return only validated source provenance fields',
   });
 });
 
-test('one-time imports persist batchless all-people provenance', async () => {
+test('one-time imports persist batchless all-people and provider-owned source provenance', async () => {
   await withTestChurchDb(async (churchId) => {
-    const entry = provenance({
-      batchId: null,
-      sourceKind: 'all',
-      sourceExternalId: 'all',
-      sourceName: 'All people',
-    });
-    const run = await startRun({
-      churchId, provider: 'elvanto', batchId: null, trigger: 'people_import', fetchMode: 'full',
-    });
-    const finished = await finishRun({
-      churchId, provider: 'elvanto', runId: run.id, status: 'applied', counts: {}, sourceProvenance: [entry],
-    });
+    const cases = [
+      {
+        provider: 'elvanto', sourceKind: 'all', sourceExternalId: 'all', sourceName: 'All people',
+      },
+      {
+        provider: 'planning_center', sourceKind: 'planning_center_list',
+        sourceExternalId: 'list-7', sourceName: 'Members',
+      },
+      {
+        provider: 'elvanto', sourceKind: 'elvanto_category',
+        sourceExternalId: 'category-8', sourceName: 'Adults',
+      },
+      {
+        provider: 'elvanto', sourceKind: 'elvanto_group',
+        sourceExternalId: 'group-9', sourceName: 'Youth',
+      },
+    ];
+    for (const value of cases) {
+      const { provider, ...source } = value;
+      const entry = provenance({ batchId: null, ...source });
+      const run = await startRun({
+        churchId, provider, batchId: null, trigger: 'people_import', fetchMode: 'full',
+      });
+      const finished = await finishRun({
+        churchId, provider, runId: run.id, status: 'applied', counts: {}, sourceProvenance: [entry],
+      });
 
-    assert.equal(finished.trigger, 'people_import');
-    assert.equal(finished.batchId, null);
-    assert.deepEqual(finished.sourceProvenance, [entry]);
+      assert.equal(finished.trigger, 'people_import');
+      assert.equal(finished.batchId, null);
+      assert.deepEqual(finished.sourceProvenance, [entry]);
+    }
   });
 });
 
-test('ordinary sync provenance still rejects a batchless all-people source', async () => {
+test('one-time import provenance rejects source kinds owned by another provider', async () => {
   await withTestChurchDb(async (churchId) => {
-    const run = await startRun({
-      churchId, provider: 'elvanto', batchId: null, trigger: 'manual', fetchMode: 'full',
-    });
-    await assert.rejects(
-      finishRun({
-        churchId,
-        provider: 'elvanto',
-        runId: run.id,
-        status: 'applied',
-        counts: {},
-        sourceProvenance: [provenance({ batchId: null, sourceKind: 'all' })],
-      }),
-      /source provenance.*invalid|positive batch|people import/i
-    );
+    for (const invalid of [
+      { provider: 'planning_center', sourceKind: 'elvanto_group' },
+      { provider: 'elvanto', sourceKind: 'planning_center_list' },
+      { provider: 'elvanto', sourceKind: 'unknown_source' },
+    ]) {
+      const run = await startRun({
+        churchId, provider: invalid.provider, batchId: null, trigger: 'people_import', fetchMode: 'full',
+      });
+      await assert.rejects(
+        finishRun({
+          churchId,
+          provider: invalid.provider,
+          runId: run.id,
+          status: 'applied',
+          counts: {},
+          sourceProvenance: [provenance({
+            batchId: null, sourceKind: invalid.sourceKind, sourceExternalId: 'wrong-kind',
+          })],
+        }),
+        /source provenance.*invalid/i
+      );
+    }
+  });
+});
+
+test('ordinary sync provenance still rejects every batchless source kind', async () => {
+  await withTestChurchDb(async (churchId) => {
+    for (const sourceKind of ['all', 'elvanto_group', 'elvanto_category']) {
+      const run = await startRun({
+        churchId, provider: 'elvanto', batchId: null, trigger: 'manual', fetchMode: 'full',
+      });
+      await assert.rejects(
+        finishRun({
+          churchId,
+          provider: 'elvanto',
+          runId: run.id,
+          status: 'applied',
+          counts: {},
+          sourceProvenance: [provenance({ batchId: null, sourceKind })],
+        }),
+        /source provenance.*invalid|positive batch|people import/i
+      );
+    }
   });
 });
 

@@ -201,15 +201,11 @@ async function loadPreconditions({ churchId, provider, deps }) {
   return { connectionGeneration, credentials, authorityState, adapter };
 }
 
-function importSourceProvenance({ selection, snapshot, snapshotDigest }) {
-  // The audit repository's batchless provenance contract intentionally has
-  // one source identity: the whole-account import. Selected-source identity
-  // is still cryptographically bound in plan.sourceContext.
-  if (selection.kind !== 'all') return [];
+function importSourceProvenance({ snapshot, snapshotDigest }) {
   return [{
     batchId: null,
-    sourceKind: 'all',
-    sourceExternalId: 'all',
+    sourceKind: snapshot.source.kind,
+    sourceExternalId: snapshot.source.externalId,
     sourceName: snapshot.source.name,
     memberCount: new Set(snapshot.memberExternalIds.map(String)).size,
     providerRefreshedAt: snapshot.providerRefreshedAt ?? snapshot.source.providerRefreshedAt ?? null,
@@ -292,10 +288,14 @@ async function buildFreshPlan({
     selection,
     connectionGeneration: preconditions.connectionGeneration,
     snapshotDigest,
+    authorityExpectation: {
+      active: preconditions.authorityState.active,
+      pending: preconditions.authorityState.pending,
+    },
   };
   return {
     plan, snapshot, snapshotDigest, local, externalPeople,
-    sourceProvenance: importSourceProvenance({ selection, snapshot, snapshotDigest }),
+    sourceProvenance: importSourceProvenance({ snapshot, snapshotDigest }),
   };
 }
 

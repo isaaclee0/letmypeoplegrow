@@ -122,7 +122,8 @@ function sanitiseSourceProvenance(value, provider, { allowNull = true, operation
   }
   assertNoCredentialShape(value);
   const isPeopleImport = operationKind === 'people_import';
-  const allowedKinds = isPeopleImport ? new Set(['all']) : (SOURCE_KINDS[provider] || new Set());
+  const providerKinds = SOURCE_KINDS[provider] || new Set();
+  const allowedKinds = isPeopleImport ? new Set(['all', ...providerKinds]) : providerKinds;
   const safe = value.map((entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
         Object.keys(entry).sort().join(',') !== [...SOURCE_PROVENANCE_KEYS].sort().join(',')) {

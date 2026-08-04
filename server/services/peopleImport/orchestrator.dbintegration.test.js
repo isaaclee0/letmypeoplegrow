@@ -206,6 +206,96 @@ test('an active authority forces imported people to visitors', async () => {
   });
 });
 
+for (const authorityChange of [
+  {
+    name: 'pending authority',
+    beforePreview: null,
+    afterPreview: `UPDATE people_sync_settings
+      SET pending_authority_provider = 'planning_center' WHERE church_id = ?`,
+  },
+  {
+    name: 'active authority with otherwise identical import actions',
+    beforePreview: `UPDATE people_sync_settings
+      SET authority_provider = 'planning_center' WHERE church_id = ?`,
+    afterPreview: `UPDATE people_sync_settings
+      SET authority_provider = 'elvanto' WHERE church_id = ?`,
+  },
+]) {
+  test(`a changed ${authorityChange.name} rejects the reviewed import without writes`, async () => {
+    await withTestChurchDb(async (churchId) => {
+      fetchHook = null;
+      await seedChurch(churchId);
+      if (authorityChange.beforePreview) {
+        await Database.queryForChurch(churchId, authorityChange.beforePreview, [churchId]);
+      }
+      currentSnapshot = importSnapshot();
+      const review = await previewImport({ churchId, provider: 'elvanto', selection });
+      await Database.queryForChurch(churchId, authorityChange.afterPreview, [churchId]);
+
+      await assert.rejects(
+        applyImport({
+          churchId, provider: 'elvanto', selection, reviewToken: review.reviewToken,
+          selections: selectionsFor(review), userId: null,
+        }),
+        { code: 'SYNC_PLAN_STALE' }
+      );
+
+      const [people] = await Database.queryForChurch(
+        churchId, 'SELECT COUNT(*) AS count FROM individuals WHERE church_id = ?', [churchId]
+      );
+      const [claims] = await Database.queryForChurch(
+        churchId, 'SELECT COUNT(*) AS count FROM people_sync_review_applications WHERE church_id = ?', [churchId]
+      );
+      assert.equal(Number(people.count), 0);
+      assert.equal(Number(claims.count), 0);
+    });
+  });
+}
+
+test('selected-source preview and apply runs retain batchless provider provenance', async () => {
+  await withTestChurchDb(async (churchId) => {
+    fetchHook = null;
+    await seedChurch(churchId);
+    currentSnapshot = importSnapshot({
+      source: {
+        kind: 'elvanto_group', externalId: 'group-42', name: 'Youth Group', providerRefreshedAt: null,
+      },
+    });
+    const selected = { kind: 'elvanto_group', externalId: 'group-42' };
+    const review = await previewImport({ churchId, provider: 'elvanto', selection: selected });
+    await applyImport({
+      churchId, provider: 'elvanto', selection: selected, reviewToken: review.reviewToken,
+      selections: selectionsFor(review), userId: null,
+    });
+
+    const runs = await Database.queryForChurch(
+      churchId,
+      `SELECT trigger, source_provenance
+         FROM people_sync_runs WHERE church_id = ? ORDER BY id`,
+      [churchId]
+    );
+    assert.deepEqual(runs.map((row) => {
+      const [source] = JSON.parse(row.source_provenance);
+      return {
+        trigger: row.trigger,
+        batchId: source?.batchId,
+        sourceKind: source?.sourceKind,
+        sourceExternalId: source?.sourceExternalId,
+        sourceName: source?.sourceName,
+      };
+    }), [
+      {
+        trigger: 'people_import', batchId: null, sourceKind: 'elvanto_group',
+        sourceExternalId: 'group-42', sourceName: 'Youth Group',
+      },
+      {
+        trigger: 'people_import', batchId: null, sourceKind: 'elvanto_group',
+        sourceExternalId: 'group-42', sourceName: 'Youth Group',
+      },
+    ]);
+  });
+});
+
 test('a review token cannot cross churches and its rejection leaves no writes', async () => {
   await withTestChurchDb(async (churchId) => {
     fetchHook = null;
