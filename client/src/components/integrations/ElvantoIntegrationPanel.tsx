@@ -39,6 +39,7 @@ function ConnectionSection({
   retryAuthority,
   onConnectionChanged,
   initialAction,
+  syncControl,
 }: {
   status: ElvantoStatus;
   refreshStatus: () => void | Promise<void>;
@@ -47,6 +48,7 @@ function ConnectionSection({
   retryAuthority: () => void | Promise<void>;
   onConnectionChanged?: () => void | Promise<void>;
   initialAction?: 'disconnect';
+  syncControl?: React.ReactNode;
 }) {
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
@@ -102,9 +104,12 @@ function ConnectionSection({
           {status.connected && <p className="mt-1 text-xs text-green-700">Connected to {status.elvantoAccount || 'Elvanto'}</p>}
         </div>
         {status.connected && (
-          <button type="button" onClick={() => setConfirmDisconnect(true)} disabled={!authorityKnown} className="rounded border border-gray-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">
-            Disconnect Elvanto
-          </button>
+          <div className="flex items-center gap-3">
+            {syncControl}
+            <button type="button" onClick={() => setConfirmDisconnect(true)} disabled={!authorityKnown} className="rounded border border-gray-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">
+              Disconnect Elvanto
+            </button>
+          </div>
         )}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -320,7 +325,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     }
   };
 
-  const peopleSourceControl = peopleSyncStatus === 'known' ? (
+  const peopleSourceControl = peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider !== 'elvanto' ? (
     <PeopleSourceControl
       provider="elvanto"
       batches={batches}
@@ -328,12 +333,16 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
       connections={providerConnections}
       onRefresh={refreshPeopleSync}
     />
-  ) : (
+  ) : peopleSyncStatus !== 'known' ? (
     <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
       <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
       {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
     </section>
-  );
+  ) : null;
+
+  const headerPeopleSyncControl = peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'elvanto' ? (
+    <PeopleSourceControl compact provider="elvanto" batches={batches} settings={peopleSyncSettings} connections={providerConnections} onRefresh={refreshPeopleSync} />
+  ) : null;
 
   return (
     <div className="space-y-5">
@@ -348,11 +357,9 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
         retryAuthority={retryPeopleSync}
         onConnectionChanged={status.connected ? reloadConnectionData : undefined}
         initialAction={initialAction}
+        syncControl={headerPeopleSyncControl}
       />
       {peopleSourceControl}
-      {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'elvanto' && (
-        <PeopleEditingLockControl settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
-      )}
 
       {status.connected && (
         <>
@@ -418,6 +425,10 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
             {batchNotice && <p role="status" className="text-sm text-green-700 dark:text-green-300">{batchNotice}</p>}
             {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           </section>
+
+          {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'elvanto' && (
+            <PeopleEditingLockControl settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
+          )}
 
           <RecentRuns runs={runs} />
           <ElvantoGatheringImport key={connectionRevision} connected={status.connected} />

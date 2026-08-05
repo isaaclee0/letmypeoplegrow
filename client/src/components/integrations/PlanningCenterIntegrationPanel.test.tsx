@@ -165,14 +165,16 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(await screen.findByText('Active')).toBeInTheDocument();
   });
 
-  it('places the active PCO sync and editing controls beside Disconnect', async () => {
+  it('places the active PCO sync switch beside Disconnect and keeps editing below batches', async () => {
     renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' } });
 
     await screen.findByText('Members');
     const headerActions = screen.getByRole('button', { name: 'Disconnect' }).parentElement;
     expect(headerActions).not.toBeNull();
-    expect(within(headerActions!).getByRole('switch', { name: 'Use Planning Center as source of truth' })).toBeChecked();
-    expect(within(headerActions!).getByRole('switch', { name: 'Lock People page editing' })).toBeChecked();
+    const syncSwitch = within(headerActions!).getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    expect(syncSwitch).toBeChecked();
+    expect(syncSwitch).toHaveAttribute('title', 'Toggle to enable or disable all syncing with Planning Center');
+    expect(screen.getByRole('switch', { name: 'Lock People page editing' })).toBeChecked();
   });
 
   it('refreshes the former provider batch to the server-derived prepared state after the real source-control switch', async () => {

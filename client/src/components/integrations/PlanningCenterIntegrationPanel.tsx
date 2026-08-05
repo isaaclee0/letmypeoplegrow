@@ -311,18 +311,15 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     </section>
   ) : null;
 
-  const headerPeopleControls = status.connected && peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' ? (
-    <div className="flex flex-wrap items-center gap-3">
-      <PeopleSourceControl
-        compact
-        provider="planning_center"
-        batches={modernBatches}
-        settings={peopleSyncSettings}
-        connections={providerConnections}
-        onRefresh={refreshPeopleSync}
-      />
-      <PeopleEditingLockControl compact settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
-    </div>
+  const headerPeopleSyncControl = status.connected && peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' ? (
+    <PeopleSourceControl
+      compact
+      provider="planning_center"
+      batches={modernBatches}
+      settings={peopleSyncSettings}
+      connections={providerConnections}
+      onRefresh={refreshPeopleSync}
+    />
   ) : null;
 
   return (
@@ -382,7 +379,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     <ShieldCheckIcon className="w-3 h-3 mr-1" />
                     Connected
                   </span>
-                  {headerPeopleControls}
+                  {headerPeopleSyncControl}
                   <button
                     onClick={() => setShowPlanningCenterDisconnectModal(true)}
                     disabled={peopleSyncStatus !== 'known'}
@@ -606,6 +603,9 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
               </div>
 
       {peopleSourceControl}
+      {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' && (
+        <PeopleEditingLockControl settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
+      )}
 
               {/* PCO-specific background-check tracking remains independent of people authority. */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">

@@ -184,12 +184,12 @@ export default function PeopleSourceControl({
               : 'Your first batch review starts people sync automatically.'}
           </p>
         </div>}
-        {compact && <span className="text-sm text-gray-600 dark:text-gray-300">People sync</span>}
         <button
           ref={toggleRef}
           type="button"
           role="switch"
           aria-label={`Use ${providerName(provider)} as source of truth`}
+          title={`Toggle to enable or disable all syncing with ${providerName(provider)}`}
           aria-checked={checked}
           disabled={toggleDisabled}
           onClick={toggle}
