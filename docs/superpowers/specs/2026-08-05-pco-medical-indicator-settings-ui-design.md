@@ -31,6 +31,15 @@ Make the Planning Center medical-indicator settings compact and consistent with 
 - The UI continues to submit the existing settings payload and `adoptExistingAppearance` flag; no server or database changes are required.
 - Medical-note text is never requested or stored.
 
+## Adoption confirmation
+
+- The existing destructive confirmation keeps its title, warning copy, and save behaviour.
+- Its action row matches other destructive confirmation modals in the Planning Center UI.
+- Cancel and Confirm are equal-width buttons.
+- Cancel uses the standard bordered light/dark secondary-button styling.
+- Confirm uses the standard red destructive-button styling, including hover, focus, and disabled states.
+- Both actions are disabled while saving, and the destructive action reads **Saving…** until the request completes.
+
 ## Tests
 
 Component tests will verify that:
@@ -40,4 +49,5 @@ Component tests will verify that:
 - the enabled panel can be collapsed again;
 - icon tiles and matching colour controls are rendered;
 - **Adopt existing** reveals existing appearances; and
-- selecting and saving an existing appearance still requires destructive confirmation.
+- selecting and saving an existing appearance still requires destructive confirmation; and
+- the confirmation renders the standard secondary and destructive actions and prevents duplicate submission while saving.
