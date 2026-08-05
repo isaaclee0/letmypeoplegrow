@@ -116,3 +116,58 @@ Expected: focused tests and production build pass; `git diff --check` prints no 
 git add client/src/components/integrations/PlanningCenterMedicalNotesSettings.tsx client/src/components/integrations/PlanningCenterMedicalNotesSettings.test.tsx
 git commit -m "refactor(pco): compact medical indicator settings"
 ```
+
+### Task 2: Match the destructive confirmation buttons
+
+**Files:**
+- Modify: `client/src/components/integrations/PlanningCenterMedicalNotesSettings.tsx`
+- Test: `client/src/components/integrations/PlanningCenterMedicalNotesSettings.test.tsx`
+
+**Interfaces:**
+- Consumes: the component's existing `saving` state and `save(true)` adoption flow.
+- Produces: unchanged modal behaviour with the standard secondary/destructive action presentation.
+
+- [ ] **Step 1: Write the failing modal action test**
+
+Open the adoption confirmation and assert that Cancel and Confirm are equal-width standard actions. Keep the update request pending after Confirm is clicked and assert both actions are disabled while the destructive label reads `Saving…`.
+
+```tsx
+expect(cancel).toHaveClass('flex-1', 'border-gray-300', 'bg-white');
+expect(confirm).toHaveClass('flex-1', 'bg-red-600', 'hover:bg-red-700');
+fireEvent.click(confirm);
+expect(cancel).toBeDisabled();
+expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+```
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+Run:
+
+```bash
+cd client && npm test -- --run src/components/integrations/PlanningCenterMedicalNotesSettings.test.tsx
+```
+
+Expected: FAIL because the current Cancel action is unstyled and neither modal action is disabled while saving.
+
+- [ ] **Step 3: Apply the established confirmation action styles**
+
+Render an equal-width action row using the standard secondary button classes for Cancel and destructive red classes for Confirm. Bind both `disabled` properties to `saving` and render `Saving…` while the adoption request is pending.
+
+- [ ] **Step 4: Run proportional verification**
+
+Run:
+
+```bash
+cd client && npm test -- --run src/components/integrations/PlanningCenterMedicalNotesSettings.test.tsx src/components/integrations/PlanningCenterIntegrationPanel.test.tsx
+cd client && npm run build
+git diff --check
+```
+
+Expected: all focused tests and the production build pass; `git diff --check` prints no errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add client/src/components/integrations/PlanningCenterMedicalNotesSettings.tsx client/src/components/integrations/PlanningCenterMedicalNotesSettings.test.tsx
+git commit -m "fix(pco): align adoption confirmation actions"
+```
