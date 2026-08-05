@@ -441,6 +441,36 @@ test('a deferred old refresh cannot resurrect credentials after disconnect', asy
   }));
 });
 
+test('disconnect disables medical indicators and clears booleans without erasing their configuration', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await replaceConnection({
+      churchId,
+      credentials: { accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+    });
+    await Database.queryForChurch(churchId,
+      `UPDATE church_settings SET planning_center_medical_notes_enabled = 1,
+       planning_center_medical_notes_badge_icon = 'heart',
+       planning_center_medical_notes_badge_color = '#facc15'
+       WHERE church_id = ?`, [churchId]);
+    await Database.queryForChurch(churchId,
+      `INSERT INTO individuals (first_name, last_name, church_id, pco_has_medical_notes)
+       VALUES ('Medical', 'Person', ?, 1)`, [churchId]);
+
+    await disconnectConnection(churchId);
+
+    const [settings] = await Database.queryForChurch(churchId,
+      `SELECT planning_center_medical_notes_enabled AS enabled,
+              planning_center_medical_notes_badge_icon AS icon,
+              planning_center_medical_notes_badge_color AS color
+         FROM church_settings WHERE church_id = ?`, [churchId]);
+    assert.deepEqual(settings, { enabled: 0, icon: 'heart', color: '#facc15' });
+    const [person] = await Database.queryForChurch(churchId,
+      'SELECT pco_has_medical_notes AS medical FROM individuals WHERE church_id = ?', [churchId]);
+    assert.equal(person.medical, 0);
+  }));
+});
+
 test('disconnect racing reviewed PCO activation cannot leave active authority without credentials', async () => {
   // Catches the disconnect check/delete running outside the church transaction
   // used by reviewed authority activation.

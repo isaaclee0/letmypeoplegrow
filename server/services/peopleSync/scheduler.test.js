@@ -60,6 +60,8 @@ function baseOptions(overrides = {}) {
     getAuthority: async () => ({ active: 'planning_center', pending: null }),
     getConnection: async () => ({ connectionStatus: 'connected' }),
     getUnattendedProviderEnabled: async () => true,
+    isUnattendedMedicalNotesRefreshEnabled: async () => false,
+    refreshMedicalNoteStatuses: async () => {},
     getFullReconciliationSchedule: async () => ({ frequency: 'weekly', day: 1 }),
     recordBatchResult: async () => {},
     ...overrides,
@@ -71,6 +73,17 @@ test('isDueToday behaves exactly as the original planningCenterSync implementati
   assert.equal(isDueToday('weekly', 1, MONDAY), true);
   assert.equal(isDueToday('weekly', 2, MONDAY), false);
   assert.equal(isDueToday('monthly', 6, new Date('2026-07-06T02:00:00')), true);
+});
+
+test('runChurch refreshes medical indicators once before authority and batch gates', async () => {
+  const events = [];
+  await runChurch('church-a', baseOptions({
+    isUnattendedMedicalNotesRefreshEnabled: async () => true,
+    refreshMedicalNoteStatuses: async (churchId) => { events.push(`medical:${churchId}`); },
+    getAuthority: async () => { events.push('authority'); return { active: 'none', pending: null }; },
+    listBatches: async () => [],
+  }));
+  assert.deepEqual(events, ['medical:church-a', 'authority']);
 });
 
 test('only enabled and due batches are executed', async () => {

@@ -23,6 +23,8 @@ const Database = require('../../config/database');
 const connectionStore = require('./connectionStore');
 const { getAuthorityWithConnection } = require('./authority');
 const accountCoordinator = require('../planningCenter/accountCoordinator');
+const { disableMedicalNotesWithConnection } = require('../planningCenter/medicalNotesPolicy');
+const { invalidateMedicalNoteStatusCache } = require('../planningCenter/medicalNotesSync');
 
 const PCO_RECONNECT_REQUIRED = 'PCO_RECONNECT_REQUIRED';
 
@@ -329,7 +331,7 @@ async function replaceConnection({ churchId, credentials, connectedBy, metadata 
 // activation or activation wins and disconnect is rejected; active PCO can
 // never be committed without a connection because of this race.
 async function disconnectConnection(churchId) {
-  return accountCoordinator.withCredentialMutation(churchId, () =>
+  const disconnected = await accountCoordinator.withCredentialMutation(churchId, () =>
     withCredentialMutation(churchId, () => Database.transactionForChurch(churchId, async (conn) => {
       const authority = await getAuthorityWithConnection(conn, churchId);
       if (authority.active === 'planning_center' || authority.pending === 'planning_center') {
@@ -352,9 +354,12 @@ async function disconnectConnection(churchId) {
           provider: 'planning_center',
         });
       }
+      await disableMedicalNotesWithConnection(conn, churchId);
       return result.affectedRows > 0;
     }))
   );
+  invalidateMedicalNoteStatusCache(churchId);
+  return disconnected;
 }
 
 // Convenience: read-or-migrate, then ensure freshness. The one call most

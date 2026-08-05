@@ -29,11 +29,11 @@ async function startApp(churchId) {
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
-    request: async (body) => {
-      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/settings/integrations`, {
-        method: 'PUT',
+    request: async (body, method = 'PUT', path = 'integrations') => {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/settings/${path}`, {
+        method,
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
       });
       return { status: response.status, body: await response.json() };
     },
@@ -64,6 +64,43 @@ test('legacy settings route rejects direct PCO authority activation and leaves a
         [churchId],
       ))[0];
       assert.equal(row.planning_center_sync_indicator, 0);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('integration settings expose boolean-only medical configuration and adoptable appearances', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gathering = await Database.query("INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)", [churchId]);
+    await Database.query(
+      `UPDATE church_settings SET planning_center_medical_notes_enabled = 1,
+       planning_center_medical_notes_minimum_role = 'coordinator',
+       planning_center_medical_notes_badge_icon = 'heart',
+       planning_center_medical_notes_badge_color = '#facc15'
+       WHERE church_id = ?`, [churchId]
+    );
+    await Database.query('INSERT INTO planning_center_medical_note_gatherings (church_id, gathering_type_id) VALUES (?, ?)', [churchId, gathering.insertId]);
+    await Database.query(
+      `INSERT INTO individuals (first_name, last_name, church_id, badge_icon, badge_color)
+       VALUES ('Badge', 'Person', ?, 'heart', '#FACC15')`, [churchId]
+    );
+    const app = await startApp(churchId);
+    try {
+      const settings = await app.request(undefined, 'GET');
+      assert.equal(settings.status, 200);
+      assert.deepEqual(settings.body.planningCenterMedicalNotes, {
+        enabled: true,
+        minimumRole: 'coordinator',
+        gatheringTypeIds: [gathering.insertId],
+        badgeIcon: 'heart',
+        badgeColor: '#facc15',
+        lastRefreshedAt: null,
+        lastRefreshResult: null,
+      });
+      const appearances = await app.request(undefined, 'GET', 'integrations/planning-center/medical-notes/badge-appearances');
+      assert.deepEqual(appearances.body, { appearances: [{ icon: 'heart', color: '#facc15', count: 1 }] });
+      assert.equal(JSON.stringify(settings.body).includes('medical_notes'), false);
     } finally {
       await app.close();
     }

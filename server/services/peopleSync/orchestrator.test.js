@@ -206,6 +206,7 @@ function makeDeps({
       fetchedAt: '2026-08-03T05:00:00.000Z',
       updated: 0, cleared: 0, notCleared: 0, unknown: 0,
     }),
+    refreshMedicalNoteStatuses: async () => ({ updated: 0, present: 0, absent: 0, clearedStale: 0 }),
     ...extra,
   };
   return { deps, events, finished, failed, applied, presence, availableHealth, failedHealth, plans, projections };
@@ -246,6 +247,11 @@ test('reviewed PCO apply refreshes supplementary background checks after roster 
       refreshedChurches.push(churchId);
       return { fetchedAt: '2026-08-03T05:00:00.000Z', updated: 7, cleared: 3, notCleared: 2, unknown: 2 };
     },
+    refreshMedicalNoteStatuses: async (churchId) => {
+      order.push('medical');
+      refreshedChurches.push(churchId);
+      return { updated: 7, present: 2, absent: 5, clearedStale: 0 };
+    },
   });
   const result = await applyReviewed({
     churchId: 'church-a', provider: 'planning_center', batchId: 1,
@@ -253,10 +259,11 @@ test('reviewed PCO apply refreshes supplementary background checks after roster 
     onCriticalCommit: () => { order.push('commit'); },
   }, deps);
 
-  assert.deepEqual(order, ['apply', 'commit', 'background']);
-  assert.deepEqual(refreshedChurches, ['church-a']);
+  assert.deepEqual(order, ['apply', 'commit', 'background', 'medical']);
+  assert.deepEqual(refreshedChurches, ['church-a', 'church-a']);
   assert.equal(result.applied.backgroundCheckSynced, 7);
   assert.equal(result.applied.backgroundCheckSyncFailed, 0);
+  assert.equal(result.applied.medicalNotesSynced, 7);
   assert.equal(Object.hasOwn(result, 'refreshRequired'), false);
   assert.equal(finished[0].counts.backgroundCheckSynced, 7);
 });

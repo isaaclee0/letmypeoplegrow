@@ -31,6 +31,8 @@ const connectionStore = require('./connectionStore');
 const orchestrator = require('./orchestrator');
 const unattendedPolicy = require('./unattendedPolicy');
 const { isBatchRunnable } = require('./batchOperationalState');
+const medicalNotesPolicy = require('../planningCenter/medicalNotesPolicy');
+const medicalNotesSync = require('../planningCenter/medicalNotesSync');
 
 const PROVIDERS = ['planning_center', 'elvanto'];
 
@@ -92,11 +94,20 @@ async function runChurch(churchId, options = {}) {
     recordBatchResult = batchRepository.recordBatchResult,
     getFullReconciliationSchedule = defaultGetFullReconciliationSchedule,
     getUnattendedProviderEnabled = unattendedPolicy.isPeopleSyncEnabled,
+    isUnattendedMedicalNotesRefreshEnabled = medicalNotesPolicy.isUnattendedMedicalNotesRefreshEnabled,
+    refreshMedicalNoteStatuses = medicalNotesSync.refreshMedicalNoteStatuses,
     skipScheduleCheck = false,
     now = new Date(),
   } = options;
 
   return Database.setChurchContext(churchId, async () => {
+    try {
+      if (await isUnattendedMedicalNotesRefreshEnabled(churchId)) {
+        await refreshMedicalNoteStatuses(churchId);
+      }
+    } catch (err) {
+      logger.warn(`peopleSync scheduler: medical-note refresh failed for church ${churchId}: ${err.code || 'MEDICAL_NOTES_PROVIDER_UNAVAILABLE'}`);
+    }
     let authorityState;
     try {
       authorityState = await getAuthority(churchId);

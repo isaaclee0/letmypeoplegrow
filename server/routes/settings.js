@@ -4,6 +4,8 @@ const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { getAuthority } = require('../services/peopleSync/authority');
 const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
+const medicalNotesPolicy = require('../services/planningCenter/medicalNotesPolicy');
+const medicalNotesSync = require('../services/planningCenter/medicalNotesSync');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -525,7 +527,7 @@ router.get('/integrations', requireRole(['admin', 'coordinator']), async (req, r
     ]);
     const row = rows[0] || {};
     const syncSettings = authorityRows[0] || {};
-    res.json({
+    const response = {
       authorityProvider: authority.active,
       pendingAuthorityProvider: authority.pending,
       elvantoIncludeContacts: !!syncSettings.elvanto_include_contacts,
@@ -533,7 +535,11 @@ router.get('/integrations', requireRole(['admin', 'coordinator']), async (req, r
       planningCenterSyncIndicator: authority.active === 'planning_center',
       planningCenterSyncEnabled: !!(row.planning_center_sync_enabled),
       planningCenterTrackBackgroundChecks: !!(row.planning_center_track_background_checks),
-    });
+    };
+    if (req.user.role === 'admin') {
+      response.planningCenterMedicalNotes = await medicalNotesPolicy.getMedicalNotesSettings(req.user.church_id);
+    }
+    res.json(response);
   } catch (error) {
     res.status(500).json({ error: 'Failed to retrieve integration settings.' });
   }
@@ -541,7 +547,7 @@ router.get('/integrations', requireRole(['admin', 'coordinator']), async (req, r
 
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
-    const { planningCenterSyncIndicator, planningCenterSyncEnabled, planningCenterTrackBackgroundChecks } = req.body;
+    const { planningCenterSyncIndicator, planningCenterSyncEnabled, planningCenterTrackBackgroundChecks, planningCenterMedicalNotes } = req.body;
     if (planningCenterSyncIndicator === true) {
       return res.status(409).json({
         error: 'Planning Center authority activation requires a reviewed change through /api/integrations/people-sync/people-authority/preview and /apply.',
@@ -583,9 +589,54 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     if (planningCenterTrackBackgroundChecks === true) {
       await backgroundCheckSync.refreshBackgroundCheckStatuses(req.user.church_id);
     }
-    res.json({ message: 'Integration settings updated.' });
+    let medicalNotesResult = null;
+    if (planningCenterMedicalNotes !== undefined) {
+      medicalNotesResult = await medicalNotesPolicy.saveMedicalNotesSettings(
+        req.user.church_id,
+        { userId: req.user.id, ipAddress: req.ip, userAgent: req.get('user-agent') },
+        planningCenterMedicalNotes
+      );
+      if (medicalNotesResult.settings.enabled) {
+        try {
+          await medicalNotesSync.refreshMedicalNoteStatuses(req.user.church_id);
+        } catch (error) {
+          return res.status(502).json({
+            error: 'Medical-note indicators were enabled, but Planning Center could not be reached. Existing indicator data has been retained.',
+            code: 'MEDICAL_NOTES_PROVIDER_UNAVAILABLE',
+            planningCenterMedicalNotes: medicalNotesResult.settings,
+            adoptedCount: medicalNotesResult.adoptedCount,
+          });
+        }
+      }
+    }
+    res.json({
+      message: 'Integration settings updated.',
+      ...(medicalNotesResult ? {
+        planningCenterMedicalNotes: medicalNotesResult.settings,
+        adoptedCount: medicalNotesResult.adoptedCount,
+      } : {}),
+    });
   } catch (error) {
+    if (error.status === 400) return res.status(400).json({ error: error.message, code: error.code });
     res.status(500).json({ error: 'Failed to update integration settings.' });
+  }
+});
+
+router.get('/integrations/planning-center/medical-notes/badge-appearances', requireRole(['admin']), async (req, res) => {
+  try {
+    const appearances = await medicalNotesPolicy.listAdoptableBadgeAppearances(req.user.church_id);
+    res.json({ appearances });
+  } catch (_) {
+    res.status(500).json({ error: 'Failed to retrieve badge appearances.' });
+  }
+});
+
+router.post('/integrations/planning-center/medical-notes/refresh', requireRole(['admin']), async (req, res) => {
+  try {
+    const result = await medicalNotesSync.refreshMedicalNoteStatuses(req.user.church_id);
+    res.json(result);
+  } catch (_) {
+    res.status(502).json({ error: 'Unable to refresh medical-note indicators from Planning Center.', code: 'MEDICAL_NOTES_PROVIDER_UNAVAILABLE' });
   }
 });
 

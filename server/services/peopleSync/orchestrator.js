@@ -63,6 +63,7 @@ const {
 const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRetiredPlanningCenterBatch } = require('./legacyBatch');
 const { assertBatchReviewable, assertBatchRunnable } = require('./batchOperationalState');
 const backgroundCheckSync = require('../planningCenter/backgroundCheckSync');
+const medicalNotesSync = require('../planningCenter/medicalNotesSync');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
@@ -160,6 +161,7 @@ const defaultDeps = {
   recordActiveSourceFailure,
   getUnattendedProviderEnabled: async (churchId) => unattendedPolicy.isPeopleSyncEnabled(churchId),
   refreshBackgroundCheckStatuses: backgroundCheckSync.refreshBackgroundCheckStatuses,
+  refreshMedicalNoteStatuses: medicalNotesSync.refreshMedicalNoteStatuses,
 };
 
 function mergeDeps(overrides) {
@@ -448,21 +450,30 @@ function safeSummarizePlan(logContext, plan) {
 
 async function safeSyncProviderExtras(deps, { churchId, provider, runId }) {
   if (provider !== 'planning_center') {
-    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 0, refreshRequired: false };
+    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 0, medicalNotesSynced: 0, medicalNotesSyncFailed: 0, refreshRequired: false };
   }
+  const counts = { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 0, medicalNotesSynced: 0, medicalNotesSyncFailed: 0, refreshRequired: false };
   try {
     const result = await deps.refreshBackgroundCheckStatuses(churchId);
-    return {
-      backgroundCheckSynced: Number(result?.updated) || 0,
-      backgroundCheckSyncFailed: 0,
-      refreshRequired: false,
-    };
+    counts.backgroundCheckSynced = Number(result?.updated) || 0;
   } catch (error) {
     logger.warn(
       `peopleSync orchestrator: background-check refresh failed for church ${churchId} run ${runId}: ${safeErrorMessage(error)}`
     );
-    return { backgroundCheckSynced: 0, backgroundCheckSyncFailed: 1, refreshRequired: true };
+    counts.backgroundCheckSyncFailed = 1;
+    counts.refreshRequired = true;
   }
+  try {
+    const result = await deps.refreshMedicalNoteStatuses(churchId);
+    counts.medicalNotesSynced = Number(result?.updated) || 0;
+  } catch (error) {
+    logger.warn(
+      `peopleSync orchestrator: medical-note refresh failed for church ${churchId} run ${runId}: ${safeErrorMessage(error)}`
+    );
+    counts.medicalNotesSyncFailed = 1;
+    counts.refreshRequired = true;
+  }
+  return counts;
 }
 
 // ─── Steps 1-2: load connection, batches, settings, authority ───────────────
