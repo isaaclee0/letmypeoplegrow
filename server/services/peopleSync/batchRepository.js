@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const Database = require('../../config/database');
 const { assertSourceForProvider, normalizeProviderSource, digestSourceIdentity } = require('./sourceModel');
 const { assertPlanningCenterBatchOperational } = require('./legacyBatch');
+const { listCurrentUnresolvedIdentityCounts } = require('./pendingIdentityProjection');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
@@ -194,21 +195,30 @@ async function getBatch(churchId, provider, batchId) {
   assertProvider(provider);
   const rows = await Database.queryForChurch(churchId, `SELECT * FROM people_sync_batches
     WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
-  return toBatch(rows[0]);
+  return withUnresolvedIdentityCounts(churchId, provider, rows.map(toBatch)).then(([batch]) => batch || null);
+}
+
+async function withUnresolvedIdentityCounts(churchId, provider, batches) {
+  if (batches.length === 0) return [];
+  const counts = await listCurrentUnresolvedIdentityCounts(churchId, provider, batches);
+  return batches.map((batch) => ({
+    ...batch,
+    unresolvedIdentityCount: counts.get(Number(batch.id)) ?? null,
+  }));
 }
 
 async function listBatches(churchId, provider) {
   assertProvider(provider);
   const rows = await Database.queryForChurch(churchId, `SELECT * FROM people_sync_batches
     WHERE church_id = ? AND provider = ? ORDER BY id`, [churchId, provider]);
-  return rows.map(toBatch);
+  return withUnresolvedIdentityCounts(churchId, provider, rows.map(toBatch));
 }
 
 async function listEnabledBatches(churchId, provider) {
   assertProvider(provider);
   const rows = await Database.queryForChurch(churchId, `SELECT * FROM people_sync_batches
     WHERE church_id = ? AND provider = ? AND enabled = 1 ORDER BY id`, [churchId, provider]);
-  return rows.map(toBatch);
+  return withUnresolvedIdentityCounts(churchId, provider, rows.map(toBatch));
 }
 
 function normaliseBatchInput(input) {

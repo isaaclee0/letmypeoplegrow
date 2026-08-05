@@ -84,6 +84,7 @@ test('PUT source draft accepts only source identity, resolves its name server-si
     });
     assert.equal(response.status, 200);
     assert.equal(response.body.batch.draftSource.name, 'Sunday people');
+    assert.equal(response.body.batch.unresolvedIdentityCount, null);
     assert.deepEqual({
       operationalState: response.body.batch.operationalState,
       reviewable: response.body.batch.reviewable,

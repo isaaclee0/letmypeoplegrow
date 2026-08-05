@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { digestSourceIdentity } = require('./sourceModel');
+const { buildPendingIdentityObservations, replacePendingIdentityObservations } = require('./pendingIdentityProjection');
 const {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, promoteSourceDraftsWithConnection, recordActiveSourceHealthWithConnection,
@@ -16,6 +17,31 @@ const ELVANTO_SOURCE = { kind: 'elvanto_group', externalId: 'members', name: 'Me
 async function seedGathering(churchId) {
   return (await Database.query('INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Sunday'])).insertId;
 }
+
+test('batch reads expose a source-matching unresolved identity count', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const created = await createBatch({
+      churchId, provider: 'planning_center', name: 'Members', initialDraftSource: PCO_SOURCE,
+    });
+    const observations = buildPendingIdentityObservations({
+      batches: [created],
+      eligibleByBatch: new Map([[created.id, new Set(['pending-1', 'pending-2'])]]),
+      personLinks: [], holds: [],
+    });
+    await replacePendingIdentityObservations(churchId, 'planning_center', observations);
+
+    assert.equal((await getBatch(churchId, 'planning_center', created.id)).unresolvedIdentityCount, 2);
+    assert.equal((await listBatches(churchId, 'planning_center'))[0].unresolvedIdentityCount, 2);
+
+    const mismatched = await updateBatch({ churchId, provider: 'planning_center', batchId: created.id, enabled: false });
+    assert.equal(mismatched.unresolvedIdentityCount, 2);
+    await saveSourceDraft({
+      churchId, provider: 'planning_center', batchId: created.id,
+      source: { kind: 'planning_center_list', externalId: 'replacement', name: 'Replacement' },
+    });
+    assert.equal((await getBatch(churchId, 'planning_center', created.id)).unresolvedIdentityCount, null);
+  });
+});
 
 test('a batch begins with a resolved source draft and no active source', async () => {
   await withTestChurchDb(async (churchId) => {

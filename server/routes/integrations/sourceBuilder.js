@@ -60,6 +60,9 @@ function safeBatch(batch, authorityProvider) {
     sourceStatus: batch.sourceStatus ?? 'unknown',
     sourceStatusCheckedAt: batch.sourceStatusCheckedAt ?? null,
     sourceStatusErrorCode: batch.sourceStatusErrorCode ?? null,
+    unresolvedIdentityCount: Number.isSafeInteger(batch.unresolvedIdentityCount)
+      ? batch.unresolvedIdentityCount
+      : null,
     defaultPeopleType: batch.defaultPeopleType,
     gatheringTypeId: batch.gatheringTypeId ?? null,
     gatheringAutoRemoveEnabled: Boolean(batch.gatheringAutoRemoveEnabled),
