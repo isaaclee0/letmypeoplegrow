@@ -53,6 +53,7 @@ const ELVANTO_ERROR_STATUS = {
 const RUN_PROVIDERS = ['planning_center', 'elvanto'];
 const SETTINGS_ALLOWED_KEYS = new Set([
   'elvantoIncludeContacts', 'elvantoAlignPeopleType', 'fullReconciliationFrequency', 'fullReconciliationDay',
+  'syncEnabled', 'peopleEditingLocked',
 ]);
 const FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
 const DEFAULT_RUNS_LIMIT = 20;
@@ -73,9 +74,12 @@ async function defaultGetSettings(churchId) {
       [churchId]
     );
     const row = rows[0] || {};
+    const policy = await authority.getPeopleSyncPolicyWithConnection(conn, churchId);
     return {
       authorityProvider: authorityState.active,
       pendingAuthorityProvider: authorityState.pending,
+      syncEnabled: policy.syncEnabled,
+      peopleEditingLocked: policy.peopleEditingLocked,
       elvantoIncludeContacts: row.elvanto_include_contacts === undefined ? true : !!row.elvanto_include_contacts,
       elvantoAlignPeopleType: row.elvanto_align_people_type === undefined ? true : !!row.elvanto_align_people_type,
       fullReconciliationFrequency: row.full_reconciliation_frequency || 'weekly',
@@ -153,6 +157,14 @@ function validateSettingsPatch(body, current) {
     if (!Number.isInteger(body.fullReconciliationDay)) errors.push('fullReconciliationDay must be an integer.');
     else patch.fullReconciliationDay = body.fullReconciliationDay;
   }
+  if (Object.hasOwn(body, 'syncEnabled')) {
+    if (typeof body.syncEnabled !== 'boolean') errors.push('syncEnabled must be a boolean.');
+    else patch.syncEnabled = body.syncEnabled;
+  }
+  if (Object.hasOwn(body, 'peopleEditingLocked')) {
+    if (typeof body.peopleEditingLocked !== 'boolean') errors.push('peopleEditingLocked must be a boolean.');
+    else patch.peopleEditingLocked = body.peopleEditingLocked;
+  }
   if (errors.length > 0) return { errors };
 
   const resultingFrequency = patch.fullReconciliationFrequency || current.fullReconciliationFrequency;
@@ -167,6 +179,9 @@ function validateSettingsPatch(body, current) {
 async function defaultUpdateSettings(churchId, patch) {
   const current = await defaultGetSettings(churchId);
   const next = { ...current, ...patch };
+  const policyPatch = {};
+  if (Object.hasOwn(patch, 'syncEnabled')) policyPatch.syncEnabled = patch.syncEnabled;
+  if (Object.hasOwn(patch, 'peopleEditingLocked')) policyPatch.peopleEditingLocked = patch.peopleEditingLocked;
   await Database.queryForChurch(
     churchId,
     `INSERT INTO people_sync_settings
@@ -187,6 +202,7 @@ async function defaultUpdateSettings(churchId, patch) {
       next.fullReconciliationDay,
     ]
   );
+  if (Object.keys(policyPatch).length) await authority.updatePeopleSyncPolicy(churchId, policyPatch);
   return defaultGetSettings(churchId);
 }
 
@@ -244,6 +260,7 @@ const RUN_ERROR_MESSAGES = {
   SYNC_SELECTIONS_INVALID: 'The submitted selections were invalid.',
   SYNC_BATCH_REQUIRED: 'A batch was required for this run.',
   SYNC_AUTHORITY_MISMATCH: 'The provider was not the active people-sync authority for this church.',
+  SYNC_PAUSED: 'People sync is paused for this church.',
   SYNC_ROUTE_TIMEOUT: 'The run timed out.',
   SYNC_RUN_FAILED: 'This sync run failed unexpectedly. See server logs for details.',
   SYNC_REVIEW_SECRET: 'The server is missing its review-signing configuration (SYNC_REVIEW_SECRET/JWT_SECRET). Contact support.',

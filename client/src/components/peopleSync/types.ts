@@ -176,6 +176,8 @@ export type ElvantoSyncBatchPatch = Partial<Omit<ElvantoSyncBatchInput, 'sourceK
 export interface PeopleSyncSettings {
   authorityProvider: AuthorityProvider;
   pendingAuthorityProvider: SyncProvider | null;
+  syncEnabled: boolean;
+  peopleEditingLocked: boolean;
   elvantoIncludeContacts: boolean;
   elvantoAlignPeopleType: boolean;
   fullReconciliationFrequency: 'daily' | 'weekly' | 'monthly';
@@ -184,6 +186,8 @@ export interface PeopleSyncSettings {
 
 // Mirrors peopleSync.js's SETTINGS_ALLOWED_KEYS strict allow-list exactly.
 export interface PeopleSyncSettingsPatch {
+  syncEnabled?: boolean;
+  peopleEditingLocked?: boolean;
   elvantoIncludeContacts?: boolean;
   elvantoAlignPeopleType?: boolean;
   fullReconciliationFrequency?: 'daily' | 'weekly' | 'monthly';
