@@ -13,6 +13,7 @@ export interface PeopleSourceControlProps {
   settings: PeopleSyncSettings;
   connections: Record<SyncProvider, boolean>;
   onRefresh: () => void | Promise<void>;
+  compact?: boolean;
 }
 
 const providerName = (provider: SyncProvider) =>
@@ -24,6 +25,7 @@ export default function PeopleSourceControl({
   settings,
   connections,
   onRefresh,
+  compact = false,
 }: PeopleSourceControlProps) {
   const [disableState, setDisableState] = useState<DisableState>('idle');
   const [reviewActive, setReviewActive] = useState(false);
@@ -172,18 +174,17 @@ export default function PeopleSourceControl({
   };
 
   return (
-    <section className="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">
-            People sync
-          </h5>
+    <section className={compact ? 'flex items-center gap-2' : 'space-y-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700'}>
+      <div className={compact ? 'flex items-center gap-2' : 'flex items-center justify-between gap-4'}>
+        {!compact && <div>
+          <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">People sync</h5>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             {managesPeople
               ? checked ? `Syncing people managed by ${providerName(provider)}.` : 'People sync is paused. Your connection, batches, and links are retained.'
               : 'Your first batch review starts people sync automatically.'}
           </p>
-        </div>
+        </div>}
+        {compact && <span className="text-sm text-gray-600 dark:text-gray-300">People sync</span>}
         <button
           ref={toggleRef}
           type="button"
@@ -197,7 +198,7 @@ export default function PeopleSourceControl({
           <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
         </button>
       </div>
-      {prerequisite && <p className="text-xs text-gray-500">{prerequisite}</p>}
+      {!compact && prerequisite && <p className="text-xs text-gray-500">{prerequisite}</p>}
 
       {reviewActive && (
         <AuthorityReviewWorkspace

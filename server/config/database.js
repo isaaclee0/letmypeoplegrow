@@ -24,6 +24,12 @@ const SCHEDULED_PCO_AUTHORITY_MIGRATION = Object.freeze({
   description: 'Preserve scheduled Planning Center sync as the strict managed people authority',
 });
 
+const LEGACY_BATCH_AUTHORITY_MIGRATION = Object.freeze({
+  version: 'v2.2.1_legacy_batch_authority',
+  name: 'legacy_batch_authority',
+  description: 'Treat a single provider with existing enabled sync batches as the people source',
+});
+
 const INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION = Object.freeze({
   version: 'v2.2.0_individuals_background_check_timestamp',
   name: 'individuals_background_check_timestamp',
@@ -93,6 +99,36 @@ function migrateScheduledPcoAuthority(db, churchId) {
     }
 
     markScheduledPcoAuthorityMigrationApplied(db);
+  })();
+}
+
+function migrateLegacyBatchAuthority(db, churchId) {
+  ensureMigrationTrackingSchema(db);
+  db.transaction(() => {
+    const alreadyApplied = db.prepare(
+      "SELECT 1 FROM migrations WHERE version = ? AND status = 'success' LIMIT 1"
+    ).get(LEGACY_BATCH_AUTHORITY_MIGRATION.version);
+    if (alreadyApplied) return;
+
+    const providers = db.prepare(`SELECT DISTINCT provider
+      FROM people_sync_batches
+      WHERE church_id = ? AND enabled = 1
+      ORDER BY provider`).all(churchId).map((row) => row.provider);
+    if (providers.length === 1) {
+      db.prepare(`UPDATE people_sync_settings
+        SET authority_provider = ?, sync_enabled = 1, people_editing_locked = 1,
+            updated_at = datetime('now')
+        WHERE church_id = ? AND authority_provider = 'none'`).run(providers[0], churchId);
+    }
+
+    db.prepare(`INSERT INTO migrations
+      (version, name, description, execution_time_ms, status, executed_at)
+      VALUES (?, ?, ?, 0, 'success', datetime('now'))
+      ON CONFLICT(version) DO NOTHING`).run(
+      LEGACY_BATCH_AUTHORITY_MIGRATION.version,
+      LEGACY_BATCH_AUTHORITY_MIGRATION.name,
+      LEGACY_BATCH_AUTHORITY_MIGRATION.description,
+    );
   })();
 }
 
@@ -399,6 +435,7 @@ function backfillProviderNeutralSync(db, churchId) {
   // The guarded UPDATE preserves either explicit non-none authority, including
   // Elvanto, so a church can never gain two active people authorities here.
   migrateScheduledPcoAuthority(db, churchId);
+  migrateLegacyBatchAuthority(db, churchId);
 
   db.prepare(
     `UPDATE gathering_lists
@@ -751,6 +788,10 @@ class Database {
 
   static backfillProviderNeutralSync(db, churchId) {
     return backfillProviderNeutralSync(db, churchId);
+  }
+
+  static migrateLegacyBatchAuthority(db, churchId) {
+    return migrateLegacyBatchAuthority(db, churchId);
   }
 
   static setChurchContext(churchId, callback) {

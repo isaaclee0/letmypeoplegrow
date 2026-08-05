@@ -5,9 +5,11 @@ import type { PeopleSyncSettings } from './types';
 export default function PeopleEditingLockControl({
   settings,
   onRefresh,
+  compact = false,
 }: {
   settings: PeopleSyncSettings;
   onRefresh: () => void | Promise<void>;
+  compact?: boolean;
 }) {
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,14 +28,16 @@ export default function PeopleEditingLockControl({
   };
 
   return (
-    <section className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+    <section className={compact ? 'flex items-center gap-2' : 'flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700'}>
       <div>
+        {compact ? <span className="text-sm text-gray-600 dark:text-gray-300">Lock People editing</span> : <>
         <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Lock People page editing</h5>
         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
           {settings.peopleEditingLocked
             ? 'Synced people can only be changed in your provider.'
             : 'Changes made here may be overwritten by the next provider sync.'}
         </p>
+        </>}
         {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
       </div>
       <button

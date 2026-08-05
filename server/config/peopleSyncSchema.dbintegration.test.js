@@ -240,6 +240,34 @@ test('backfillProviderNeutralSync preserves legacy PCO links and roster provenan
   });
 });
 
+test('legacy batches select one provider as the people source, but never guess between providers', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.prepare("DELETE FROM migrations WHERE version = 'v2.2.1_legacy_batch_authority'").run();
+    db.prepare(`UPDATE people_sync_settings
+      SET authority_provider = 'none', sync_enabled = 0, people_editing_locked = 0
+      WHERE church_id = ?`).run(churchId);
+    db.prepare(`INSERT INTO people_sync_batches
+      (church_id, provider, name, source_kind, source_external_id, source_name)
+      VALUES (?, 'planning_center', 'Members', 'planning_center_list', 'members', 'Members')`).run(churchId);
+
+    Database.migrateLegacyBatchAuthority(db, churchId);
+    assert.deepEqual(db.prepare(`SELECT authority_provider, sync_enabled, people_editing_locked
+      FROM people_sync_settings WHERE church_id = ?`).get(churchId), {
+      authority_provider: 'planning_center', sync_enabled: 1, people_editing_locked: 1,
+    });
+
+    db.prepare("DELETE FROM migrations WHERE version = 'v2.2.1_legacy_batch_authority'").run();
+    db.prepare(`UPDATE people_sync_settings SET authority_provider = 'none' WHERE church_id = ?`).run(churchId);
+    db.prepare(`INSERT INTO people_sync_batches
+      (church_id, provider, name, source_kind, source_external_id, source_name)
+      VALUES (?, 'elvanto', 'Youth', 'elvanto_group', 'youth', 'Youth')`).run(churchId);
+
+    Database.migrateLegacyBatchAuthority(db, churchId);
+    assert.equal(db.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider, 'none');
+  });
+});
+
 test('backfillProviderNeutralSync keeps a legacy church available when batch filters contain malformed JSON', async () => {
   // Catches an upgrade outage where one malformed historical PCO filter makes
   // getChurchDb throw instead of preserving the batch with empty filters.

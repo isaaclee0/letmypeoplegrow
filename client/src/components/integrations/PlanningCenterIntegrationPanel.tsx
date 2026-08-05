@@ -296,7 +296,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const modernBatches = batches.filter((batch) => batch.legacyProviderBatchId === null);
   const legacyBatches = batches.filter((batch) => batch.legacyProviderBatchId !== null);
 
-  const peopleSourceControl = peopleSyncStatus === 'known' ? (
+  const peopleSourceControl = peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider !== 'planning_center' ? (
     <PeopleSourceControl
       provider="planning_center"
       batches={modernBatches}
@@ -304,12 +304,26 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       connections={providerConnections}
       onRefresh={refreshPeopleSync}
     />
-  ) : (
+  ) : peopleSyncStatus !== 'known' ? (
     <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
       <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
       {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
     </section>
-  );
+  ) : null;
+
+  const headerPeopleControls = status.connected && peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' ? (
+    <div className="flex flex-wrap items-center gap-3">
+      <PeopleSourceControl
+        compact
+        provider="planning_center"
+        batches={modernBatches}
+        settings={peopleSyncSettings}
+        connections={providerConnections}
+        onRefresh={refreshPeopleSync}
+      />
+      <PeopleEditingLockControl compact settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
+    </div>
+  ) : null;
 
   return (
     <div>
@@ -368,6 +382,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     <ShieldCheckIcon className="w-3 h-3 mr-1" />
                     Connected
                   </span>
+                  {headerPeopleControls}
                   <button
                     onClick={() => setShowPlanningCenterDisconnectModal(true)}
                     disabled={peopleSyncStatus !== 'known'}
@@ -591,9 +606,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
               </div>
 
       {peopleSourceControl}
-      {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' && (
-        <PeopleEditingLockControl settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
-      )}
 
               {/* PCO-specific background-check tracking remains independent of people authority. */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">

@@ -165,6 +165,16 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(await screen.findByText('Active')).toBeInTheDocument();
   });
 
+  it('places the active PCO sync and editing controls beside Disconnect', async () => {
+    renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' } });
+
+    await screen.findByText('Members');
+    const headerActions = screen.getByRole('button', { name: 'Disconnect' }).parentElement;
+    expect(headerActions).not.toBeNull();
+    expect(within(headerActions!).getByRole('switch', { name: 'Use Planning Center as source of truth' })).toBeChecked();
+    expect(within(headerActions!).getByRole('switch', { name: 'Lock People page editing' })).toBeChecked();
+  });
+
   it('refreshes the former provider batch to the server-derived prepared state after the real source-control switch', async () => {
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
       .mockResolvedValueOnce({ data: { batches: [{ ...batch, draftSource: null, needsSourceReview: false, operationalState: 'active' }] } })
