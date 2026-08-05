@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import PlanningCenterMedicalNotesSettings from './PlanningCenterMedicalNotesSettings';
 import { gatheringsAPI, settingsAPI } from '../../services/api';
@@ -55,6 +55,10 @@ test('uses icon tiles and matching colour controls for a new appearance', async 
 
 test('warns before adopting an existing badge and confirms authoritative cleanup', async () => {
   loadSettings();
+  let resolveUpdate!: (value: unknown) => void;
+  vi.mocked(settingsAPI.updateIntegrationSettings).mockImplementation(() => new Promise((resolve) => {
+    resolveUpdate = resolve;
+  }) as any);
 
   render(<PlanningCenterMedicalNotesSettings />);
   await screen.findByRole('switch', { name: 'Enable medical-note indicators' });
@@ -67,8 +71,19 @@ test('warns before adopting an existing badge and confirms authoritative cleanup
   fireEvent.click(screen.getByRole('switch', { name: /enable medical-note indicators/i }));
   fireEvent.click(screen.getByRole('button', { name: 'Save medical-note settings' }));
   expect(await screen.findByText(/remove this manually assigned badge/i)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /Confirm and save/i }));
+
+  const cancel = screen.getByRole('button', { name: 'Cancel' });
+  const confirm = screen.getByRole('button', { name: 'Confirm and save' });
+  expect(cancel).toHaveClass('flex-1', 'border-gray-300', 'bg-white');
+  expect(confirm).toHaveClass('flex-1', 'bg-red-600', 'hover:bg-red-700');
+
+  fireEvent.click(confirm);
+  expect(cancel).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+  await act(async () => resolveUpdate({ data: { adoptedCount: 2 } }));
   await waitFor(() => expect(settingsAPI.updateIntegrationSettings).toHaveBeenCalledWith(expect.objectContaining({
     planningCenterMedicalNotes: expect.objectContaining({ adoptExistingAppearance: true, badgeIcon: 'heart', badgeColor: '#facc15' }),
   })));
+  expect(await screen.findByRole('status')).toHaveTextContent(/2 manually assigned badges/i);
 });

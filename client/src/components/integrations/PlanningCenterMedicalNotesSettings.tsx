@@ -198,7 +198,24 @@ const PlanningCenterMedicalNotesSettings: React.FC = () => {
       <Modal isOpen={confirming} onClose={() => setConfirming(false)}><div className="max-w-md rounded bg-white p-6 shadow-xl dark:bg-gray-800">
         <h3 className="font-semibold">Replace existing badges?</h3>
         <p className="mt-2 text-sm">Selecting this existing style will remove this manually assigned badge from {selectedAppearance?.count || 0} active and archived people. This cannot be automatically restored.</p>
-        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setConfirming(false)}>Cancel</button><button className="rounded bg-red-600 px-3 py-2 text-white" onClick={() => void save(true)}>Confirm and save</button></div>
+        <div className="mt-4 flex gap-3">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => setConfirming(false)}
+            className="flex-1 inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void save(true)}
+            className="flex-1 inline-flex items-center justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Confirm and save'}
+          </button>
+        </div>
       </div></Modal>
     </section>
   );
