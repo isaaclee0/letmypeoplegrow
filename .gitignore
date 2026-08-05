@@ -156,6 +156,7 @@ docs/
 
 # Local worktree docker-compose port override
 docker-compose.worktree-override.yml
+docker-compose.dev.yml
 
 # Agent-managed isolated worktrees
 .worktrees/
