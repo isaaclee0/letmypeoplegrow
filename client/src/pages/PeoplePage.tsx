@@ -25,6 +25,13 @@ import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
 import { shouldShowBadgeFilters } from '../utils/badgeFilterVisibility';
 import {
+  createBadgeFilterKey,
+  createMedicalBadgeFilterOption,
+  getApplicableBadgeFilterKeys,
+  matchesSelectedBadgeKeys,
+  type BadgeFilterOption,
+} from '../utils/badgeFilters';
+import {
   UserGroupIcon,
   MagnifyingGlassIcon,
   PlusIcon,
@@ -106,23 +113,6 @@ interface CaregiverSearchResult {
 interface VisitorConfig {
   localVisitorServiceLimit: number;
   travellerVisitorServiceLimit: number;
-}
-
-interface BadgeFilterOption {
-  key: string;
-  text: string | null;
-  icon: string;
-  backgroundColor: string;
-  color: string;
-  helperText: string;
-}
-
-function badgeFilterKey(badge: Pick<BadgeFilterOption, 'text' | 'icon' | 'backgroundColor'>): string {
-  return JSON.stringify([
-    badge.icon,
-    badge.backgroundColor.toLowerCase(),
-    badge.text || '',
-  ]);
 }
 
 export function matchesExternalSourceFilter(
@@ -386,12 +376,23 @@ const PeoplePage: React.FC = () => {
     const badge = getBadgeInfo(person);
     if (!badge) return null;
 
-    return badgeFilterKey({
+    return createBadgeFilterKey({
       text: badge.text,
       icon: badge.icon,
       backgroundColor: badge.styles.backgroundColor,
     });
   };
+
+  const medicalBadgeOption = useMemo(
+    () => createMedicalBadgeFilterOption(medicalNotesIndicator),
+    [medicalNotesIndicator],
+  );
+
+  const getPersonBadgeKeys = (person: Person): string[] => getApplicableBadgeFilterKeys(
+    getPersonBadgeKey(person),
+    Boolean(person.hasMedicalNotes),
+    medicalBadgeOption?.key || null,
+  );
 
   const usedBadgeOptions = useMemo(() => {
     const options = new Map<string, BadgeFilterOption>();
@@ -413,19 +414,21 @@ const PeoplePage: React.FC = () => {
         color: badge.styles.color,
         helperText: badge.text || (badge.icon ? `${badge.icon} badge` : 'Badge'),
       };
-      option.key = badgeFilterKey(option);
+      option.key = createBadgeFilterKey(option);
       options.set(option.key, option);
     });
 
+    if (medicalBadgeOption) options.set(medicalBadgeOption.key, medicalBadgeOption);
+
     return Array.from(options.values());
-  }, [authorityProvider, badgeConfig, externalSourceFilter, people]);
+  }, [authorityProvider, badgeConfig, externalSourceFilter, medicalBadgeOption, people]);
 
   const usedBadgeKeysSignature = JSON.stringify(usedBadgeOptions.map((badge) => badge.key));
   const defaultChildBadgeKey = useMemo(() => {
     const badge = getBadgeInfo({ isChild: true });
     if (!badge) return null;
 
-    return badgeFilterKey({
+    return createBadgeFilterKey({
       text: badge.text,
       icon: badge.icon,
       backgroundColor: badge.styles.backgroundColor,
@@ -435,6 +438,7 @@ const PeoplePage: React.FC = () => {
     usedBadgeOptions.map((badge) => badge.key),
     defaultChildBadgeKey,
   );
+  const selectedBadgeKeySet = useMemo(() => new Set(selectedBadgeKeys), [selectedBadgeKeys]);
 
   useEffect(() => {
     const availableKeys = new Set(usedBadgeOptions.map((badge) => badge.key));
@@ -459,15 +463,14 @@ const PeoplePage: React.FC = () => {
       people
         .filter((person) => person.peopleType !== 'regular'
           || (matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter)
-            && (selectedBadgeKeys.length === 0
-              || selectedBadgeKeys.includes(getPersonBadgeKey(person) || ''))))
+            && matchesSelectedBadgeKeys(selectedBadgeKeySet, getPersonBadgeKeys(person))))
         .map((person) => person.id),
     );
     setSelectedPeople((current) => {
       const next = current.filter((id) => visibleIds.has(id));
       return next.length === current.length ? current : next;
     });
-  }, [authorityProvider, badgeConfig, externalSourceFilter, people, selectedBadgeKeys]);
+  }, [authorityProvider, badgeConfig, externalSourceFilter, medicalBadgeOption, people, selectedBadgeKeySet]);
 
   useEffect(() => {
     const requestedFilter = searchParams.get('externalSource');
@@ -814,9 +817,8 @@ const PeoplePage: React.FC = () => {
     person.peopleType === 'regular'
       && matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter)
   );
-  const selectedBadgeKeySet = new Set(selectedBadgeKeys);
   const matchesBadgeFilter = (person: Person) => selectedBadgeKeySet.size === 0
-    || selectedBadgeKeySet.has(getPersonBadgeKey(person) || '');
+    || matchesSelectedBadgeKeys(selectedBadgeKeySet, getPersonBadgeKeys(person));
 
   const groupedPeople = externalSourceFilteredPeople.reduce((groups, person) => {
     if (person.familyId && person.familyName) {

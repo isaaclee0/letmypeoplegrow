@@ -8,13 +8,12 @@ export function matchesAttendancePeopleFilters<T extends AttendancePeopleFilterP
   person: T,
   ageFilter: AttendanceAgeFilter,
   selectedBadgeKeys: ReadonlySet<string>,
-  getBadgeKey: (person: T) => string | null,
+  getBadgeKeys: (person: T) => readonly string[],
 ): boolean {
   if (ageFilter === 'adult' && person.isChild) return false;
   if (ageFilter === 'child' && !person.isChild) return false;
 
-  return selectedBadgeKeys.size === 0
-    || selectedBadgeKeys.has(getBadgeKey(person) || '');
+  return matchesSelectedBadgeKeys(selectedBadgeKeys, getBadgeKeys(person));
 }
 
 export function filterAttendanceGroups<
@@ -24,12 +23,13 @@ export function filterAttendanceGroups<
   groups: G[],
   ageFilter: AttendanceAgeFilter,
   selectedBadgeKeys: ReadonlySet<string>,
-  getBadgeKey: (person: T) => string | null,
+  getBadgeKeys: (person: T) => readonly string[],
 ): G[] {
   return groups.flatMap((group) => {
     const members = group.members.filter((person) =>
-      matchesAttendancePeopleFilters(person, ageFilter, selectedBadgeKeys, getBadgeKey));
+      matchesAttendancePeopleFilters(person, ageFilter, selectedBadgeKeys, getBadgeKeys));
 
     return members.length > 0 ? [{ ...group, members }] : [];
   });
 }
+import { matchesSelectedBadgeKeys } from './badgeFilters';

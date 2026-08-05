@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import PersonCard from './PersonCard';
 
 test('renders computed medical indicator alongside the ordinary badge', () => {
@@ -9,6 +9,8 @@ test('renders computed medical indicator alongside the ordinary badge', () => {
     getBadgeInfo={() => ({ text: null, icon: 'star', styles: { backgroundColor: '#ef4444', color: '#fff' } })}
     medicalNotesIndicator={{ icon: 'heart', color: '#facc15' }}
   />);
-  expect(screen.getByLabelText('Medical note recorded')).toBeInTheDocument();
-  expect(document.querySelectorAll('svg')).toHaveLength(2);
+  const badges = screen.getByRole('group', { name: 'Badges for Pat' });
+  expect(badges).toHaveClass('gap-1');
+  expect(within(badges).getByLabelText('Medical note recorded')).toBeInTheDocument();
+  expect(badges.querySelectorAll('svg')).toHaveLength(2);
 });

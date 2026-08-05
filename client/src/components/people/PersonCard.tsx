@@ -91,9 +91,6 @@ const PersonCard: React.FC<PersonCardProps> = ({
             <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
               {displayName}
             </span>
-            {person.hasMedicalNotes && medicalNotesIndicator && (
-              <MedicalNoteIndicator icon={medicalNotesIndicator.icon} color={medicalNotesIndicator.color} />
-            )}
             {planningCenterSyncIndicator && person.planningCenterId && (
               <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
                 PCO
@@ -115,21 +112,32 @@ const PersonCard: React.FC<PersonCardProps> = ({
         </div>
       </div>
 
-      {/* Badge: inline right-aligned on mobile, floating top-right on sm+ */}
-      {badgeInfo && (
-        <span
-          className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
-            badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
-          }`}
-          style={badgeInfo.styles}
+      {/* Badges: inline right-aligned on mobile, floating top-right on sm+ */}
+      {(badgeInfo || (person.hasMedicalNotes && medicalNotesIndicator)) && (
+        <div
+          role="group"
+          aria-label={`Badges for ${displayName}`}
+          className="ml-auto flex shrink-0 items-center gap-1 sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2"
         >
-          {badgeInfo.icon && (
-            <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 shrink-0" />
+          {badgeInfo && (
+            <span
+              className={`flex shrink-0 items-center space-x-1 shadow-sm ${
+                badgeInfo.text ? 'rounded-full px-2 py-1' : 'h-6 w-6 justify-center rounded-full'
+              }`}
+              style={badgeInfo.styles}
+            >
+              {badgeInfo.icon && (
+                <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="h-4 w-4 shrink-0" />
+              )}
+              {badgeInfo.text && (
+                <span className="whitespace-nowrap text-xs font-medium">{badgeInfo.text}</span>
+              )}
+            </span>
           )}
-          {badgeInfo.text && (
-            <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
+          {person.hasMedicalNotes && medicalNotesIndicator && (
+            <MedicalNoteIndicator icon={medicalNotesIndicator.icon} color={medicalNotesIndicator.color} />
           )}
-        </span>
+        </div>
       )}
     </div>
   );

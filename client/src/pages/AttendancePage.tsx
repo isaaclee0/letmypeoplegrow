@@ -40,6 +40,12 @@ import {
   type AttendanceAgeFilter,
 } from '../utils/attendancePeopleFilters';
 import { shouldShowBadgeFilters } from '../utils/badgeFilterVisibility';
+import {
+  createBadgeFilterKey,
+  createMedicalBadgeFilterOption,
+  getApplicableBadgeFilterKeys,
+  type BadgeFilterOption,
+} from '../utils/badgeFilters';
 
 interface PersonForm {
   firstName: string;
@@ -54,23 +60,6 @@ interface VisitorFormState {
   persons: PersonForm[];
   autoFillSurname: boolean;
   familyName: string;
-}
-
-interface BadgeFilterOption {
-  key: string;
-  text: string | null;
-  icon: string;
-  backgroundColor: string;
-  color: string;
-  helperText: string;
-}
-
-function badgeFilterKey(badge: Pick<BadgeFilterOption, 'text' | 'icon' | 'backgroundColor'>): string {
-  return JSON.stringify([
-    badge.icon,
-    badge.backgroundColor.toLowerCase(),
-    badge.text || '',
-  ]);
 }
 
 const AttendancePage: React.FC = () => {
@@ -425,16 +414,25 @@ const AttendancePage: React.FC = () => {
     };
   }, [churchBadgePersonById]);
 
-  const getAttendanceBadgeKey = useCallback((person: Individual | Visitor): string | null => {
-    const badge = getBadgeInfo(resolveBadgePerson(person));
-    if (!badge) return null;
+  const medicalBadgeOption = useMemo(
+    () => createMedicalBadgeFilterOption(medicalNotesIndicator),
+    [medicalNotesIndicator],
+  );
 
-    return badgeFilterKey({
+  const getAttendanceBadgeKeys = useCallback((person: Individual | Visitor): string[] => {
+    const badge = getBadgeInfo(resolveBadgePerson(person));
+    const ordinaryKey = badge ? createBadgeFilterKey({
       text: badge.text,
       icon: badge.icon,
       backgroundColor: badge.styles.backgroundColor,
-    });
-  }, [badgeConfig, resolveBadgePerson]);
+    }) : null;
+
+    return getApplicableBadgeFilterKeys(
+      ordinaryKey,
+      Boolean(person.hasMedicalNotes),
+      medicalBadgeOption?.key || null,
+    );
+  }, [badgeConfig, medicalBadgeOption, resolveBadgePerson]);
 
   const usedBadgeOptions = useMemo(() => {
     const options = new Map<string, BadgeFilterOption>();
@@ -457,19 +455,21 @@ const AttendancePage: React.FC = () => {
         color: badge.styles.color,
         helperText: badge.text || (badge.icon ? `${badge.icon} badge` : 'Badge'),
       };
-      option.key = badgeFilterKey(option);
+      option.key = createBadgeFilterKey(option);
       options.set(option.key, option);
     });
 
+    if (medicalBadgeOption) options.set(medicalBadgeOption.key, medicalBadgeOption);
+
     return Array.from(options.values());
-  }, [allChurchVisitors, attendanceList, badgeConfig, resolveBadgePerson]);
+  }, [allChurchVisitors, attendanceList, badgeConfig, medicalBadgeOption, resolveBadgePerson]);
 
   const usedBadgeKeysSignature = JSON.stringify(usedBadgeOptions.map((badge) => badge.key));
   const defaultChildBadgeKey = useMemo(() => {
     const badge = getBadgeInfo({ isChild: true });
     if (!badge) return null;
 
-    return badgeFilterKey({
+    return createBadgeFilterKey({
       text: badge.text,
       icon: badge.icon,
       backgroundColor: badge.styles.backgroundColor,
@@ -492,8 +492,8 @@ const AttendancePage: React.FC = () => {
 
   const selectedBadgeKeySet = useMemo(() => new Set(selectedBadgeKeys), [selectedBadgeKeys]);
   const matchesPeopleFilters = useCallback((person: Individual | Visitor) =>
-    matchesAttendancePeopleFilters(person, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKey),
-  [ageFilter, getAttendanceBadgeKey, selectedBadgeKeySet]);
+    matchesAttendancePeopleFilters(person, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKeys),
+  [ageFilter, getAttendanceBadgeKeys, selectedBadgeKeySet]);
 
   // Keep refs in sync
   useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
@@ -2110,7 +2110,7 @@ const AttendancePage: React.FC = () => {
         groupVisitors(filtered),
         ageFilter,
         selectedBadgeKeySet,
-        getAttendanceBadgeKey,
+        getAttendanceBadgeKeys,
       );
     }
     
@@ -2130,9 +2130,9 @@ const AttendancePage: React.FC = () => {
       groupVisitors(allVisitorsInOrder),
       ageFilter,
       selectedBadgeKeySet,
-      getAttendanceBadgeKey,
+      getAttendanceBadgeKeys,
     );
-  }, [searchTerm, allRecentVisitorsPool, allVisitors, groupVisitors, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKey]);
+  }, [searchTerm, allRecentVisitorsPool, allVisitors, groupVisitors, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKeys]);
 
   // Filter families based on search term and sort members (memoized)
   const filteredGroupedAttendees = useMemo(() => {
@@ -2140,7 +2140,7 @@ const AttendancePage: React.FC = () => {
       Object.values(groupedAttendees) as any[],
       ageFilter,
       selectedBadgeKeySet,
-      getAttendanceBadgeKey,
+      getAttendanceBadgeKeys,
     );
     const filtered = groups.filter((group: any) => {
       if (!searchTerm.trim()) return true;
@@ -2165,7 +2165,7 @@ const AttendancePage: React.FC = () => {
       });
     });
     return filtered;
-  }, [groupedAttendees, searchTerm, groupByFamily, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKey]);
+  }, [groupedAttendees, searchTerm, groupByFamily, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKeys]);
 
   const filteredGroupedVisitors = displayedGroupedVisitors;
 

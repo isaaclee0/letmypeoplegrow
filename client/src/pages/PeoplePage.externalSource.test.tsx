@@ -44,6 +44,7 @@ interface TestPerson {
   planningCenterId?: string;
   externalLinks?: ExternalLinks;
   pcoBackgroundCheckCleared: boolean | null;
+  hasMedicalNotes?: boolean;
   lastAttendanceDate?: string;
   createdAt: string;
   gatheringAssignments: Array<{ id: number; name: string }>;
@@ -71,12 +72,14 @@ function renderPeoplePage({
   authorityProvider,
   people,
   initialEntry = '/app/people',
+  medicalNotesIndicator = null,
 }: {
   authorityProvider: AuthorityProvider;
   people: TestPerson[];
   initialEntry?: string;
+  medicalNotesIndicator?: { icon: 'heart'; color: string } | null;
 }) {
-  vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people } } as never);
+  vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people, medicalNotesIndicator } } as never);
   vi.spyOn(individualsAPI, 'getArchived').mockResolvedValue({ data: { people: [] } } as never);
   vi.spyOn(familiesAPI, 'getAll').mockResolvedValue({
     data: { families: [], planningCenterTrackBackgroundChecks: false },
@@ -356,6 +359,34 @@ describe('PeoplePage badge filter', () => {
     expect(screen.getByText('Person 2')).toBeInTheDocument();
     expect(screen.queryByText('Person 3')).not.toBeInTheDocument();
     expect(screen.getByText('People (2) (Grouped by Family)')).toBeInTheDocument();
+  });
+
+  it('filters medical-only and medical-plus-ordinary people using the configured medical badge', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      authorityProvider: 'none',
+      medicalNotesIndicator: { icon: 'heart', color: '#facc15' },
+      people: [
+        person(1, { hasMedicalNotes: true }),
+        person(2, { hasMedicalNotes: true, badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' }),
+        person(3, { badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' }),
+        person(4),
+      ],
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Filter by badge: Medical note recorded' }));
+
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(screen.getByText('Person 2')).toBeInTheDocument();
+    expect(screen.queryByText('Person 3')).not.toBeInTheDocument();
+    expect(screen.queryByText('Person 4')).not.toBeInTheDocument();
+    expect(screen.getByText('People (2) (Grouped by Family)')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Filter by badge: Coach' }));
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(screen.getByText('Person 2')).toBeInTheDocument();
+    expect(screen.getByText('Person 3')).toBeInTheDocument();
+    expect(screen.queryByText('Person 4')).not.toBeInTheDocument();
   });
 
   it('does not leave a mouse-focus ring looking like selection after a badge is deselected', async () => {
