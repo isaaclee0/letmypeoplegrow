@@ -44,6 +44,7 @@ const SettingsPage: React.FC = () => {
   const [locationError, setLocationError] = useState<string | null>(null);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const locationDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const locationRequestIdRef = useRef(0);
   const locationDropdownRef = useRef<HTMLDivElement>(null);
 
   // Default badge state - child
@@ -163,10 +164,12 @@ const SettingsPage: React.FC = () => {
     if (locationDebounceRef.current) {
       clearTimeout(locationDebounceRef.current);
     }
+    const requestId = ++locationRequestIdRef.current;
 
-    if (value.trim().length < 2) {
+    if (value.trim().length < 3) {
       setLocationResults([]);
       setShowLocationDropdown(false);
+      setLocationSearching(false);
       return;
     }
 
@@ -174,13 +177,19 @@ const SettingsPage: React.FC = () => {
       try {
         setLocationSearching(true);
         const response = await settingsAPI.searchLocation(value.trim());
+        if (requestId !== locationRequestIdRef.current) return;
         setLocationResults(response.data.results || []);
         setShowLocationDropdown(true);
       } catch (error) {
+        if (requestId !== locationRequestIdRef.current) return;
         logger.error('Location search failed:', error);
         setLocationResults([]);
+        setShowLocationDropdown(false);
+        setLocationError('Location search is temporarily unavailable.');
       } finally {
-        setLocationSearching(false);
+        if (requestId === locationRequestIdRef.current) {
+          setLocationSearching(false);
+        }
       }
     }, 300);
   };
@@ -188,6 +197,8 @@ const SettingsPage: React.FC = () => {
   // Handle location selection
   const handleLocationSelect = async (result: any) => {
     try {
+      locationRequestIdRef.current += 1;
+      if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current);
       setLocationSaving(true);
       setLocationError(null);
       setShowLocationDropdown(false);
@@ -215,7 +226,11 @@ const SettingsPage: React.FC = () => {
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current);
+      locationRequestIdRef.current += 1;
+    };
   }, []);
 
   // Save badge settings
@@ -558,6 +573,7 @@ const SettingsPage: React.FC = () => {
                           }}
                           className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pr-10"
                           placeholder="e.g. Sydney, London, New York..."
+                          autoComplete="off"
                           disabled={locationSaving}
                         />
                         {locationSearching && (
@@ -568,11 +584,12 @@ const SettingsPage: React.FC = () => {
                       </div>
 
                       {/* Dropdown results */}
-                      {showLocationDropdown && locationResults.length > 0 && (
+                      {showLocationDropdown && (
                         <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-800 shadow-lg rounded-md border border-gray-200 dark:border-gray-700 max-h-60 overflow-auto">
-                          {locationResults.map((result, idx) => (
+                          {locationResults.length > 0 ? locationResults.map((result) => (
                             <button
-                              key={idx}
+                              key={`${result.lat}:${result.lng}`}
+                              type="button"
                               onClick={() => handleLocationSelect(result)}
                               className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0 transition-colors"
                             >
@@ -583,7 +600,11 @@ const SettingsPage: React.FC = () => {
                                 {[result.admin1, result.country].filter(Boolean).join(', ')}
                               </div>
                             </button>
-                          ))}
+                          )) : (
+                            <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                              No cities found.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>

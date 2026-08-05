@@ -229,18 +229,27 @@ router.put('/elvanto-config', requireRole(['admin']), async (req, res) => {
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
-    https.get({
+    const request = https.get({
       hostname: urlObj.hostname,
       path: urlObj.pathname + urlObj.search,
       headers: { 'User-Agent': 'LetMyPeopleGrow/1.0' }
     }, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        reject(new Error(`Location provider returned HTTP ${res.statusCode}`));
+        return;
+      }
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try { resolve(JSON.parse(data)); }
         catch (e) { resolve(data); }
       });
-    }).on('error', reject);
+    });
+    request.on('error', reject);
+    request.setTimeout(5000, () => {
+      request.destroy(new Error('Location provider request timed out'));
+    });
   });
 }
 
@@ -248,13 +257,17 @@ function httpsGet(url) {
 router.get('/location-search', requireRole(['admin']), async (req, res) => {
   try {
     const { q } = req.query;
-    if (!q || q.trim().length < 2) {
+    if (!q || q.trim().length < 3) {
       return res.json({ results: [] });
     }
 
     const data = await httpsGet(
       `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q.trim())}&count=8&language=en&format=json`
     );
+    if (!data || typeof data !== 'object' || Array.isArray(data)
+      || (data.results !== undefined && !Array.isArray(data.results))) {
+      throw new Error('Location provider returned an invalid response');
+    }
 
     const results = (data.results || []).map(r => ({
       name: r.name,
@@ -269,7 +282,7 @@ router.get('/location-search', requireRole(['admin']), async (req, res) => {
     res.json({ results });
   } catch (error) {
     console.error('Location search error:', error);
-    res.status(500).json({ error: 'Failed to search locations.' });
+    res.status(502).json({ error: 'Location search is temporarily unavailable.' });
   }
 });
 
