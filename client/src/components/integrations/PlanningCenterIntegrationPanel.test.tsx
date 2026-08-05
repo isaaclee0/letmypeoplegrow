@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
+import { gatheringsAPI, integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
 import PlanningCenterIntegrationPanel from './PlanningCenterIntegrationPanel';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
@@ -26,7 +26,11 @@ vi.mock('../../services/api', () => ({
     discardSourceDraft: vi.fn(), disableAuthority: vi.fn(), updateSettings: vi.fn(), previewAuthority: vi.fn(),
     cancelAuthorityPreview: vi.fn(), applyAuthority: vi.fn(),
   },
-  settingsAPI: { getIntegrationSettings: vi.fn(), updateIntegrationSettings: vi.fn() },
+  gatheringsAPI: { getAll: vi.fn() },
+  settingsAPI: {
+    getIntegrationSettings: vi.fn(), updateIntegrationSettings: vi.fn(),
+    getMedicalBadgeAppearances: vi.fn(), refreshMedicalNoteStatuses: vi.fn(),
+  },
 }));
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
 vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({
@@ -82,6 +86,8 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     vi.mocked(integrationsAPI.getPlanningCenterSyncStats).mockResolvedValue({ data: { totalPeople: 0, syncedPeople: 0 } });
     vi.mocked(integrationsAPI.getCheckinAvailability).mockResolvedValue({ data: { available: false, hasImported: false, peopleLinked: true } });
     vi.mocked(settingsAPI.getIntegrationSettings).mockResolvedValue({ data: { planningCenterSyncEnabled: true, planningCenterTrackBackgroundChecks: false } });
+    vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: { gatheringTypes: [] } });
+    vi.mocked(settingsAPI.getMedicalBadgeAppearances).mockResolvedValue({ data: { appearances: [] } });
     vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockReturnValue(new Promise(() => {}));
   });
 

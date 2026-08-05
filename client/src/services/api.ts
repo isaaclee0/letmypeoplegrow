@@ -29,6 +29,19 @@ import type {
   PeopleImportReview,
   PeopleImportSourcesResponse,
 } from '../components/peopleImport/types';
+import type { BadgeIconType } from '../components/icons/BadgeIcon';
+
+export type MedicalNotesMinimumRole = 'admin' | 'coordinator' | 'attendance_taker';
+export interface PlanningCenterMedicalNotesSettingsDto {
+  enabled: boolean;
+  minimumRole: MedicalNotesMinimumRole;
+  gatheringTypeIds: number[];
+  badgeIcon: BadgeIconType | null;
+  badgeColor: string | null;
+  lastRefreshedAt: string | null;
+  lastRefreshResult: { updated: number; present: number; absent: number; clearedStale: number } | null;
+}
+export interface MedicalBadgeAppearance { icon: BadgeIconType; color: string; count: number }
 
 // Shared by Planning Center and Elvanto reviewed applies. Keeping this
 // provider-neutral prevents either endpoint from adapting identity IDs or
@@ -267,6 +280,7 @@ export interface Individual {
   // People-page endpoint (Task 9) vs. attendance `/full` endpoint (Task 10).
   pcoBackgroundCheckCleared?: boolean | null;
   backgroundCheckCleared?: boolean | null;
+  hasMedicalNotes?: boolean;
   // Provider-neutral people-sync fields (Task 17) -- already attached by
   // server/routes/individuals.js and server/routes/families.js to every
   // individual/family DTO. Optional/additive so existing callers that don't
@@ -290,6 +304,7 @@ export interface Visitor {
   badgeColor?: string | null;
   badgeIcon?: string | null;
   backgroundCheckCleared?: boolean | null;
+  hasMedicalNotes?: boolean;
 }
 
 export interface AttendanceData {
@@ -883,11 +898,28 @@ export const settingsAPI = {
     api.put('/settings/weekly-review', data),
   sendTestWeeklyReview: () => api.post('/settings/weekly-review/test'),
   sendTestCaregiverDigest: () => api.post('/settings/caregiver-digest/test'),
-  getIntegrationSettings: () => api.get('/settings/integrations'),
+  getIntegrationSettings: () => api.get<{
+    planningCenterMedicalNotes?: PlanningCenterMedicalNotesSettingsDto;
+    [key: string]: unknown;
+  }>('/settings/integrations'),
   updateIntegrationSettings: (data: {
     planningCenterSyncEnabled?: boolean;
     planningCenterTrackBackgroundChecks?: boolean;
+    planningCenterMedicalNotes?: {
+      enabled: boolean;
+      minimumRole: MedicalNotesMinimumRole;
+      gatheringTypeIds: number[];
+      badgeIcon: BadgeIconType | null;
+      badgeColor: string | null;
+      adoptExistingAppearance: boolean;
+    };
   }) => api.put('/settings/integrations', data),
+  getMedicalBadgeAppearances: () => api.get<{ appearances: MedicalBadgeAppearance[] }>(
+    '/settings/integrations/planning-center/medical-notes/badge-appearances'
+  ),
+  refreshMedicalNoteStatuses: () => api.post<PlanningCenterMedicalNotesSettingsDto['lastRefreshResult']>(
+    '/settings/integrations/planning-center/medical-notes/refresh'
+  ),
 };
 
 export interface PlanningCenterSyncBatchInput {

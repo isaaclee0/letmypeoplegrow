@@ -23,6 +23,7 @@ import logger from '../utils/logger';
 import { useBadgeSettings } from '../hooks/useBadgeSettings';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
+import { shouldShowBadgeFilters } from '../utils/badgeFilterVisibility';
 import {
   UserGroupIcon,
   MagnifyingGlassIcon,
@@ -51,6 +52,7 @@ interface Person {
   planningCenterId?: string;
   externalLinks?: ExternalLinks;
   pcoBackgroundCheckCleared?: boolean | null;
+  hasMedicalNotes?: boolean;
   lastAttendanceDate?: string;
   createdAt?: string;
   gatheringAssignments?: Array<{
@@ -201,6 +203,7 @@ const PeoplePage: React.FC = () => {
   const [authorityProvider, setAuthorityProvider] = useState<AuthorityProvider>('none');
   const [peopleEditingLocked, setPeopleEditingLocked] = useState(true);
   const [planningCenterTrackBackgroundChecks, setPlanningCenterTrackBackgroundChecks] = useState(false);
+  const [medicalNotesIndicator, setMedicalNotesIndicator] = useState<{ icon: BadgeIconType; color: string } | null>(null);
   const showBackgroundCheckStatus = canSeeBackgroundCheckStatus && planningCenterTrackBackgroundChecks;
 
   const [isLoading, setIsLoading] = useState(true);
@@ -418,14 +421,30 @@ const PeoplePage: React.FC = () => {
   }, [authorityProvider, badgeConfig, externalSourceFilter, people]);
 
   const usedBadgeKeysSignature = JSON.stringify(usedBadgeOptions.map((badge) => badge.key));
+  const defaultChildBadgeKey = useMemo(() => {
+    const badge = getBadgeInfo({ isChild: true });
+    if (!badge) return null;
+
+    return badgeFilterKey({
+      text: badge.text,
+      icon: badge.icon,
+      backgroundColor: badge.styles.backgroundColor,
+    });
+  }, [badgeConfig]);
+  const showBadgeFilters = shouldShowBadgeFilters(
+    usedBadgeOptions.map((badge) => badge.key),
+    defaultChildBadgeKey,
+  );
 
   useEffect(() => {
     const availableKeys = new Set(usedBadgeOptions.map((badge) => badge.key));
     setSelectedBadgeKeys((current) => {
-      const next = current.filter((key) => availableKeys.has(key));
+      const next = showBadgeFilters
+        ? current.filter((key) => availableKeys.has(key))
+        : [];
       return next.length === current.length ? current : next;
     });
-  }, [usedBadgeKeysSignature]);
+  }, [showBadgeFilters, usedBadgeKeysSignature]);
 
   useEffect(() => {
     loadPeople();
@@ -494,6 +513,7 @@ const PeoplePage: React.FC = () => {
     try {
       setIsLoading(true);
       const response = await individualsAPI.getAll();
+      setMedicalNotesIndicator(response.data.medicalNotesIndicator || null);
       const peopleData = response.data.people || [];
       // Deduplicate people by ID to ensure no duplicates are displayed
       const uniquePeople = Array.from(new Map(peopleData.map((person: Person) => [person.id, person])).values()) as Person[];
@@ -1799,7 +1819,7 @@ const PeoplePage: React.FC = () => {
                 );
               })}
             </div>
-            {usedBadgeOptions.length > 0 ? (
+            {showBadgeFilters ? (
               <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filter by badge">
                 {usedBadgeOptions.map((badge) => {
                   const selected = selectedBadgeKeySet.has(badge.key);
@@ -2017,6 +2037,7 @@ const PeoplePage: React.FC = () => {
                                                        key={person.id}
 
                                                        person={person}
+                                                       medicalNotesIndicator={medicalNotesIndicator}
 
                                                        isSelected={selectedPeople.includes(person.id)}
 
@@ -2061,6 +2082,7 @@ const PeoplePage: React.FC = () => {
                                            key={person.id}
 
                                            person={person}
+                                           medicalNotesIndicator={medicalNotesIndicator}
 
                                            isSelected={selectedPeople.includes(person.id)}
 
@@ -2202,6 +2224,7 @@ const PeoplePage: React.FC = () => {
                                   key={person.id}
 
                                   person={person}
+                                  medicalNotesIndicator={medicalNotesIndicator}
 
                                   isSelected={selectedPeople.includes(person.id)}
 
@@ -2379,6 +2402,7 @@ const PeoplePage: React.FC = () => {
                                     key={person.id}
 
                                     person={person}
+                                    medicalNotesIndicator={medicalNotesIndicator}
 
                                     isSelected={selectedPeople.includes(person.id)}
 

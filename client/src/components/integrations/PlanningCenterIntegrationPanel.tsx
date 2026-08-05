@@ -22,6 +22,7 @@ import PeopleEditingLockControl from '../peopleSync/PeopleEditingLockControl';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
 import type { BatchOperationalState, PeopleSyncBatch } from '../peopleSync/types';
 import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
+import PlanningCenterMedicalNotesSettings from './PlanningCenterMedicalNotesSettings';
 
 const PCO_SYNC_RESULT_LABELS: Record<string, [string, string]> = {
   addPeople: ['person added', 'people added'],
@@ -613,6 +614,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       )}
 
               {/* PCO-specific background-check tracking remains independent of people authority. */}
+              <PlanningCenterMedicalNotesSettings />
+
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>

@@ -33,11 +33,13 @@ import {
 } from '@heroicons/react/24/outline';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
+import MedicalNoteIndicator from '../components/icons/MedicalNoteIndicator';
 import {
   filterAttendanceGroups,
   matchesAttendancePeopleFilters,
   type AttendanceAgeFilter,
 } from '../utils/attendancePeopleFilters';
+import { shouldShowBadgeFilters } from '../utils/badgeFilterVisibility';
 
 interface PersonForm {
   firstName: string;
@@ -94,6 +96,7 @@ const AttendancePage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [excludedFromStats, setExcludedFromStats] = useState(false);
   const [showBackgroundCheckStatus, setShowBackgroundCheckStatus] = useState(false);
+  const [medicalNotesIndicator, setMedicalNotesIndicator] = useState<{ icon: BadgeIconType; color: string } | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -462,14 +465,30 @@ const AttendancePage: React.FC = () => {
   }, [allChurchVisitors, attendanceList, badgeConfig, resolveBadgePerson]);
 
   const usedBadgeKeysSignature = JSON.stringify(usedBadgeOptions.map((badge) => badge.key));
+  const defaultChildBadgeKey = useMemo(() => {
+    const badge = getBadgeInfo({ isChild: true });
+    if (!badge) return null;
+
+    return badgeFilterKey({
+      text: badge.text,
+      icon: badge.icon,
+      backgroundColor: badge.styles.backgroundColor,
+    });
+  }, [badgeConfig]);
+  const showBadgeFilters = shouldShowBadgeFilters(
+    usedBadgeOptions.map((badge) => badge.key),
+    defaultChildBadgeKey,
+  );
 
   useEffect(() => {
     const availableKeys = new Set(usedBadgeOptions.map((badge) => badge.key));
     setSelectedBadgeKeys((current) => {
-      const next = current.filter((key) => availableKeys.has(key));
+      const next = showBadgeFilters
+        ? current.filter((key) => availableKeys.has(key))
+        : [];
       return next.length === current.length ? current : next;
     });
-  }, [usedBadgeKeysSignature]);
+  }, [showBadgeFilters, usedBadgeKeysSignature]);
 
   const selectedBadgeKeySet = useMemo(() => new Set(selectedBadgeKeys), [selectedBadgeKeys]);
   const matchesPeopleFilters = useCallback((person: Individual | Visitor) =>
@@ -1046,6 +1065,7 @@ const AttendancePage: React.FC = () => {
           if (isRelevantCache && cacheAge < 7 * 24 * 60 * 60 * 1000) { // Cache valid for 7 days
             logger.log('⚡ Loading from cache immediately for instant UI');
             setAttendanceList(parsed.attendanceList || []);
+            setMedicalNotesIndicator(parsed.medicalNotesIndicator || null);
             const cachedVisitors = (parsed.visitors || []).map((v: any) => ({
               ...v,
               name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown',
@@ -1109,6 +1129,7 @@ const AttendancePage: React.FC = () => {
         
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
+        setMedicalNotesIndicator(response.medicalNotesIndicator || null);
 
         // Normalize visitors from any source (WebSocket or REST) to a consistent format
         const normalizeVisitor = (v: any) => {
@@ -1174,6 +1195,7 @@ const AttendancePage: React.FC = () => {
           date: currentDate,
           attendanceList: attendanceListForCache,
           visitors: response.visitors || [],
+          medicalNotesIndicator: response.medicalNotesIndicator || null,
           timestamp: Date.now(),
           hasPendingChanges: pendingChanges.some(change => 
             change.gatheringId === currentGatheringId && change.date === currentDate
@@ -1213,6 +1235,7 @@ const AttendancePage: React.FC = () => {
             if (parsed.gatheringId === currentGatheringId && parsed.date === currentDate) {
                 logger.log('📦 Loading attendance data from cache due to server error');
               setAttendanceList(parsed.attendanceList || []);
+              setMedicalNotesIndicator(parsed.medicalNotesIndicator || null);
               setVisitors(parsed.visitors || []);
               
               // Initialize presentById from cached data
@@ -2873,7 +2896,7 @@ const AttendancePage: React.FC = () => {
                   })}
                 </div>
 
-                {usedBadgeOptions.length > 0 ? (
+                {showBadgeFilters ? (
                   <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filter by badge">
                     {usedBadgeOptions.map((badge) => {
                       const selected = selectedBadgeKeySet.has(badge.key);
@@ -3358,6 +3381,9 @@ const AttendancePage: React.FC = () => {
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
                               )}
                             </span>
+                            {person.hasMedicalNotes && medicalNotesIndicator && (
+                              <MedicalNoteIndicator icon={medicalNotesIndicator.icon} color={medicalNotesIndicator.color} className="ml-2" />
+                            )}
 
                             {/* Floating Badge at Top Right */}
                             {badgeInfo && (
@@ -3505,9 +3531,12 @@ const AttendancePage: React.FC = () => {
                             )}
                           </div>
                           <div className="ml-3 flex-1 min-w-0">
-                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                              {displayName}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                              {person.hasMedicalNotes && medicalNotesIndicator && (
+                                <MedicalNoteIndicator icon={medicalNotesIndicator.icon} color={medicalNotesIndicator.color} />
+                              )}
+                            </div>
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
                               <div className="flex items-center space-x-2 mt-1">
