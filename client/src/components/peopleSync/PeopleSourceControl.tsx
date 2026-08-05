@@ -81,7 +81,7 @@ export default function PeopleSourceControl({
     setDisableState('disabling');
     setDisableError(null);
     try {
-      await peopleSyncAPI.disableAuthority();
+      await peopleSyncAPI.updateSettings({ syncEnabled: false });
     } catch (cause) {
       setDisableError(peopleSyncErrorMessage(cause, 'Failed to disable the people source.'));
       setDisableState('error');
@@ -91,10 +91,11 @@ export default function PeopleSourceControl({
     await refreshAfterDisable();
   };
 
-  const checked = settings.authorityProvider === provider;
+  const managesPeople = settings.authorityProvider === provider;
+  const checked = managesPeople && settings.syncEnabled;
   const enabledBatches = batches.filter((batch) => batch.enabled);
   const preparedBatchCount = enabledBatches.length;
-  const prerequisite = checked
+  const prerequisite = managesPeople
     ? null
     : !connections[provider]
       ? `Connect ${providerName(provider)} before using it as your people source.`
@@ -110,9 +111,24 @@ export default function PeopleSourceControl({
     ? settings.authorityProvider
     : null;
 
+  const resume = async () => {
+    setDisableState('disabling');
+    setDisableError(null);
+    try {
+      await peopleSyncAPI.updateSettings({ syncEnabled: true });
+      await onRefresh();
+      setDisableState('idle');
+    } catch (cause) {
+      setDisableError(peopleSyncErrorMessage(cause, 'Could not resume people sync.'));
+      setDisableState('error');
+    }
+  };
+
   const toggle = () => {
-    if (checked) {
+    if (managesPeople && checked) {
       setConfirmDisable(true);
+    } else if (managesPeople) {
+      void resume();
     } else if (otherProvider) {
       setConfirmSwitch(true);
     } else {
@@ -160,10 +176,12 @@ export default function PeopleSourceControl({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">
-            Use {providerName(provider)} as source of truth
+            People sync
           </h5>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Enabling this first creates a review. Nothing changes until you apply that review.
+            {managesPeople
+              ? checked ? `Syncing people managed by ${providerName(provider)}.` : 'People sync is paused. Your connection, batches, and links are retained.'
+              : 'Your first batch review starts people sync automatically.'}
           </p>
         </div>
         <button
@@ -203,10 +221,10 @@ export default function PeopleSourceControl({
           className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
         >
           <h6 id="people-source-switch-title" className="font-medium text-gray-900 dark:text-gray-100">
-            Switch source of truth from {otherProvider ? providerName(otherProvider) : ''} to {providerName(provider)}?
+            Switch people management from {otherProvider ? providerName(otherProvider) : ''} to {providerName(provider)}?
           </h6>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-            {preparedBatchCount} enabled {providerName(provider)} {preparedBatchCount === 1 ? 'batch will' : 'batches will'} be activated by this review. Linked people and families become managed by {providerName(provider)}. Local edits and lifecycle actions are restricted, and {providerName(provider)} schedules may run. {otherProvider ? providerName(otherProvider) : 'The other provider'} remains connected, but its batches become inactive.
+            {preparedBatchCount} enabled {providerName(provider)} {preparedBatchCount === 1 ? 'batch will' : 'batches will'} be activated by this review. {providerName(provider)} will manage people after the review is applied. {otherProvider ? providerName(otherProvider) : 'The other provider'} remains connected, but its batches become inactive.
           </p>
           <div className="mt-5 flex gap-3">
             <button
@@ -237,9 +255,9 @@ export default function PeopleSourceControl({
           className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
         >
           <h6 id="people-source-disable-title" className="font-medium text-gray-900 dark:text-gray-100">
-            Stop using a people source of truth?
+            Pause people sync?
           </h6>
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Linked people will become editable in LMPG. Existing links and provider connections are retained.</p>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Scheduled and manual people sync will pause. Your provider connection, batches, links, and People-page editing policy are retained.</p>
           {disableError && <p role="alert" className="mt-3 text-sm text-red-600">{disableError}</p>}
           <div className="mt-5 flex gap-3">
             <button
@@ -250,7 +268,7 @@ export default function PeopleSourceControl({
             >
               {disableState === 'disabling'
                 ? disableMutationSucceeded ? 'Refreshing…' : 'Disabling…'
-                : disableMutationSucceeded ? 'Retry status refresh' : 'Use no people source'}
+                : disableMutationSucceeded ? 'Retry status refresh' : 'Pause sync'}
             </button>
             <button type="button" onClick={closeDisableDialog} disabled={disableState === 'disabling'} className="text-sm underline disabled:opacity-50">Cancel</button>
           </div>

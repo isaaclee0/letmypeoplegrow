@@ -16,6 +16,8 @@ import type { PeopleSyncSettings } from '../peopleSync/types';
 const defaultPeopleSyncSettings: PeopleSyncSettings = {
   authorityProvider: 'none',
   pendingAuthorityProvider: null,
+  syncEnabled: true,
+  peopleEditingLocked: true,
   elvantoIncludeContacts: true,
   elvantoAlignPeopleType: true,
   fullReconciliationFrequency: 'weekly',

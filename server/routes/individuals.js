@@ -6,6 +6,7 @@ const { requireIsVisitorColumn } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 const {
   getAuthority,
+  getPeopleSyncPolicy,
   getManagedLinks,
   getManagedFamilyIds,
   isPersonLocked,
@@ -45,11 +46,13 @@ async function addPeopleAuthorityMetadata(churchId, individuals) {
 }
 
 async function getPersonAuthorityLock(churchId, individualIds) {
-  const { active } = await getAuthority(churchId);
+  const [{ active }, { peopleEditingLocked }] = await Promise.all([
+    getAuthority(churchId), getPeopleSyncPolicy(churchId),
+  ]);
   const links = await getManagedLinks(churchId, individualIds);
   return {
     active,
-    isLocked: (id) => isPersonLocked(active, links.get(Number(id))),
+    isLocked: (id) => peopleEditingLocked && isPersonLocked(active, links.get(Number(id))),
   };
 }
 
@@ -332,8 +335,10 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVID
   try {
     const { firstName, lastName, familyId, isChild } = req.body;
 
-    const { active } = await getAuthority(req.user.church_id);
-    if (active !== 'none') {
+    const [{ active }, { peopleEditingLocked }] = await Promise.all([
+      getAuthority(req.user.church_id), getPeopleSyncPolicy(req.user.church_id),
+    ]);
+    if (active !== 'none' && peopleEditingLocked) {
       return res.status(403).json(lockedResponse(active, 'create'));
     }
 
@@ -357,7 +362,10 @@ async function syncFamilyTypeIfUnified(familyId, churchId) {
   if (!familyId) return;
   
   try {
-    const { active } = await getAuthority(churchId);
+    const [{ active }, { peopleEditingLocked }] = await Promise.all([
+      getAuthority(churchId), getPeopleSyncPolicy(churchId),
+    ]);
+    if (!peopleEditingLocked) return;
     const isFamilyLocked = await getFamilyMembershipAuthorityLock(churchId, [familyId], active);
     if (isFamilyLocked(familyId)) return;
 

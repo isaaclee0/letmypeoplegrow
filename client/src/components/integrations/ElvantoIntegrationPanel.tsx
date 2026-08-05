@@ -5,6 +5,7 @@ import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '.
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from '../elvanto/ElvantoBatchEditor';
 import ElvantoGatheringImport from '../elvanto/ElvantoGatheringImport';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
+import PeopleEditingLockControl from '../peopleSync/PeopleEditingLockControl';
 import type {
   BatchOperationalState,
   PeopleSyncBatch,
@@ -349,6 +350,9 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
         initialAction={initialAction}
       />
       {peopleSourceControl}
+      {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'elvanto' && (
+        <PeopleEditingLockControl settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
+      )}
 
       {status.connected && (
         <>
@@ -377,9 +381,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                       navigate(`/app/settings/integrations/elvanto/batches/${savedBatch.id}/review`);
                       return;
                     }
-                    setEditingBatch(null);
-                    setBatchNotice('Batch prepared. Switch source of truth to review and activate it.');
-                    void reloadAfterBatchMutation();
+                    navigate('/app/settings/integrations/elvanto/authority-review?reason=first-batch');
                     return;
                   }
                   setEditingBatch(null);

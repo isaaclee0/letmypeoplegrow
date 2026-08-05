@@ -41,7 +41,7 @@ export interface PeopleSyncApplyRequest<Operation extends 'people_sync' | 'autho
 // Mirrors the server's SYNC_BATCH_PREPARED guidance so stale bookmarked
 // review URLs fail before the client attempts any review or apply request.
 export const PEOPLE_SYNC_BATCH_PREPARED_MESSAGE =
-  'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.';
+  'This batch is prepared for a different people source. Switch people management before reviewing or running it.';
 
 // Use relative URL for API requests - this will work with any domain
 const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';

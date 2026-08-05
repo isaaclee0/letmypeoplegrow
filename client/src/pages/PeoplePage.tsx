@@ -122,8 +122,9 @@ export function matchesExternalSourceFilter(
 export function personAuthorityPermissions(
   externalLinks: ExternalLinks | undefined,
   authorityProvider: AuthorityProvider,
+  peopleEditingLocked = true,
 ) {
-  const locked = isAuthorityLocked(externalLinks, authorityProvider);
+  const locked = isAuthorityLocked(externalLinks, authorityProvider, peopleEditingLocked);
   return {
     locked,
     canOpenEditor: true,
@@ -140,9 +141,10 @@ export function personAuthorityPermissions(
 export function familyAuthorityPermissions(
   family: Pick<Family, 'externalLinks' | 'managedBy'>,
   authorityProvider: AuthorityProvider,
+  peopleEditingLocked = true,
 ) {
-  const locked = authorityProvider !== 'none'
-    && (family.managedBy === authorityProvider || isAuthorityLocked(family.externalLinks, authorityProvider));
+  const locked = peopleEditingLocked && authorityProvider !== 'none'
+    && (family.managedBy === authorityProvider || isAuthorityLocked(family.externalLinks, authorityProvider, peopleEditingLocked));
   return {
     locked,
     canManageFamily: !locked,
@@ -180,6 +182,7 @@ const PeoplePage: React.FC = () => {
   const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
   const [authorityProvider, setAuthorityProvider] = useState<AuthorityProvider>('none');
+  const [peopleEditingLocked, setPeopleEditingLocked] = useState(true);
   const [planningCenterTrackBackgroundChecks, setPlanningCenterTrackBackgroundChecks] = useState(false);
   const showBackgroundCheckStatus = canSeeBackgroundCheckStatus && planningCenterTrackBackgroundChecks;
 
@@ -457,6 +460,7 @@ const PeoplePage: React.FC = () => {
       ]);
       setFamilies(response.data.families || []);
       setAuthorityProvider(peopleSyncResponse.data.settings.authorityProvider);
+      setPeopleEditingLocked(peopleSyncResponse.data.settings.peopleEditingLocked !== false);
       setPlanningCenterTrackBackgroundChecks(!!response.data.planningCenterTrackBackgroundChecks);
     } catch (err: any) {
       setError('Failed to load families');
@@ -1318,11 +1322,11 @@ const PeoplePage: React.FC = () => {
   }, [selectedPeople, people]);
   const selectedHasAuthorityLock = selectedPeople.some((id) => {
     const person = people.find((candidate) => candidate.id === id);
-    return personAuthorityPermissions(person?.externalLinks, authorityProvider).locked;
+    return personAuthorityPermissions(person?.externalLinks, authorityProvider, peopleEditingLocked).locked;
   });
   const familyIsAuthorityLocked = (familyId: number | null | undefined) => {
     const family = families.find((candidate) => candidate.id === familyId);
-    return family ? familyAuthorityPermissions(family, authorityProvider).locked : false;
+    return family ? familyAuthorityPermissions(family, authorityProvider, peopleEditingLocked).locked : false;
   };
 
   if (isLoading) {
@@ -1349,7 +1353,7 @@ const PeoplePage: React.FC = () => {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              {isAdmin && (
+              {isAdmin && (authorityProvider === 'none' || !peopleEditingLocked) && (
                 <button
                   type="button"
                   onClick={() => setShowPeopleImport(true)}
@@ -1410,7 +1414,7 @@ const PeoplePage: React.FC = () => {
         allSameAgeGroup={massEdit.isChild === 'true' || massEdit.isChild === 'false'}
         lockedCount={selectedPeople.reduce((n, id) => {
           const p = people.find(pp => pp.id === id);
-          return n + (personAuthorityPermissions(p?.externalLinks, authorityProvider).locked ? 1 : 0);
+          return n + (personAuthorityPermissions(p?.externalLinks, authorityProvider, peopleEditingLocked).locked ? 1 : 0);
         }, 0)}
         lockManagedFields={selectedHasAuthorityLock}
         managedByLabel={authorityLabel(authorityProvider)}
@@ -2348,7 +2352,7 @@ const PeoplePage: React.FC = () => {
                 {archivedPeople.map((person: Person) => {
                   const displayName = getPersonDisplayName(person); // No family context for archived
                   const needsWideLayout = shouldUseWideLayout(displayName);
-                  const locked = isAuthorityLocked(person.externalLinks, authorityProvider);
+                  const locked = isAuthorityLocked(person.externalLinks, authorityProvider, peopleEditingLocked);
                   
                   return (
                     <div 
@@ -2866,7 +2870,7 @@ const PeoplePage: React.FC = () => {
              </button>
            </div>
          </div>
-        ) : authorityProvider === 'none' ? (
+        ) : (authorityProvider === 'none' || !peopleEditingLocked) ? (
          <>
            <button
              onClick={() => openAddModal()}
