@@ -95,11 +95,10 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
       throw new Error(`Identity decision references an external person not present in this plan: ${externalPersonId}`);
     }
   }
-  for (const externalPersonId of contextExternalIds) {
-    if (!Object.hasOwn(decisions, externalPersonId)) {
-      throw new Error(`An identity decision is required for ${externalPersonId}`);
-    }
-  }
+  const canonicalDecisions = Object.fromEntries(contextExternalIds.map((externalPersonId) => [
+    externalPersonId,
+    Object.hasOwn(decisions, externalPersonId) ? decisions[externalPersonId] : { outcome: 'defer' },
+  ]));
 
   const linkCorrections = validateSignedLinkCorrections(
     context.correctionContractVersion,
@@ -133,7 +132,7 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
   for (const externalPersonId of contextExternalIds) {
     const entry = asRecord(identities[externalPersonId]);
     if (!entry) throw new Error(`Identity review context for ${externalPersonId} must be an object`);
-    const decision = validateDecisionFields(externalPersonId, decisions[externalPersonId]);
+    const decision = validateDecisionFields(externalPersonId, canonicalDecisions[externalPersonId]);
     const suggestedIndividualId = entry.suggestedIndividualId;
     let acceptedIndividualId = null;
     let linkSource = null;
@@ -204,6 +203,21 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
   }
 
   const destructive = validateDestructiveSelections(plan, selections, claimedIndividualIds);
+  const signedUnreviewedSuggestions = asArray(context.unreviewedSuggestedLinks).map((entry) => ({
+    externalPersonId: typeof entry?.externalPersonId === 'string' ? entry.externalPersonId : '',
+    suggestedIndividualId: entry?.individualId,
+  }));
+  for (const pair of signedUnreviewedSuggestions) {
+    if (!pair.externalPersonId || !Number.isSafeInteger(pair.suggestedIndividualId) || pair.suggestedIndividualId <= 0) {
+      throw new Error('This plan has invalid out-of-scope identity suggestions');
+    }
+    suppressedSuggestedPairs.push(pair);
+  }
+  const uniqueSuppressedSuggestedPairs = [...new Map(suppressedSuggestedPairs.map((pair) => [
+    `${pair.externalPersonId}\u0000${pair.suggestedIndividualId}`, pair,
+  ])).values()].sort((left, right) => left.externalPersonId.localeCompare(right.externalPersonId, 'en') ||
+    left.suggestedIndividualId - right.suggestedIndividualId);
+
   return {
     contractVersion: 2,
     linkCorrections,
@@ -216,7 +230,7 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
     exclusionsToAdd,
     exclusionsToRemove,
     skippedAddExternalIds,
-    suppressedSuggestedPairs,
+    suppressedSuggestedPairs: uniqueSuppressedSuggestedPairs,
     ...destructive,
   };
 }

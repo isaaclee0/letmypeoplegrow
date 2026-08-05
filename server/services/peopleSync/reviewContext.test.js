@@ -99,6 +99,7 @@ test('signs every reviewable identity with deterministic selections and fresh cr
     establishedLinks: {},
     projectedEstablishedLinks: {},
     linkCorrections: [],
+    unreviewedSuggestedLinks: [],
     identities: {
       'ext-1': {
         suggestedIndividualId: 7,
@@ -124,6 +125,39 @@ test('signs every reviewable identity with deterministic selections and fresh cr
       },
     },
   });
+});
+
+test('signs only decision-scoped identities and retains outside suggestions for suppression', () => {
+  const context = buildReviewContext({
+    plan: {
+      linkPeople: [
+        { externalPersonId: 'clancy', individualId: 7 },
+        { externalPersonId: 'ava', individualId: 8 },
+      ],
+      ambiguousPeople: [], addPeople: [],
+    },
+    externalPeople: [
+      { id: 'clancy', firstName: 'Clancy', lastName: 'Helper' },
+      { id: 'ava', firstName: 'Ava', lastName: 'Other' },
+    ],
+    localPeople: [{ id: 7 }, { id: 8 }],
+    basePersonLinks: [
+      { externalPersonId: 'clancy-linked', individualId: 7 },
+      { externalPersonId: 'ava-linked', individualId: 8 },
+    ],
+    projectedPersonLinks: [
+      { externalPersonId: 'clancy-linked', individualId: 7 },
+      { externalPersonId: 'ava-linked', individualId: 8 },
+    ],
+    decisionScopeExternalIds: new Set(['clancy', 'clancy-linked']),
+    sourceExternalIds: new Set(['clancy', 'clancy-linked']),
+  });
+
+  assert.deepEqual(Object.keys(context.identities), ['clancy']);
+  assert.deepEqual(Object.keys(context.establishedLinks), ['clancy-linked']);
+  assert.deepEqual(context.unreviewedSuggestedLinks, [
+    { externalPersonId: 'ava', individualId: 8 },
+  ]);
 });
 
 test('signs the projected import people type instead of recomputing a regular creation', () => {

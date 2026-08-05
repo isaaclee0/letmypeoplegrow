@@ -848,6 +848,15 @@ function correctionScopeExternalIds(eligibleByBatch, batchId) {
   return new Set();
 }
 
+function decisionScopeExternalIds(eligibleByBatch, { batchId = null, authoritySwitch = false, unattended = false } = {}) {
+  if (unattended) return new Set();
+  if (authoritySwitch || batchId === null || batchId === undefined) {
+    const entries = eligibleByBatch instanceof Map ? eligibleByBatch.values() : Object.values(eligibleByBatch || {});
+    return new Set([...entries].flatMap((ids) => [...(ids instanceof Set ? ids : ids || [])].map(String)));
+  }
+  return correctionScopeExternalIds(eligibleByBatch, batchId);
+}
+
 function applyCorrectionReviewState(matchReviewState, correction) {
   const exclusions = new Map();
   for (const entry of matchReviewState?.exclusions || []) {
@@ -939,7 +948,11 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
 
   const externalPeople = [...planningPeople, ...acquired.contextPeople];
-  const sourceExternalIds = correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId);
+  const sourceExternalIds = decisionScopeExternalIds(acquired.eligibleByBatch, {
+    batchId: acquired.batchId,
+    authoritySwitch: acquired.trigger === 'authority_switch',
+    unattended: acquired.trigger === 'scheduled',
+  });
   plan.reviewContext = buildReviewContext({
     plan,
     externalPeople,
@@ -952,6 +965,7 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     baseHolds: acquired.matchReviewState?.holds || [],
     projectedHolds: effectiveReviewState.holds,
     sourceExternalIds,
+    decisionScopeExternalIds: sourceExternalIds,
     linkCorrections: correction.corrections,
     batches: acquired.batches,
     eligibleByBatch: acquired.eligibleByBatch,
@@ -963,7 +977,11 @@ function projectPipelineLinkCorrections(acquired, linkCorrections = {}) {
   return validateAndProjectLinkCorrections({
     rawCorrections: linkCorrections,
     baseLinks: acquired.personLinks,
-    sourceExternalIds: correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId),
+    sourceExternalIds: decisionScopeExternalIds(acquired.eligibleByBatch, {
+      batchId: acquired.batchId,
+      authoritySwitch: acquired.trigger === 'authority_switch',
+      unattended: acquired.trigger === 'scheduled',
+    }),
     localIndividualIds: new Set(acquired.individuals.map(({ id }) => Number(id))),
   });
 }

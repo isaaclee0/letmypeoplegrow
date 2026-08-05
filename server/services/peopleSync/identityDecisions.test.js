@@ -206,17 +206,18 @@ test('requires the exact supported decision and review context versions', () => 
   );
 });
 
-test('requires exactly one decision for every signed identity and rejects outside external IDs', () => {
+test('canonicalizes omitted signed identities to deferred and rejects outside external IDs', () => {
   const plan = reviewPlan({
     'ext-1': identity(),
     'ext-2': identity(),
   });
-  assert.throws(
-    () => validateIdentityDecisions(plan, selections({
-      'ext-1': { outcome: 'defer' },
-    })),
-    /decision is required.*ext-2/i
-  );
+  const accepted = validateIdentityDecisions(plan, selections({
+    'ext-1': { outcome: 'defer' },
+  }));
+  assert.deepEqual([...accepted.deferredReasons], [
+    ['ext-1', 'deferred'],
+    ['ext-2', 'deferred'],
+  ]);
   assert.throws(
     () => validateIdentityDecisions(plan, selections({
       'ext-1': { outcome: 'defer' },

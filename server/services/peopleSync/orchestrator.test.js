@@ -1145,6 +1145,7 @@ test('review signs durable match context and returns a family-aware directory wi
     establishedLinks: {},
     projectedEstablishedLinks: {},
     linkCorrections: [],
+    unreviewedSuggestedLinks: [],
     identities: {
       'ext-1': {
         suggestedIndividualId: null,

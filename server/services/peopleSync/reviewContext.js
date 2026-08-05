@@ -55,12 +55,33 @@ function byExternalId(people) {
   return result;
 }
 
-function reviewableExternalIds(plan) {
+function reviewableExternalIds(plan, decisionScopeExternalIds = null) {
+  const scope = decisionScopeExternalIds instanceof Set ? decisionScopeExternalIds : null;
   const ids = [];
   for (const action of plan?.linkPeople || []) ids.push(externalId(action?.externalPersonId));
   for (const action of plan?.ambiguousPeople || []) ids.push(externalId(action?.externalPersonId));
   for (const action of plan?.addPeople || []) ids.push(externalId(action?.externalPersonId));
-  return sortedUniqueIds(ids, (id) => id, compareText);
+  return sortedUniqueIds(ids, (id) => id, compareText)
+    .filter((id) => scope === null || scope.has(id));
+}
+
+function unreviewedSuggestedLinks(plan, decisionScopeExternalIds) {
+  if (!(decisionScopeExternalIds instanceof Set)) return [];
+  const seen = new Set();
+  return (plan?.linkPeople || [])
+    .map((action) => ({
+      externalPersonId: externalId(action?.externalPersonId),
+      individualId: individualId(action?.individualId),
+    }))
+    .filter((link) => link.externalPersonId !== null && link.individualId !== null &&
+      !decisionScopeExternalIds.has(link.externalPersonId))
+    .filter((link) => {
+      const key = `${link.externalPersonId}\u0000${link.individualId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => compareText(left.externalPersonId, right.externalPersonId) || left.individualId - right.individualId);
 }
 
 function actionCandidates(plan, externalPersonId) {
@@ -135,7 +156,7 @@ function buildReviewContext(input = {}) {
   const excluded = excludedByExternalId(projectedExclusions);
   const held = heldExternalIds(projectedHolds);
   const identities = {};
-  for (const id of reviewableExternalIds(input.plan)) {
+  for (const id of reviewableExternalIds(input.plan, input.decisionScopeExternalIds)) {
     const candidates = actionCandidates(input.plan, id);
     const plannedAddition = (input.plan?.addPeople || [])
       .find((action) => externalId(action?.externalPersonId) === id);
@@ -166,6 +187,7 @@ function buildReviewContext(input = {}) {
     establishedLinks: establishedLinksForSource(basePersonLinks, input.sourceExternalIds),
     projectedEstablishedLinks: establishedLinksForSource(projectedPersonLinks, input.sourceExternalIds),
     linkCorrections: canonicalLinkCorrections(input.linkCorrections),
+    unreviewedSuggestedLinks: unreviewedSuggestedLinks(input.plan, input.decisionScopeExternalIds),
     identities,
   };
 }
