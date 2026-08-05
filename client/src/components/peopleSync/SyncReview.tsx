@@ -17,6 +17,7 @@ import {
   type VisitorChoice,
 } from './syncSelections';
 import { isReviewDirty, selectedChangeCount } from './syncReviewModel';
+import type { ReviewRowFilter } from './syncReviewModel';
 import { hasForbiddenImportMutations } from '../peopleImport/types';
 import type { PeopleImportReview } from '../peopleImport/types';
 import type {
@@ -66,6 +67,7 @@ interface SyncReviewCommonProps {
   renderCandidateLabel?: (action: AmbiguousPersonAction, candidateId: number) => React.ReactNode;
   resolveAmbiguousArchiveIndividualId?: (action: AmbiguousPersonAction) => number | undefined;
   requireAllPlannedArchivesAccepted?: boolean;
+  initialIdentityFilter?: ReviewRowFilter;
 }
 
 export type SyncReviewProps =
@@ -494,6 +496,7 @@ function SafeSyncReview({
   renderCandidateLabel,
   resolveAmbiguousArchiveIndividualId,
   requireAllPlannedArchivesAccepted = false,
+  initialIdentityFilter,
 }: SyncReviewProps) {
   const initialState = stateForReview(review, operationKind);
   const [effectiveReview, setEffectiveReview] = useState<PeopleSyncReview>(review);
@@ -830,6 +833,7 @@ function SafeSyncReview({
               onRefreshReview={guardedRefresh}
               onPreviewCancelled={() => setPreviewing(false)}
               previewing={previewing}
+              initialDecisionFilter={initialIdentityFilter}
             />
           </div>
         )}

@@ -56,6 +56,10 @@ const {
 } = require('./sourceModel');
 const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
+const {
+  buildPendingIdentityObservations,
+  replacePendingIdentityObservations,
+} = require('./pendingIdentityProjection');
 const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRetiredPlanningCenterBatch } = require('./legacyBatch');
 const { assertBatchReviewable, assertBatchRunnable } = require('./batchOperationalState');
 const backgroundCheckSync = require('../planningCenter/backgroundCheckSync');
@@ -150,6 +154,8 @@ const defaultDeps = {
   verifyReviewTokenLineage,
   isReviewTokenApplied,
   notifyReviewRequired,
+  buildPendingIdentityObservations,
+  replacePendingIdentityObservations,
   recordActiveSourceAvailable,
   recordActiveSourceFailure,
   getUnattendedProviderEnabled: async (churchId) => unattendedPolicy.isPeopleSyncEnabled(churchId),
@@ -835,6 +841,12 @@ async function acquirePipelineState(input) {
     familyLinks,
     matchReviewState,
     gatheringMemberships,
+    pendingIdentityObservations: input.deps.buildPendingIdentityObservations({
+      batches: input.batches,
+      eligibleByBatch: providerState.eligibleByBatch,
+      personLinks,
+      holds: matchReviewState.holds,
+    }),
   };
 }
 
@@ -1039,6 +1051,7 @@ async function buildReview({
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration,
       null, batchConfigurationExpectation,
     );
+    await deps.replacePendingIdentityObservations(churchId, provider, body.pendingIdentityObservations);
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       operationKind: 'people_sync',
@@ -1217,6 +1230,7 @@ async function previewAuthoritySwitch({
       provider, reviewBatches, null, body.sourceProvenance, pre.connectionGeneration,
       authoritySourceSet, batchConfigurationExpectation,
     );
+    await deps.replacePendingIdentityObservations(churchId, provider, body.pendingIdentityObservations);
     if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
@@ -1398,6 +1412,7 @@ async function applyReviewed({
     // recorded as failed.
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections, userId,
+      pendingIdentityObservations: body.pendingIdentityObservations,
       activateAuthority: isAuthoritySwitch,
       authorityPreviewId,
       reviewedApply: {
@@ -1550,7 +1565,9 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     // conflict/rename/unmatched-local buckets are never mutated by apply.js off an
     // empty selection set regardless).
     applyResult = await deps.applyPeopleSyncPlan({
-      churchId, provider, plan: body.plan, selections: {}, userId: null,
+      churchId, provider, plan: body.plan,
+      selections: { decisionContractVersion: 2, identityDecisions: {} }, userId: null,
+      pendingIdentityObservations: body.pendingIdentityObservations,
       authorityExpectation, sourceExpectations,
       batchConfigurationExpectation,
       connectionExpectation,

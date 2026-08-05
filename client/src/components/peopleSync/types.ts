@@ -457,6 +457,7 @@ export interface PeopleSyncReviewContext {
   establishedLinks?: Record<string, PeopleSyncEstablishedLink>;
   projectedEstablishedLinks?: Record<string, PeopleSyncEstablishedLink>;
   linkCorrections?: Array<{ externalPersonId: string } & EstablishedLinkCorrection>;
+  unreviewedSuggestedLinks?: Array<{ externalPersonId: string; individualId: number }>;
   manualCandidateIndividualIds: number[];
   identities: Record<string, IdentityReviewEntry>;
 }

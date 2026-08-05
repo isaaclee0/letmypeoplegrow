@@ -198,10 +198,12 @@ function TableHarness({
   onPreviewCorrections = async () => reviewFixture(),
   previewing = false,
   tableRef,
+  initialDecisionFilter,
 }: {
   onPreviewCorrections?: (corrections: Record<string, EstablishedLinkCorrection>) => Promise<PeopleSyncReview>;
   previewing?: boolean;
   tableRef?: React.Ref<IdentityReviewTableHandle>;
+  initialDecisionFilter?: 'all' | 'needs_attention' | 'matched' | 'adding' | 'skipped';
 }) {
   const [state, setState] = useState(stateFixture());
   return (
@@ -215,6 +217,7 @@ function TableHarness({
         onStateChange={setState}
         onPreviewCorrections={onPreviewCorrections}
         previewing={previewing}
+        initialDecisionFilter={initialDecisionFilter}
       />
     </>
   );
@@ -363,6 +366,13 @@ describe('IdentityReviewTable rendering', () => {
     expect(screen.getAllByText('Established Source')).not.toHaveLength(0);
     expect(screen.queryByText('Alex Smith')).not.toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Already linked identities' })).toBeInTheDocument();
+  });
+
+  it('can open a batch review focused on pending decisions', () => {
+    render(<TableHarness initialDecisionFilter="needs_attention" />);
+
+    expect(screen.getByRole('button', { name: 'Needs attention 1' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Showing 1–1 of 1')).toBeVisible();
   });
 
   it('searches complete person and family context before pagination and resets changed criteria to page one', async () => {

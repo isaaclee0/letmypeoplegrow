@@ -131,6 +131,7 @@ function makeDeps({
   const availableHealth = [];
   const failedHealth = [];
   const plans = [];
+  const projections = [];
   let nextRunId = 1;
   const adapter = {
     provider: 'elvanto',
@@ -193,13 +194,21 @@ function makeDeps({
     },
     isReviewTokenApplied: async () => false,
     notifyReviewRequired: async () => ({ notified: true }),
+    buildPendingIdentityObservations: ({ batches: observedBatches, eligibleByBatch, personLinks: observedLinks, holds }) =>
+      require('./pendingIdentityProjection').buildPendingIdentityObservations({
+        batches: observedBatches, eligibleByBatch, personLinks: observedLinks, holds,
+        observedAt: '2026-08-05T00:00:00.000Z',
+      }),
+    replacePendingIdentityObservations: async (churchId, provider, observations) => {
+      projections.push({ churchId, provider, observations });
+    },
     refreshBackgroundCheckStatuses: async () => ({
       fetchedAt: '2026-08-03T05:00:00.000Z',
       updated: 0, cleared: 0, notCleared: 0, unknown: 0,
     }),
     ...extra,
   };
-  return { deps, events, finished, failed, applied, presence, availableHealth, failedHealth, plans };
+  return { deps, events, finished, failed, applied, presence, availableHealth, failedHealth, plans, projections };
 }
 
 function pcoApplyDeps(extra = {}, {
@@ -822,6 +831,45 @@ test('target review substitutes only the target draft source while other enabled
   ]);
   assert.deepEqual(availableHealth.map((entry) => entry.batchId), [3], 'a successful draft read must not overwrite active-source health');
   assert.deepEqual(availableHealth[0].connectionExpectation, { generation: 17 });
+});
+
+test('a complete review records source-bound pending identities for each reviewed batch', async () => {
+  const clancy = person('clancy');
+  const { deps, projections } = makeDeps({
+    batches: [batch({ id: 1, source: source('helpers') }), batch({ id: 2, source: source('members') })],
+    fetchSourceSnapshot: async ({ sourceExternalId }) => sourceSnapshot(source(sourceExternalId), {
+      people: sourceExternalId === 'helpers' ? [clancy] : [],
+      memberExternalIds: sourceExternalId === 'helpers' ? ['clancy'] : [],
+    }),
+  });
+
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+
+  assert.equal(projections.length, 1);
+  assert.deepEqual(projections[0], {
+    churchId: 'church-a',
+    provider: 'elvanto',
+    observations: [
+      {
+        batchId: 1,
+        sourceRole: 'active',
+        sourceIdentityDigest: digestSourceIdentity(source('helpers')),
+        sourceRevision: 2,
+        sourceBaseRevision: null,
+        observedAt: '2026-08-05T00:00:00.000Z',
+        items: [{ externalPersonId: 'clancy', reason: 'identity_decision_required' }],
+      },
+      {
+        batchId: 2,
+        sourceRole: 'active',
+        sourceIdentityDigest: digestSourceIdentity(source('members')),
+        sourceRevision: 2,
+        sourceBaseRevision: null,
+        observedAt: '2026-08-05T00:00:00.000Z',
+        items: [],
+      },
+    ],
+  });
 });
 
 test('target review ignores other initial source drafts until they are reviewed', async () => {

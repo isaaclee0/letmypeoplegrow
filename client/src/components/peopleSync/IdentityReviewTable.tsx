@@ -56,6 +56,7 @@ export interface IdentityReviewTableProps {
   onRefreshReview?: () => void | Promise<void>;
   onPreviewCancelled?: () => void;
   previewing: boolean;
+  initialDecisionFilter?: ReviewRowFilter;
 }
 
 interface CorrectionFailure {
@@ -144,10 +145,11 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
   onRefreshReview,
   onPreviewCancelled,
   previewing,
+  initialDecisionFilter = 'all',
 }, ref) {
   const [activeTab, setActiveTab] = useState<IdentityTab>('decisions');
   const [queries, setQueries] = useState<Record<IdentityTab, string>>({ decisions: '', established: '' });
-  const [filter, setFilter] = useState<ReviewRowFilter>('all');
+  const [filter, setFilter] = useState<ReviewRowFilter>(initialDecisionFilter);
   const [pages, setPages] = useState<Record<IdentityTab, number>>({ decisions: 1, established: 1 });
   const [pageSize, setPageSize] = useState(DEFAULT_REVIEW_PAGE_SIZE);
   const [pickerExternalId, setPickerExternalId] = useState<string | null>(null);
@@ -194,7 +196,10 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
     setPickerExternalId(null);
     setRemovalExternalId(null);
     setEstablishedExternalId(null);
-  }, [review]);
+    setActiveTab('decisions');
+    setFilter(initialDecisionFilter);
+    setPages({ decisions: 1, established: 1 });
+  }, [initialDecisionFilter, review]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return undefined;

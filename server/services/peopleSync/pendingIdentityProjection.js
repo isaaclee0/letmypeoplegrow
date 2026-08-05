@@ -25,10 +25,16 @@ function visibleSource(batch) {
   const sourceRole = batch?.draftSource ? 'draft' : 'active';
   const source = batch?.draftSource || batch?.source;
   if (!source || typeof source !== 'object') throw new Error(`Batch ${batch?.id} has no visible source`);
-  const sourceRevision = positiveId(batch?.sourceRevision, 'Source revision');
+  const sourceRevision = Number(batch?.sourceRevision);
+  if (!Number.isSafeInteger(sourceRevision) || sourceRevision < 0 || (sourceRole === 'active' && sourceRevision === 0)) {
+    throw new Error('Source revision must be valid for the visible source');
+  }
   const sourceBaseRevision = sourceRole === 'draft'
-    ? positiveId(batch?.draftSourceBaseRevision, 'Draft source base revision')
+    ? Number(batch?.draftSourceBaseRevision)
     : null;
+  if (sourceRole === 'draft' && (!Number.isSafeInteger(sourceBaseRevision) || sourceBaseRevision < 0)) {
+    throw new Error('Draft source base revision must be a non-negative integer');
+  }
   return {
     sourceRole,
     sourceIdentityDigest: digestSourceIdentity(source),
@@ -87,8 +93,9 @@ function normalizeObservations(provider, observations) {
     batchIds.add(batchId);
     if (!['active', 'draft'].includes(observation?.sourceRole) ||
         typeof observation?.sourceIdentityDigest !== 'string' || !/^[a-f0-9]{64}$/.test(observation.sourceIdentityDigest) ||
-        !Number.isSafeInteger(observation?.sourceRevision) || observation.sourceRevision < 1 ||
-        (observation.sourceRole === 'draft' && (!Number.isSafeInteger(observation.sourceBaseRevision) || observation.sourceBaseRevision < 1)) ||
+        !Number.isSafeInteger(observation?.sourceRevision) || observation.sourceRevision < 0 ||
+        (observation.sourceRole === 'active' && observation.sourceRevision < 1) ||
+        (observation.sourceRole === 'draft' && (!Number.isSafeInteger(observation.sourceBaseRevision) || observation.sourceBaseRevision < 0)) ||
         (observation.sourceRole === 'active' && observation.sourceBaseRevision !== null) ||
         typeof observation?.observedAt !== 'string' || Number.isNaN(Date.parse(observation.observedAt)) ||
         !Array.isArray(observation.items)) {

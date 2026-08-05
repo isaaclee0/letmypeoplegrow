@@ -1923,6 +1923,45 @@ test('a v2 defer upserts a deferred hold without linking or creating the person'
   });
 });
 
+test('a partial v2 apply replaces the batch pending-identity projection in its transaction', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batchId = await seedSyncBatch(churchId, 'elvanto');
+    const source = { kind: 'elvanto_group', externalId: 'helpers', name: 'Helpers' };
+    await Database.query(
+      `UPDATE people_sync_batches
+          SET source_kind = ?, source_external_id = ?, source_name = ?, source_revision = 1
+        WHERE id = ? AND church_id = ?`,
+      [source.kind, source.externalId, source.name, batchId, churchId]
+    );
+    const plan = v2Plan({ 'ext-1': reviewIdentity() }, {
+      addPeople: [{
+        id: 'addPeople:ext-1', externalPersonId: 'ext-1', firstName: 'Unsigned', lastName: 'Value',
+        isChild: false, familyId: null, peopleType: 'regular',
+      }],
+    });
+
+    await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-1': { outcome: 'defer' } }),
+      pendingIdentityObservations: [{
+        batchId,
+        sourceRole: 'active',
+        sourceIdentityDigest: digestSourceIdentity(source),
+        sourceRevision: 1,
+        sourceBaseRevision: null,
+        observedAt: '2026-08-05T00:00:00.000Z',
+        items: [{ externalPersonId: 'ext-1', reason: 'identity_decision_required' }],
+      }],
+    });
+
+    assert.deepEqual(await Database.query(
+      `SELECT external_person_id, reason FROM people_sync_batch_identity_projection_items
+        WHERE church_id = ? AND provider = ? AND batch_id = ?`,
+      [churchId, 'elvanto', batchId]
+    ), [{ external_person_id: 'ext-1', reason: 'deferred' }]);
+  });
+});
+
 test('a v2 rejected pair persists both its exact exclusion and pair-rejected hold', async () => {
   // Catches pair rejection being treated as a transient skip, losing either
   // the exact candidate exclusion or the stronger hold reason.

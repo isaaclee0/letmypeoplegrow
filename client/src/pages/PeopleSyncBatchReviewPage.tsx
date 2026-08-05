@@ -177,6 +177,9 @@ export default function PeopleSyncBatchReviewPage() {
           applying={applying || loading}
           interactionDisabled={loading}
           requireAllPlannedArchivesAccepted={adapter.provider === 'planning_center'}
+          initialIdentityFilter={visibleBatch.unresolvedIdentityCount && visibleBatch.unresolvedIdentityCount > 0
+            ? 'needs_attention'
+            : 'all'}
         />
       )}
     </section>

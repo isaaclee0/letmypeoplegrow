@@ -4,6 +4,8 @@ const linkRepository = require('./linkRepository');
 const matchReviewRepository = require('./matchReviewRepository');
 const authority = require('./authority');
 const batchRepository = require('./batchRepository');
+const { replacePendingIdentityObservationsWithConnection } = require('./pendingIdentityProjection');
+const { digestSourceIdentity } = require('./sourceModel');
 const { BUCKETS } = require('./plan');
 const { buildLocalIdentityDigest } = require('./reviewContext');
 const { digestPlan, digestReviewToken } = require('./planDigest');
@@ -358,6 +360,35 @@ async function applyCorrectionReviewState(conn, { churchId, provider, accepted, 
   }
 }
 
+function finalizePendingIdentityObservations(observations, accepted, linkActions, newIndividualIdByExternal, promotedBatches) {
+  if (observations === null || observations === undefined) return null;
+  if (!Array.isArray(observations)) throw new Error('Pending identity observations must be an array');
+  const resolved = new Set([
+    ...linkActions.map((action) => action.externalPersonId),
+    ...newIndividualIdByExternal.keys(),
+  ]);
+  const promotedByBatchId = new Map((promotedBatches || []).map((batch) => [batch.id, batch]));
+  return observations.map((observation) => {
+    const promoted = promotedByBatchId.get(observation.batchId);
+    const source = promoted ? {
+      sourceRole: 'active',
+      sourceIdentityDigest: digestSourceIdentity(promoted.source),
+      sourceRevision: promoted.sourceRevision,
+      sourceBaseRevision: null,
+    } : {};
+    return {
+      ...observation,
+      ...source,
+      items: observation.items
+        .filter((item) => !resolved.has(item.externalPersonId))
+        .map((item) => ({
+          ...item,
+          reason: accepted.deferredReasons?.get(item.externalPersonId) || item.reason,
+        })),
+    };
+  });
+}
+
 // Defense in depth: Task 6's plan.js already refuses to generate managed
 // mutations for a person/family locked by a DIFFERENT active authority (see
 // plan.js's `canManage`/`activeAuthority` gating). This re-checks the same
@@ -417,6 +448,7 @@ async function applyPeopleSyncPlan({
   activateAuthority = false,
   authorityPreviewId = null,
   sourcePromotions = [],
+  pendingIdentityObservations = null,
   reviewedApply = null,
   authorityExpectation = null,
   sourceExpectations = null,
@@ -896,9 +928,10 @@ async function applyPeopleSyncPlan({
       });
     }
 
+    let promotedBatches = [];
     if (sourcePromotions.length > 0) {
       try {
-        await batchRepository.promoteSourceDraftsWithConnection(conn, {
+        promotedBatches = await batchRepository.promoteSourceDraftsWithConnection(conn, {
           churchId, provider, promotions: sourcePromotions,
         });
       } catch (error) {
@@ -910,6 +943,15 @@ async function applyPeopleSyncPlan({
         }
         throw error;
       }
+    }
+
+    const finalObservations = finalizePendingIdentityObservations(
+      pendingIdentityObservations, accepted, linkActions, newIndividualIdByExternal, promotedBatches
+    );
+    if (finalObservations !== null) {
+      await replacePendingIdentityObservationsWithConnection(conn, {
+        churchId, provider, observations: finalObservations,
+      });
     }
 
     // Authority activation is part of this same critical transaction. If
