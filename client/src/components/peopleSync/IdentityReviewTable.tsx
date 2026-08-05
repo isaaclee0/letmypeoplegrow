@@ -397,8 +397,15 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
   };
 
   const changeQuery = (nextQuery: string) => {
-    setQueries((current) => ({ ...current, [activeTab]: nextQuery }));
-    setPages((current) => ({ ...current, [activeTab]: 1 }));
+    const decisionMatches = filterReviewRows(decisionRows, nextQuery, filter);
+    const establishedMatches = filterReviewRows(establishedRows, nextQuery, 'all');
+    const otherTab: IdentityTab = activeTab === 'decisions' ? 'established' : 'decisions';
+    const activeMatches = activeTab === 'decisions' ? decisionMatches : establishedMatches;
+    const otherMatches = otherTab === 'decisions' ? decisionMatches : establishedMatches;
+
+    setQueries({ decisions: nextQuery, established: nextQuery });
+    setPages({ decisions: 1, established: 1 });
+    if (activeMatches.length === 0 && otherMatches.length > 0) setActiveTab(otherTab);
   };
 
   const changeFilter = (nextFilter: ReviewRowFilter) => {

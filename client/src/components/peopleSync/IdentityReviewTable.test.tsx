@@ -383,6 +383,19 @@ describe('IdentityReviewTable rendering', () => {
     expect(screen.getAllByText('Provider3 Person')).not.toHaveLength(0);
   });
 
+  it('switches to already linked when the search only matches an established identity', async () => {
+    const user = userEvent.setup();
+    render(<TableHarness />);
+
+    const search = screen.getByRole('searchbox', { name: 'Search identities' });
+    await user.type(search, 'Established Source');
+
+    expect(screen.getByRole('tab', { name: 'Already linked 1' })).toHaveAttribute('aria-selected', 'true');
+    expect(search).toHaveValue('Established Source');
+    expect(screen.getAllByText('Established Source')).not.toHaveLength(0);
+    expect(screen.getByRole('table', { name: 'Already linked identities' })).toBeInTheDocument();
+  });
+
   it('defaults to fifty rows, supports rows-per-page selection, and retains decisions across pages', async () => {
     const user = userEvent.setup();
     render(<TableHarness />);

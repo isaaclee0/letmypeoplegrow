@@ -357,4 +357,24 @@ describe('PeoplePage badge filter', () => {
     expect(screen.queryByText('Person 3')).not.toBeInTheDocument();
     expect(screen.getByText('People (2) (Grouped by Family)')).toBeInTheDocument();
   });
+
+  it('does not leave a mouse-focus ring looking like selection after a badge is deselected', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      authorityProvider: 'none',
+      people: [
+        person(1, { badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' }),
+        person(2),
+      ],
+    });
+
+    const coachBadge = await screen.findByRole('button', { name: 'Filter by badge: Coach' });
+    await user.click(coachBadge);
+    await user.click(coachBadge);
+
+    expect(coachBadge).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Person 2')).toBeInTheDocument();
+    expect(coachBadge).not.toHaveClass('focus:ring-2');
+    expect(coachBadge).toHaveClass('focus-visible:ring-2');
+  });
 });

@@ -1813,7 +1813,7 @@ const PeoplePage: React.FC = () => {
                       onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
                         ? current.filter((key) => key !== badge.key)
                         : [...current, badge.key])}
-                      className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full transition-transform focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
+                      className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
                         selected
                           ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
                           : 'hover:scale-110'
