@@ -421,6 +421,12 @@ CREATE TABLE IF NOT EXISTS church_settings (
   planning_center_field_definitions_cache TEXT,
   planning_center_last_notified_review TEXT,
   planning_center_track_background_checks INTEGER DEFAULT 0,
+  planning_center_medical_notes_enabled INTEGER NOT NULL DEFAULT 0,
+  planning_center_medical_notes_minimum_role TEXT NOT NULL DEFAULT 'admin',
+  planning_center_medical_notes_badge_icon TEXT,
+  planning_center_medical_notes_badge_color TEXT,
+  planning_center_medical_notes_last_refreshed_at TEXT,
+  planning_center_medical_notes_last_refresh_result TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -455,6 +461,16 @@ CREATE INDEX IF NOT EXISTS idx_gatherings_active ON gathering_types(is_active);
 CREATE INDEX IF NOT EXISTS idx_gatherings_day ON gathering_types(day_of_week);
 CREATE INDEX IF NOT EXISTS idx_gatherings_type ON gathering_types(attendance_type);
 CREATE INDEX IF NOT EXISTS idx_gatherings_church ON gathering_types(church_id);
+
+CREATE TABLE IF NOT EXISTS planning_center_medical_note_gatherings (
+  church_id TEXT NOT NULL,
+  gathering_type_id INTEGER NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (church_id, gathering_type_id),
+  FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pco_medical_gatherings_church
+  ON planning_center_medical_note_gatherings(church_id);
 
 CREATE TABLE IF NOT EXISTS user_gathering_assignments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -509,6 +525,7 @@ CREATE TABLE IF NOT EXISTS individuals (
   planning_center_id TEXT,
   pco_link_declined INTEGER DEFAULT 0,
   pco_background_check_cleared INTEGER,
+  pco_has_medical_notes INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );

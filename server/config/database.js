@@ -632,6 +632,24 @@ class Database {
       if (!settingsCols.some(c => c.name === 'weekly_review_guidance_updated_at')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN weekly_review_guidance_updated_at TEXT');
       }
+      if (!settingsCols.some(c => c.name === 'planning_center_medical_notes_enabled')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_medical_notes_enabled INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_medical_notes_minimum_role')) {
+        db.exec("ALTER TABLE church_settings ADD COLUMN planning_center_medical_notes_minimum_role TEXT NOT NULL DEFAULT 'admin'");
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_medical_notes_badge_icon')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_medical_notes_badge_icon TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_medical_notes_badge_color')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_medical_notes_badge_color TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_medical_notes_last_refreshed_at')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_medical_notes_last_refreshed_at TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_medical_notes_last_refresh_result')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_medical_notes_last_refresh_result TEXT');
+      }
 
       // Migrate families: add planning_center_id if missing
       const familiesCols = db.prepare('PRAGMA table_info(families)').all();
@@ -647,6 +665,19 @@ class Database {
       if (!individualsCols.some(c => c.name === 'pco_link_declined')) {
         db.exec('ALTER TABLE individuals ADD COLUMN pco_link_declined INTEGER DEFAULT 0');
       }
+      if (!individualsCols.some(c => c.name === 'pco_has_medical_notes')) {
+        db.exec('ALTER TABLE individuals ADD COLUMN pco_has_medical_notes INTEGER NOT NULL DEFAULT 0');
+      }
+
+      db.exec(`CREATE TABLE IF NOT EXISTS planning_center_medical_note_gatherings (
+        church_id TEXT NOT NULL,
+        gathering_type_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (church_id, gathering_type_id),
+        FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE
+      )`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pco_medical_gatherings_church
+        ON planning_center_medical_note_gatherings(church_id)`);
 
       // Migrate church_settings: reconciliation schedule columns
       if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_schedule_enabled')) {
