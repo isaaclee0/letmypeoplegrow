@@ -3,6 +3,7 @@ const https = require('https');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { getAuthority } = require('../services/peopleSync/authority');
+const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -578,6 +579,9 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
           );
         }
       });
+    }
+    if (planningCenterTrackBackgroundChecks === true) {
+      await backgroundCheckSync.refreshBackgroundCheckStatuses(req.user.church_id);
     }
     res.json({ message: 'Integration settings updated.' });
   } catch (error) {

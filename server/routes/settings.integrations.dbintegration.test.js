@@ -9,6 +9,7 @@ const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const settingsRouter = require('./settings');
 const { beginAuthoritySwitch, commitAuthoritySwitch, getAuthority } = require('../services/peopleSync/authority');
+const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
 
 async function startApp(churchId) {
   const inserted = await Database.query(
@@ -83,6 +84,36 @@ test('legacy settings route may disable active PCO authority without activating 
       const response = await app.request({ planningCenterSyncIndicator: false });
       assert.equal(response.status, 200);
       assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: null });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('enabling background-check tracking immediately refreshes Planning Center statuses', async (t) => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO church_settings (church_id, church_name, planning_center_track_background_checks)
+       VALUES (?, 'Settings Test Church', 0)`,
+      [churchId],
+    );
+    const refreshedChurches = [];
+    t.mock.method(backgroundCheckSync, 'refreshBackgroundCheckStatuses', async (refreshedChurchId) => {
+      refreshedChurches.push(refreshedChurchId);
+      return { updated: 3, cleared: 2, notCleared: 1, unknown: 0 };
+    });
+    const app = await startApp(churchId);
+    try {
+      const response = await app.request({ planningCenterTrackBackgroundChecks: true });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(refreshedChurches, [churchId]);
+      const row = (await Database.query(
+        `SELECT planning_center_track_background_checks
+           FROM church_settings WHERE church_id = ?`,
+        [churchId],
+      ))[0];
+      assert.equal(row.planning_center_track_background_checks, 1);
     } finally {
       await app.close();
     }
