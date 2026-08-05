@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -254,7 +254,7 @@ describe('PeoplePage external source filter', () => {
     });
 
     await user.selectOptions(await screen.findByLabelText('Planning Center Link Status'), 'unlinked');
-    await user.click(screen.getByLabelText('Group people by families'));
+    await user.click(screen.getByRole('button', { name: 'Individuals' }));
 
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
     expect(screen.getByText('Person 2')).toBeInTheDocument();
@@ -278,5 +278,83 @@ describe('PeoplePage external source filter', () => {
 
     await waitFor(() => expect(screen.queryByText('1 selected')).not.toBeInTheDocument());
     expect(screen.queryByText('Person 1')).not.toBeInTheDocument();
+  });
+});
+
+describe('PeoplePage badge filter', () => {
+  it('switches between family and individual views with a segmented control', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      authorityProvider: 'none',
+      people: [person(1)],
+    });
+
+    const familiesButton = await screen.findByRole('button', { name: 'Families' });
+    const individualsButton = screen.getByRole('button', { name: 'Individuals' });
+
+    expect(familiesButton).toHaveAttribute('aria-pressed', 'true');
+    expect(individualsButton).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('checkbox', { name: /Group people by families/ })).not.toBeInTheDocument();
+
+    await user.click(individualsButton);
+
+    expect(familiesButton).toHaveAttribute('aria-pressed', 'false');
+    expect(individualsButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('People (1) (Individual View)')).toBeInTheDocument();
+  });
+
+  it('places the badge filters between the view and age controls', async () => {
+    renderPeoplePage({
+      authorityProvider: 'none',
+      people: [person(1, { badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' })],
+    });
+
+    const displayFilters = await screen.findByRole('group', { name: 'People display filters' });
+    const controlOrder = within(displayFilters)
+      .getAllByRole('group')
+      .map((group) => group.getAttribute('aria-label'));
+
+    expect(controlOrder).toEqual(['View people as', 'Filter by badge', 'Filter by age']);
+  });
+
+  it('offers each used badge as a visual filter with its text in a helper', async () => {
+    renderPeoplePage({
+      authorityProvider: 'none',
+      people: [
+        person(1, { badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' }),
+        person(2, { badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' }),
+        person(3, { badgeText: 'Guest', badgeColor: '#16a34a', badgeIcon: '' }),
+      ],
+    });
+
+    expect(await screen.findByRole('button', { name: 'Filter by badge: Coach' })).toHaveAttribute('title', 'Coach');
+    expect(screen.getByRole('button', { name: 'Filter by badge: Guest' })).toHaveAttribute('title', 'Guest');
+    expect(screen.getAllByRole('button', { name: /Filter by badge:/ })).toHaveLength(2);
+  });
+
+  it('shows people matching any selected badge and updates the roster count', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      authorityProvider: 'none',
+      people: [
+        person(1, { badgeText: 'Coach', badgeColor: '#dc2626', badgeIcon: 'star' }),
+        person(2, { badgeText: 'Leader', badgeColor: '#2563eb', badgeIcon: 'heart' }),
+        person(3),
+      ],
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Filter by badge: Coach' }));
+
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(screen.queryByText('Person 2')).not.toBeInTheDocument();
+    expect(screen.queryByText('Person 3')).not.toBeInTheDocument();
+    expect(screen.getByText('People (1) (Grouped by Family)')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Filter by badge: Leader' }));
+
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(screen.getByText('Person 2')).toBeInTheDocument();
+    expect(screen.queryByText('Person 3')).not.toBeInTheDocument();
+    expect(screen.getByText('People (2) (Grouped by Family)')).toBeInTheDocument();
   });
 });

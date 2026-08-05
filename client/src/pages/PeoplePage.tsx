@@ -106,6 +106,23 @@ interface VisitorConfig {
   travellerVisitorServiceLimit: number;
 }
 
+interface BadgeFilterOption {
+  key: string;
+  text: string | null;
+  icon: string;
+  backgroundColor: string;
+  color: string;
+  helperText: string;
+}
+
+function badgeFilterKey(badge: Pick<BadgeFilterOption, 'text' | 'icon' | 'backgroundColor'>): string {
+  return JSON.stringify([
+    badge.icon,
+    badge.backgroundColor.toLowerCase(),
+    badge.text || '',
+  ]);
+}
+
 export function matchesExternalSourceFilter(
   person: Pick<Person, 'externalLinks'>,
   authorityProvider: AuthorityProvider,
@@ -192,6 +209,7 @@ const PeoplePage: React.FC = () => {
   const [selectedFamily, setSelectedFamily] = useState<number | null>(null);
   const [selectedGathering, setSelectedGathering] = useState<number | null>(null);
   const [ageFilter, setAgeFilter] = useState<'all' | 'adult' | 'child'>('all');
+  const [selectedBadgeKeys, setSelectedBadgeKeys] = useState<string[]>([]);
   const [externalSourceFilter, setExternalSourceFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
   // Removed selectedPerson state - no longer used
   // Removed showPersonDetails - not used anymore
@@ -361,6 +379,54 @@ const PeoplePage: React.FC = () => {
     });
   };
 
+  const getPersonBadgeKey = (person: Person): string | null => {
+    const badge = getBadgeInfo(person);
+    if (!badge) return null;
+
+    return badgeFilterKey({
+      text: badge.text,
+      icon: badge.icon,
+      backgroundColor: badge.styles.backgroundColor,
+    });
+  };
+
+  const usedBadgeOptions = useMemo(() => {
+    const options = new Map<string, BadgeFilterOption>();
+
+    people.forEach((person) => {
+      if (person.peopleType !== 'regular'
+        || !matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter)) {
+        return;
+      }
+
+      const badge = getBadgeInfo(person);
+      if (!badge) return;
+
+      const option: BadgeFilterOption = {
+        key: '',
+        text: badge.text,
+        icon: badge.icon,
+        backgroundColor: badge.styles.backgroundColor,
+        color: badge.styles.color,
+        helperText: badge.text || (badge.icon ? `${badge.icon} badge` : 'Badge'),
+      };
+      option.key = badgeFilterKey(option);
+      options.set(option.key, option);
+    });
+
+    return Array.from(options.values());
+  }, [authorityProvider, badgeConfig, externalSourceFilter, people]);
+
+  const usedBadgeKeysSignature = JSON.stringify(usedBadgeOptions.map((badge) => badge.key));
+
+  useEffect(() => {
+    const availableKeys = new Set(usedBadgeOptions.map((badge) => badge.key));
+    setSelectedBadgeKeys((current) => {
+      const next = current.filter((key) => availableKeys.has(key));
+      return next.length === current.length ? current : next;
+    });
+  }, [usedBadgeKeysSignature]);
+
   useEffect(() => {
     loadPeople();
     loadFamilies();
@@ -373,14 +439,16 @@ const PeoplePage: React.FC = () => {
     const visibleIds = new Set(
       people
         .filter((person) => person.peopleType !== 'regular'
-          || matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter))
+          || (matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter)
+            && (selectedBadgeKeys.length === 0
+              || selectedBadgeKeys.includes(getPersonBadgeKey(person) || ''))))
         .map((person) => person.id),
     );
     setSelectedPeople((current) => {
       const next = current.filter((id) => visibleIds.has(id));
       return next.length === current.length ? current : next;
     });
-  }, [authorityProvider, externalSourceFilter, people]);
+  }, [authorityProvider, badgeConfig, externalSourceFilter, people, selectedBadgeKeys]);
 
   useEffect(() => {
     const requestedFilter = searchParams.get('externalSource');
@@ -726,6 +794,9 @@ const PeoplePage: React.FC = () => {
     person.peopleType === 'regular'
       && matchesExternalSourceFilter(person, authorityProvider, externalSourceFilter)
   );
+  const selectedBadgeKeySet = new Set(selectedBadgeKeys);
+  const matchesBadgeFilter = (person: Person) => selectedBadgeKeySet.size === 0
+    || selectedBadgeKeySet.has(getPersonBadgeKey(person) || '');
 
   const groupedPeople = externalSourceFilteredPeople.reduce((groups, person) => {
     if (person.familyId && person.familyName) {
@@ -808,6 +879,9 @@ const PeoplePage: React.FC = () => {
       );
       if (group.members.length === 0) return false;
     }
+
+    group.members = group.members.filter(matchesBadgeFilter);
+    if (group.members.length === 0) return false;
     
     // Filter by family selection
     if (selectedFamily !== null) {
@@ -1029,6 +1103,7 @@ const PeoplePage: React.FC = () => {
     // Filter by age (adult/child)
     if (ageFilter === 'child' && !person.isChild) return false;
     if (ageFilter === 'adult' && person.isChild) return false;
+    if (!matchesBadgeFilter(person)) return false;
     
     // Filter by gathering selection
     if (selectedGathering !== null) {
@@ -1691,30 +1766,80 @@ const PeoplePage: React.FC = () => {
             )}
           </div>
           
-          {/* Grouping Toggle & Age Filter */}
-          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-col items-center sm:flex-row sm:items-center sm:justify-between gap-x-3 gap-y-4">
-            <div className="flex items-center space-x-3">
-              <input
-                type="checkbox"
-                id="groupByFamily"
-                checked={groupByFamily}
-                onChange={(e) => {
-                  setGroupByFamily(e.target.checked);
-                  setSelectedPeople([]);
-                }}
-                className="h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <label htmlFor="groupByFamily" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Group people by families
-              </label>
-              <span className="text-xs text-gray-500">
-                (Uncheck for individual view with easier multi-select)
-              </span>
+          {/* View, badge, and age filters */}
+          <div
+            className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-x-4 gap-y-3"
+            role="group"
+            aria-label="People display filters"
+          >
+            <div
+              className="inline-flex items-center justify-self-center sm:justify-self-start space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
+              role="group"
+              aria-label="View people as"
+            >
+              {(['families', 'individuals'] as const).map((value) => {
+                const selected = value === 'families' ? groupByFamily : !groupByFamily;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => {
+                      setGroupByFamily(value === 'families');
+                      setSelectedPeople([]);
+                    }}
+                    className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                      selected
+                        ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
+                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    {value === 'families' ? 'Families' : 'Individuals'}
+                  </button>
+                );
+              })}
             </div>
-            <div className="inline-flex items-center space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5">
+            {usedBadgeOptions.length > 0 ? (
+              <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filter by badge">
+                {usedBadgeOptions.map((badge) => {
+                  const selected = selectedBadgeKeySet.has(badge.key);
+                  return (
+                    <button
+                      key={badge.key}
+                      type="button"
+                      aria-label={`Filter by badge: ${badge.helperText}`}
+                      aria-pressed={selected}
+                      title={badge.helperText}
+                      onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
+                        ? current.filter((key) => key !== badge.key)
+                        : [...current, badge.key])}
+                      className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full transition-transform focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
+                        selected
+                          ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
+                          : 'hover:scale-110'
+                      }`}
+                      style={{ backgroundColor: badge.backgroundColor, color: badge.color }}
+                    >
+                      {badge.icon && (
+                        <BadgeIcon type={badge.icon as BadgeIconType} className="h-4 w-4" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div aria-hidden="true" />
+            )}
+            <div
+              className="inline-flex items-center justify-self-center sm:justify-self-end space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
+              role="group"
+              aria-label="Filter by age"
+            >
               {(['all', 'adult', 'child'] as const).map((value) => (
                 <button
                   key={value}
+                  type="button"
+                  aria-pressed={ageFilter === value}
                   onClick={() => setAgeFilter(value)}
                   className={`flex items-center space-x-1.5 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                     ageFilter === value
