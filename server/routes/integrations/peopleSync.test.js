@@ -381,6 +381,22 @@ test('PUT /settings rejects a non-boolean elvantoIncludeContacts', async () => {
   });
 });
 
+test('PUT /settings updates independent sync and editing policies', async () => {
+  let patchSeen = null;
+  await withServer({
+    getSettings: async () => ({ fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1 }),
+    updateSettings: async (_churchId, patch) => { patchSeen = patch; return patch; },
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/settings`, {
+      method: 'PUT', body: { syncEnabled: false, peopleEditingLocked: false },
+    });
+    assert.equal(status, 200);
+    assert.equal(body.settings.syncEnabled, false);
+    assert.equal(body.settings.peopleEditingLocked, false);
+  });
+  assert.deepEqual(patchSeen, { syncEnabled: false, peopleEditingLocked: false });
+});
+
 test('PUT /settings rejects an out-of-range day for the resulting frequency', async () => {
   await withServer({ getSettings: async () => ({ fullReconciliationFrequency: 'weekly' }) }, { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/settings`, { method: 'PUT', body: { fullReconciliationDay: 15 } });

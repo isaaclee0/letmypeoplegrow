@@ -18,6 +18,7 @@ import logger from '../../utils/logger';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
+import PeopleEditingLockControl from '../peopleSync/PeopleEditingLockControl';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
 import type { BatchOperationalState, PeopleSyncBatch } from '../peopleSync/types';
 import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
@@ -453,43 +454,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
               {/* Sync batches */}
               <div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Controls automatic scheduled sync for the batches below. When off, manual Review &amp; sync remains available.
-                    </p>
-                  </div>
-                  {pcSettingsStatus === 'known' ? (
-                    <button
-                      type="button"
-                      aria-label="Automatic Planning Center sync"
-                      onClick={() => toggleMasterSync(!pcSyncEnabled)}
-                      disabled={pcSettingsUpdating}
-                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${pcSyncEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={pcSyncEnabled}
-                    >
-                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  ) : (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {pcSettingsStatus === 'loading' ? 'Loading automatic sync setting…' : 'Automatic sync setting unavailable'}
-                    </span>
-                  )}
-                </div>
-
-                {pcSettingsError && (
-                  <div role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
-                    <p>{pcSettingsError}</p>
-                    {pcSettingsStatus === 'error' && (
-                      <button type="button" onClick={() => void loadPcSettings()} className="mt-1 underline">
-                        Retry automatic sync setting
-                      </button>
-                    )}
-                  </div>
-                )}
-
                 {syncStats && (
                   <div className="mt-4">
                     <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -536,9 +500,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             navigate(`/app/settings/integrations/planning-center/batches/${savedBatch.id}/review`);
                             return;
                           }
-                          setEditingBatch(null);
-                          setBatchNotice('Batch prepared. Switch source of truth to review and activate it.');
-                          void reloadAfterBatchMutation();
+                          navigate('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
                           return;
                         }
                         setEditingBatch(null);
@@ -563,7 +525,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             {batch.gatheringTypeId ? 'Assigns to a gathering · ' : ''}
                             {batch.scheduleEnabled
                               ? pcSettingsStatus === 'known'
-                                ? (pcSyncEnabled ? `Runs ${batch.scheduleFrequency}` : 'Automatic sync paused')
+                                ? `Runs ${batch.scheduleFrequency}`
                                 : pcSettingsStatus === 'loading' ? 'Automatic sync status loading' : 'Automatic sync status unavailable'
                               : 'Manual only'}
                           </p>
@@ -628,7 +590,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 )}
               </div>
 
-              {peopleSourceControl}
+      {peopleSourceControl}
+      {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' && (
+        <PeopleEditingLockControl settings={peopleSyncSettings} onRefresh={refreshPeopleSync} />
+      )}
 
               {/* PCO-specific background-check tracking remains independent of people authority. */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">

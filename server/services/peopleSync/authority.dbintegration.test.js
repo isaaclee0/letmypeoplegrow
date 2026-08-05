@@ -5,6 +5,8 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const {
   PEOPLE_SOURCE_LOCKED,
   getAuthority,
+  getPeopleSyncPolicy,
+  updatePeopleSyncPolicy,
   beginAuthoritySwitch,
   getAuthorityPreviewIntent,
   cancelAuthoritySwitch,
@@ -51,6 +53,31 @@ test('authority switch is pending until explicitly committed', async () => {
     assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: 'elvanto' });
     await commitAuthoritySwitch(churchId, 'elvanto');
     assert.deepEqual(await getAuthority(churchId), { active: 'elvanto', pending: null });
+  });
+});
+
+test('people sync policy defaults to locked and authority activation resumes sync', async () => {
+  await withTestChurchDb(async (churchId) => {
+    assert.deepEqual(await getPeopleSyncPolicy(churchId), {
+      syncEnabled: true,
+      peopleEditingLocked: true,
+    });
+
+    await updatePeopleSyncPolicy(churchId, {
+      syncEnabled: false,
+      peopleEditingLocked: false,
+    });
+    assert.deepEqual(await getPeopleSyncPolicy(churchId), {
+      syncEnabled: false,
+      peopleEditingLocked: false,
+    });
+
+    await beginAuthoritySwitch(churchId, 'elvanto');
+    await commitAuthoritySwitch(churchId, 'elvanto');
+    assert.deepEqual(await getPeopleSyncPolicy(churchId), {
+      syncEnabled: true,
+      peopleEditingLocked: false,
+    });
   });
 });
 

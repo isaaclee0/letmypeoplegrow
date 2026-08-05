@@ -11,6 +11,7 @@ vi.mock('../../services/api', () => ({
     cancelAuthorityPreview: vi.fn(),
     applyAuthority: vi.fn(),
     disableAuthority: vi.fn(),
+    updateSettings: vi.fn(),
   },
 }));
 
@@ -81,6 +82,8 @@ const review: PeopleSyncReview = {
 const initialSettings: PeopleSyncSettings = {
   authorityProvider: 'planning_center',
   pendingAuthorityProvider: null,
+  syncEnabled: true,
+  peopleEditingLocked: true,
   elvantoIncludeContacts: true,
   elvantoAlignPeopleType: true,
   fullReconciliationFrequency: 'weekly',
@@ -152,6 +155,7 @@ function Harness({
 describe('PeopleSourceControl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(peopleSyncAPI.updateSettings).mockResolvedValue({ data: { success: true, settings: initialSettings } });
     vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockResolvedValue({
       data: { success: true, authority: { active: 'none', pending: null } },
     });
@@ -180,17 +184,15 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
 
-    expect(screen.getByText('Switch source of truth from Planning Center to Elvanto?')).toBeInTheDocument();
-    const dialog = screen.getByRole('dialog', { name: 'Switch source of truth from Planning Center to Elvanto?' });
-    expect(dialog).toHaveTextContent('Linked people and families become managed by Elvanto.');
-    expect(dialog).toHaveTextContent('Local edits and lifecycle actions are restricted');
-    expect(dialog).toHaveTextContent('Elvanto schedules may run');
+    expect(screen.getByText('Switch people management from Planning Center to Elvanto?')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Switch people management from Planning Center to Elvanto?' });
+    expect(dialog).toHaveTextContent('Elvanto will manage people after the review is applied.');
     expect(dialog).toHaveTextContent('Planning Center remains connected, but its batches become inactive.');
     expect(dialog).toHaveTextContent('1 enabled Elvanto batch will be activated by this review.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
-    expect(screen.queryByText('Switch source of truth from Planning Center to Elvanto?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Switch people management from Planning Center to Elvanto?')).not.toBeInTheDocument();
   });
 
   it('moves focus into the switch warning, traps Tab, and restores focus after Escape', async () => {
@@ -198,7 +200,7 @@ describe('PeopleSourceControl', () => {
 
     const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
     fireEvent.click(toggle);
-    const dialog = screen.getByRole('dialog', { name: 'Switch source of truth from Planning Center to Elvanto?' });
+    const dialog = screen.getByRole('dialog', { name: 'Switch people management from Planning Center to Elvanto?' });
     const continueButton = screen.getByRole('button', { name: 'Continue to review' });
     const cancelButton = screen.getByRole('button', { name: 'Cancel' });
 
@@ -420,7 +422,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
 
-    expect(screen.getByText('Switch source of truth from Elvanto to Planning Center?')).toBeInTheDocument();
+    expect(screen.getByText('Switch people management from Elvanto to Planning Center?')).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toHaveTextContent(
       'Elvanto remains connected, but its batches become inactive.',
     );
@@ -715,19 +717,16 @@ describe('PeopleSourceControl', () => {
   });
 
   it('confirms before disabling the active provider and refreshes persisted state', async () => {
-    vi.mocked(peopleSyncAPI.disableAuthority).mockResolvedValue({
-      data: { success: true, authority: { active: 'none', pending: null } },
-    });
     render(<Harness provider="planning_center" />);
 
     const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     fireEvent.click(toggle);
-    expect(screen.getByText('Stop using a people source of truth?')).toBeInTheDocument();
-    expect(peopleSyncAPI.disableAuthority).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+    expect(screen.getByText('Pause people sync?')).toBeInTheDocument();
+    expect(peopleSyncAPI.updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause sync' }));
 
-    await waitFor(() => expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(toggle).not.toBeChecked());
+    await waitFor(() => expect(peopleSyncAPI.updateSettings).toHaveBeenCalledWith({ syncEnabled: false }));
+    expect(toggle).toBeChecked();
   });
 
   it('moves focus into the disable dialog and restores it after Escape', async () => {
@@ -735,14 +734,14 @@ describe('PeopleSourceControl', () => {
 
     const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     fireEvent.click(toggle);
-    const dialog = screen.getByRole('dialog', { name: 'Stop using a people source of truth?' });
+    const dialog = screen.getByRole('dialog', { name: 'Pause people sync?' });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Use no people source' })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pause sync' })).toHaveFocus());
     fireEvent.keyDown(dialog, { key: 'Escape' });
 
     await waitFor(() => expect(toggle).toHaveFocus());
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(peopleSyncAPI.disableAuthority).not.toHaveBeenCalled();
+    expect(peopleSyncAPI.updateSettings).not.toHaveBeenCalled();
   });
 
   it('does not repeat a successful disable when status refresh fails and can retry refresh safely', async () => {
@@ -767,18 +766,18 @@ describe('PeopleSourceControl', () => {
 
     const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     fireEvent.click(toggle);
-    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause sync' }));
 
-    const dialog = await screen.findByRole('dialog', { name: 'Stop using a people source of truth?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Pause people sync?' });
     expect(dialog).toHaveTextContent(
       'The people source was disabled, but its status could not be refreshed: Authority status is temporarily unavailable.',
     );
     expect(toggle).toBeChecked();
-    expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1);
+    expect(peopleSyncAPI.updateSettings).toHaveBeenCalledWith({ syncEnabled: false });
     fireEvent.click(screen.getByRole('button', { name: 'Retry status refresh' }));
 
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
-    expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1);
+    expect(peopleSyncAPI.updateSettings).toHaveBeenCalledWith({ syncEnabled: false });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
@@ -802,7 +801,7 @@ describe('PeopleSourceControl', () => {
 
     const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     fireEvent.click(toggle);
-    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause sync' }));
     expect(await screen.findByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
@@ -826,9 +825,9 @@ describe('PeopleSourceControl', () => {
     );
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause sync' }));
 
-    await waitFor(() => expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(peopleSyncAPI.updateSettings).toHaveBeenCalledTimes(2));
   });
 
   it('disables a disconnected provider and explains the prerequisite', () => {
@@ -875,7 +874,7 @@ describe('PeopleSourceControl', () => {
     expect(toggle).toBeEnabled();
     expect(screen.queryByText('Connect Planning Center before using it as your people source.')).not.toBeInTheDocument();
     fireEvent.click(toggle);
-    expect(screen.getByRole('dialog', { name: 'Stop using a people source of truth?' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Pause people sync?' })).toBeInTheDocument();
   });
 
   it('keeps an active provider without batches enabled so authority can be turned off', () => {
@@ -885,7 +884,7 @@ describe('PeopleSourceControl', () => {
     expect(toggle).toBeEnabled();
     expect(screen.queryByText('Create a Planning Center sync batch first.')).not.toBeInTheDocument();
     fireEvent.click(toggle);
-    expect(screen.getByRole('dialog', { name: 'Stop using a people source of truth?' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Pause people sync?' })).toBeInTheDocument();
   });
 
   it('shows the server error returned by a failed preview', async () => {

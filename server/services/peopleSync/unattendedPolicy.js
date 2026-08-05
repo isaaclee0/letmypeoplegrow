@@ -2,17 +2,13 @@
 
 const Database = require('../../config/database');
 
-// The legacy Planning Center switch is a scheduling master switch. It does
-// not select the church's source-of-truth provider and it does not disable
-// interactive review or check-in imports. Elvanto has no corresponding
-// switch, so its unattended policy remains enabled and authority is still
-// enforced independently by the scheduler/orchestrator.
-async function isProviderUnattendedEnabled(churchId, provider) {
-  if (provider !== 'planning_center') return true;
+// Sync execution is provider-neutral. The active authority remains selected
+// while paused so a church can resume without re-linking or re-reviewing.
+async function isPeopleSyncEnabled(churchId) {
   const rows = await Database.queryForChurch(churchId,
-    `SELECT planning_center_sync_enabled FROM church_settings WHERE church_id = ? LIMIT 1`,
+    `SELECT sync_enabled FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
     [churchId]);
-  return Number(rows[0]?.planning_center_sync_enabled) === 1;
+  return rows[0]?.sync_enabled === undefined ? true : Number(rows[0].sync_enabled) === 1;
 }
 
-module.exports = { isProviderUnattendedEnabled };
+module.exports = { isPeopleSyncEnabled };

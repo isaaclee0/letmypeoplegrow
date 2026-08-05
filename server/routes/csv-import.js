@@ -8,14 +8,16 @@ const { body, validationResult } = require('express-validator');
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog, requireGatheringAccess } = require('../middleware/auth');
 const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
-const { getAuthority, lockedResponse } = require('../services/peopleSync/authority');
+const { getAuthority, getPeopleSyncPolicy, lockedResponse } = require('../services/peopleSync/authority');
 
 // CSV upload creates regular people, so every configured people authority owns
 // this path. Existing-people updates and gathering assignment changes pass through.
 async function blockImportsWhenAuthority(req, res, next) {
   try {
-    const { active } = await getAuthority(req.user.church_id);
-    if (active !== 'none') {
+    const [{ active }, { peopleEditingLocked }] = await Promise.all([
+      getAuthority(req.user.church_id), getPeopleSyncPolicy(req.user.church_id),
+    ]);
+    if (active !== 'none' && peopleEditingLocked) {
       return res.status(403).json(lockedResponse(active, 'import'));
     }
     next();

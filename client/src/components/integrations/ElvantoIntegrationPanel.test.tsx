@@ -39,7 +39,8 @@ vi.mock('../peopleSync/AuthorityReviewWorkspace', () => ({
 
 const settings: PeopleSyncSettings = {
   authorityProvider: 'none', pendingAuthorityProvider: null, elvantoIncludeContacts: true,
-  elvantoAlignPeopleType: true, fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1,
+  elvantoAlignPeopleType: true, syncEnabled: true, peopleEditingLocked: true,
+  fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1,
 };
 const batch = {
   id: 5, provider: 'elvanto', name: 'Members', enabled: true,
@@ -131,7 +132,6 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Complete authority review' }));
 
-    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('Active')).toBeInTheDocument();
   });
 
@@ -188,17 +188,15 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/batches/27/review');
   });
 
-  it('keeps a new batch prepared with switch guidance when another provider is authoritative', async () => {
+  it('opens the reviewed switch flow when another provider is authoritative', async () => {
     renderPanel({ ...settings, authorityProvider: 'planning_center' });
     await screen.findByText('Members');
 
     fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
-    expect(mockNavigate).not.toHaveBeenCalled();
-    expect(await screen.findByText('Batch prepared. Switch source of truth to review and activate it.')).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/authority-review?reason=first-batch');
     expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
-    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
   });
 
   it('keeps the existing reload behavior after editing a batch', async () => {

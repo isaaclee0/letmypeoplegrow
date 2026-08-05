@@ -4,6 +4,7 @@ const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const {
   getAuthority,
+  getPeopleSyncPolicy,
   getManagedLinks,
   getManagedFamilyIds,
   isPersonLocked,
@@ -44,9 +45,11 @@ async function addFamilyAuthorityMetadata(churchId, families) {
 
 async function getFamilyAuthorityLocks(churchId, familyIds) {
   const ids = [...new Set((familyIds || []).map(Number).filter(Number.isInteger))];
-  const { active } = await getAuthority(churchId);
+  const [{ active }, { peopleEditingLocked }] = await Promise.all([
+    getAuthority(churchId), getPeopleSyncPolicy(churchId),
+  ]);
   const lockedFamilyIds = await getManagedFamilyIds(churchId, ids, active);
-  return { active, isLocked: (id) => lockedFamilyIds.has(Number(id)) };
+  return { active, isLocked: (id) => peopleEditingLocked && lockedFamilyIds.has(Number(id)) };
 }
 
 // Assign every individual in `individualIds` to the union of gathering types
@@ -273,8 +276,10 @@ router.post('/visitor', requireRole(['admin', 'coordinator', 'attendance_taker']
       return res.status(400).json({ error: 'Family name, people type, and people are required' });
     }
 
-    const { active } = await getAuthority(req.user.church_id);
-    if (active !== 'none' && !['local_visitor', 'traveller_visitor'].includes(peopleType)) {
+    const [{ active }, { peopleEditingLocked }] = await Promise.all([
+      getAuthority(req.user.church_id), getPeopleSyncPolicy(req.user.church_id),
+    ]);
+    if (peopleEditingLocked && active !== 'none' && !['local_visitor', 'traveller_visitor'].includes(peopleType)) {
       return res.status(403).json(lockedResponse(active, 'create'));
     }
 
@@ -417,9 +422,11 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
       return res.status(400).json({ error: 'Invalid request. Must provide individualIds array.' });
     }
 
-    const { active } = await getAuthority(req.user.church_id);
+    const [{ active }, { peopleEditingLocked }] = await Promise.all([
+      getAuthority(req.user.church_id), getPeopleSyncPolicy(req.user.church_id),
+    ]);
     const managed = await getManagedLinks(req.user.church_id, individualIds);
-    if (individualIds.some((id) => isPersonLocked(active, managed.get(Number(id))))) {
+    if (peopleEditingLocked && individualIds.some((id) => isPersonLocked(active, managed.get(Number(id))))) {
       return res.status(403).json(lockedResponse(active, 'merge'));
     }
     const selectedPeople = await Database.query(
@@ -434,7 +441,7 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
       sourceFamilyIds,
       active
     );
-    if (managedSourceFamilies.size > 0) {
+    if (peopleEditingLocked && managedSourceFamilies.size > 0) {
       return res.status(403).json(lockedResponse(active, 'move-family-member'));
     }
 

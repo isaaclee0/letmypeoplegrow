@@ -9,7 +9,7 @@ const { consolidateGatheringAssignments } = require('./families');
 const individualsRouter = require('./individuals');
 const familiesRouter = require('./families');
 const settingsRouter = require('./settings');
-const { beginAuthoritySwitch, commitAuthoritySwitch } = require('../services/peopleSync/authority');
+const { beginAuthoritySwitch, commitAuthoritySwitch, updatePeopleSyncPolicy } = require('../services/peopleSync/authority');
 
 async function seedUser(churchId) {
   const res = await Database.query(
@@ -237,6 +237,29 @@ test('Elvanto authority blocks regular creation but leaves visitor creation avai
       });
       assert.strictEqual(disguisedRegular.status, 403);
       assert.strictEqual(disguisedRegular.body.code, 'PEOPLE_SOURCE_LOCKED');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('unlocked People-page editing permits local changes while an authority is active', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await linkPerson(churchId, individualId, 'elvanto', 'elvanto-person');
+    await activateAuthority(churchId, 'elvanto');
+    await updatePeopleSyncPolicy(churchId, { peopleEditingLocked: false });
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const created = await app.request('/api/individuals', {
+        method: 'POST', body: JSON.stringify({ firstName: 'New', lastName: 'Member' }),
+      });
+      assert.strictEqual(created.status, 201);
+
+      const edited = await app.request(`/api/individuals/${individualId}`, {
+        method: 'PUT', body: JSON.stringify({ firstName: 'Changed', lastName: 'Person' }),
+      });
+      assert.strictEqual(edited.status, 200);
     } finally {
       await app.close();
     }

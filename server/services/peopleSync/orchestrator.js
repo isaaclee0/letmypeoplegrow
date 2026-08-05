@@ -94,6 +94,12 @@ function assertOperationalBatch(assertion, batch, authorityProvider) {
   }
 }
 
+function assertPeopleSyncEnabled(settings) {
+  if (settings.syncEnabled === false) {
+    throw new OrchestratorError('SYNC_PAUSED', 'People sync is paused for this church.', 409);
+  }
+}
+
 // ─── Default (production) collaborators ─────────────────────────────────────
 
 // Church-wide sync settings (people_sync_settings). Column names are
@@ -106,13 +112,14 @@ function assertOperationalBatch(assertion, batch, authorityProvider) {
 async function defaultGetSyncSettings(churchId) {
   const rows = await Database.queryForChurch(
     churchId,
-    `SELECT elvanto_include_contacts, elvanto_align_people_type FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
+    `SELECT elvanto_include_contacts, elvanto_align_people_type, sync_enabled FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
     [churchId]
   );
   const row = rows[0] || {};
   return {
     includeContacts: row.elvanto_include_contacts === undefined ? true : !!row.elvanto_include_contacts,
     alignPeopleType: row.elvanto_align_people_type === undefined ? true : !!row.elvanto_align_people_type,
+    syncEnabled: row.sync_enabled === undefined ? true : !!row.sync_enabled,
   };
 }
 
@@ -145,7 +152,7 @@ const defaultDeps = {
   notifyReviewRequired,
   recordActiveSourceAvailable,
   recordActiveSourceFailure,
-  getUnattendedProviderEnabled: unattendedPolicy.isProviderUnattendedEnabled,
+  getUnattendedProviderEnabled: async (churchId) => unattendedPolicy.isPeopleSyncEnabled(churchId),
   refreshBackgroundCheckStatuses: backgroundCheckSync.refreshBackgroundCheckStatuses,
 };
 
@@ -992,6 +999,7 @@ async function buildReview({
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  assertPeopleSyncEnabled(pre.settings);
   const reviewedBatch = batchId !== null && batchId !== undefined
     ? pre.batches.find((candidate) => String(candidate.id) === String(batchId))
     : pre.batches[0];
@@ -1051,6 +1059,7 @@ async function previewLinkCorrections({
   assertProvider(provider);
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  assertPeopleSyncEnabled(pre.settings);
   const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
   assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
   const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
@@ -1270,6 +1279,7 @@ async function applyReviewed({
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const isAuthoritySwitch = batchId === null && pre.authorityState.pending === provider;
+  if (!isAuthoritySwitch) assertPeopleSyncEnabled(pre.settings);
   const reviewBatches = isAuthoritySwitch
     ? effectiveAuthorityReviewBatches(pre.batches)
     : effectiveReviewBatches(pre.batches, batchId);
@@ -1467,6 +1477,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  assertPeopleSyncEnabled(pre.settings);
   const targetBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
   assertOperationalBatch(assertBatchRunnable, targetBatch, pre.authorityState.active);
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);

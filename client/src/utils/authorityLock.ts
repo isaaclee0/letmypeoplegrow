@@ -27,8 +27,9 @@ export const PEOPLE_SOURCE_LOCKED = 'PEOPLE_SOURCE_LOCKED';
 export function isAuthorityLocked(
   links: ExternalLinks | undefined,
   authority: AuthorityProvider,
+  peopleEditingLocked = true,
 ): boolean {
-  return authority !== 'none' && !!links?.[authority];
+  return peopleEditingLocked && authority !== 'none' && !!links?.[authority];
 }
 
 // Human-readable label for an authority provider, matching

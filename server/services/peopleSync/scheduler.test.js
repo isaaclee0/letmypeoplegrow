@@ -168,7 +168,7 @@ test('Planning Center master switch policy does not disable Elvanto scheduling',
   assert.deepEqual(executed, [103]);
 });
 
-test('real church setting turns Planning Center scheduler dispatch off and on while Elvanto remains unaffected', async () => {
+test('provider-neutral sync policy turns scheduler dispatch off and on', async () => {
   await withTestChurchDb(async (churchId) => {
     const executed = [];
     const options = {
@@ -180,10 +180,10 @@ test('real church setting turns Planning Center scheduler dispatch off and on wh
       runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
       recordBatchResult: async () => {},
     };
-    await Database.query('UPDATE church_settings SET planning_center_sync_enabled = 0 WHERE church_id = ?', [churchId]);
+    await Database.query('UPDATE people_sync_settings SET sync_enabled = 0 WHERE church_id = ?', [churchId]);
     await runChurch(churchId, options);
     assert.deepEqual(executed, []);
-    await Database.query('UPDATE church_settings SET planning_center_sync_enabled = 1 WHERE church_id = ?', [churchId]);
+    await Database.query('UPDATE people_sync_settings SET sync_enabled = 1 WHERE church_id = ?', [churchId]);
     await runChurch(churchId, options);
     assert.deepEqual(executed, [104]);
 
