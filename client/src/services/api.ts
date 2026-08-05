@@ -286,6 +286,9 @@ export interface Visitor {
   familyId?: number;
   familyName?: string;
   isChild?: boolean;
+  badgeText?: string | null;
+  badgeColor?: string | null;
+  badgeIcon?: string | null;
   backgroundCheckCleared?: boolean | null;
 }
 

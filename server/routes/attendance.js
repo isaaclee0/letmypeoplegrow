@@ -929,7 +929,8 @@ router.get('/people/all', disableCache, async (req, res) => {
     const processedPeople = [];
     for (const family of allFamilies) {
       const familyMembers = await Database.query(`
-        SELECT id, first_name, last_name, people_type, is_child, pco_background_check_cleared
+        SELECT id, first_name, last_name, people_type, is_child,
+               badge_text, badge_color, badge_icon, pco_background_check_cleared
         FROM individuals
         WHERE family_id = ? AND is_active = 1 AND church_id = ?
         ORDER BY first_name
@@ -947,6 +948,9 @@ router.get('/people/all', disableCache, async (req, res) => {
           lastAttended: family.last_activity,
           familyId: family.family_id,
           familyName: family.family_name,
+          badgeText: member.badge_text ?? null,
+          badgeColor: member.badge_color ?? null,
+          badgeIcon: member.badge_icon ?? null,
           ...(showBackgroundCheckStatus ? {
             backgroundCheckCleared: member.pco_background_check_cleared === null || member.pco_background_check_cleared === undefined
               ? null
@@ -1098,6 +1102,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         const allMembers = await Database.query(`
           SELECT
             i.id, i.first_name, i.last_name, i.people_type, i.is_child,
+            i.badge_text, i.badge_color, i.badge_icon,
             i.pco_background_check_cleared,
             f.id as family_id, f.family_name, f.family_notes, f.family_type,
             COALESCE(f.last_attended, f.created_at) as last_activity
@@ -1120,6 +1125,9 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             lastAttended: member.last_activity,
             familyId: member.family_id,
             familyName: member.family_name,
+            badgeText: member.badge_text ?? null,
+            badgeColor: member.badge_color ?? null,
+            badgeIcon: member.badge_icon ?? null,
             pco_background_check_cleared: member.pco_background_check_cleared
           };
         });
@@ -1415,9 +1423,9 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
         isChild: Boolean(attendee.is_child),
-        badgeText: attendee.badge_text || null,
-        badgeColor: attendee.badge_color || null,
-        badgeIcon: attendee.badge_icon || null,
+        badgeText: attendee.badge_text ?? null,
+        badgeColor: attendee.badge_color ?? null,
+        badgeIcon: attendee.badge_icon ?? null,
         ...(showBackgroundCheckStatus ? {
           backgroundCheckCleared: pco_background_check_cleared === null || pco_background_check_cleared === undefined
             ? null
@@ -1632,9 +1640,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           ...attendee,
           present: attendee.present === 1 || attendee.present === true,
           isChild: Boolean(attendee.is_child),
-          badgeText: attendee.badge_text || null,
-          badgeColor: attendee.badge_color || null,
-          badgeIcon: attendee.badge_icon || null,
+          badgeText: attendee.badge_text ?? null,
+          badgeColor: attendee.badge_color ?? null,
+          badgeIcon: attendee.badge_icon ?? null,
           familyNotes: attendee.family_notes || null,
           peopleType: attendee.people_type,
           lastAttended: attendee.last_attended,
@@ -2041,9 +2049,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
         isChild: Boolean(attendee.is_child),
-        badgeText: attendee.badge_text || null,
-        badgeColor: attendee.badge_color || null,
-        badgeIcon: attendee.badge_icon || null,
+        badgeText: attendee.badge_text ?? null,
+        badgeColor: attendee.badge_color ?? null,
+        badgeIcon: attendee.badge_icon ?? null,
         familyNotes: attendee.family_notes || null,
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
@@ -3342,4 +3350,4 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
 });
 
 
-module.exports = router; 
+module.exports = router;

@@ -33,6 +33,11 @@ import {
 } from '@heroicons/react/24/outline';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
+import {
+  filterAttendanceGroups,
+  matchesAttendancePeopleFilters,
+  type AttendanceAgeFilter,
+} from '../utils/attendancePeopleFilters';
 
 interface PersonForm {
   firstName: string;
@@ -49,11 +54,28 @@ interface VisitorFormState {
   familyName: string;
 }
 
+interface BadgeFilterOption {
+  key: string;
+  text: string | null;
+  icon: string;
+  backgroundColor: string;
+  color: string;
+  helperText: string;
+}
+
+function badgeFilterKey(badge: Pick<BadgeFilterOption, 'text' | 'icon' | 'backgroundColor'>): string {
+  return JSON.stringify([
+    badge.icon,
+    badge.backgroundColor.toLowerCase(),
+    badge.text || '',
+  ]);
+}
+
 const AttendancePage: React.FC = () => {
   const { user, updateUser, refreshUserData } = useAuth();
   const { showSuccess, showToast } = useToast();
   const navigate = useNavigate();
-  const { getBadgeInfo, isLoading: badgeSettingsLoading } = useBadgeSettings();
+  const { badgeConfig, getBadgeInfo, isLoading: badgeSettingsLoading } = useBadgeSettings();
   // Initialize selectedDate to today - will be updated by gathering selection logic
   const [selectedDate, setSelectedDate] = useState(() => {
     logger.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
@@ -258,6 +280,8 @@ const AttendancePage: React.FC = () => {
   }, []);
 
   const [groupByFamily, setGroupByFamily] = useState(true);
+  const [ageFilter, setAgeFilter] = useState<AttendanceAgeFilter>('all');
+  const [selectedBadgeKeys, setSelectedBadgeKeys] = useState<string[]>([]);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
@@ -381,6 +405,76 @@ const AttendancePage: React.FC = () => {
   const [allChurchVisitors, setAllChurchVisitors] = useState<Visitor[]>([]);
   const [isLoadingAllVisitors, setIsLoadingAllVisitors] = useState(false);
   const [showAllVisitorsSection, setShowAllVisitorsSection] = useState(false);
+
+  const churchBadgePersonById = useMemo(() => new Map(
+    allChurchVisitors
+      .filter((person): person is Visitor & { id: number } => person.id !== undefined)
+      .map((person) => [person.id, person]),
+  ), [allChurchVisitors]);
+
+  const resolveBadgePerson = useCallback((person: Individual | Visitor) => {
+    const fallback = person.id === undefined ? undefined : churchBadgePersonById.get(person.id);
+    return {
+      isChild: person.isChild ?? fallback?.isChild,
+      badgeText: person.badgeText ?? fallback?.badgeText,
+      badgeColor: person.badgeColor ?? fallback?.badgeColor,
+      badgeIcon: person.badgeIcon ?? fallback?.badgeIcon,
+    };
+  }, [churchBadgePersonById]);
+
+  const getAttendanceBadgeKey = useCallback((person: Individual | Visitor): string | null => {
+    const badge = getBadgeInfo(resolveBadgePerson(person));
+    if (!badge) return null;
+
+    return badgeFilterKey({
+      text: badge.text,
+      icon: badge.icon,
+      backgroundColor: badge.styles.backgroundColor,
+    });
+  }, [badgeConfig, resolveBadgePerson]);
+
+  const usedBadgeOptions = useMemo(() => {
+    const options = new Map<string, BadgeFilterOption>();
+    const peopleById = new Map<number, Individual | Visitor>();
+
+    allChurchVisitors.forEach((person) => {
+      if (person.id !== undefined) peopleById.set(person.id, person);
+    });
+    attendanceList.forEach((person) => peopleById.set(person.id, person));
+
+    peopleById.forEach((person) => {
+      const badge = getBadgeInfo(resolveBadgePerson(person));
+      if (!badge) return;
+
+      const option: BadgeFilterOption = {
+        key: '',
+        text: badge.text,
+        icon: badge.icon,
+        backgroundColor: badge.styles.backgroundColor,
+        color: badge.styles.color,
+        helperText: badge.text || (badge.icon ? `${badge.icon} badge` : 'Badge'),
+      };
+      option.key = badgeFilterKey(option);
+      options.set(option.key, option);
+    });
+
+    return Array.from(options.values());
+  }, [allChurchVisitors, attendanceList, badgeConfig, resolveBadgePerson]);
+
+  const usedBadgeKeysSignature = JSON.stringify(usedBadgeOptions.map((badge) => badge.key));
+
+  useEffect(() => {
+    const availableKeys = new Set(usedBadgeOptions.map((badge) => badge.key));
+    setSelectedBadgeKeys((current) => {
+      const next = current.filter((key) => availableKeys.has(key));
+      return next.length === current.length ? current : next;
+    });
+  }, [usedBadgeKeysSignature]);
+
+  const selectedBadgeKeySet = useMemo(() => new Set(selectedBadgeKeys), [selectedBadgeKeys]);
+  const matchesPeopleFilters = useCallback((person: Individual | Visitor) =>
+    matchesAttendancePeopleFilters(person, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKey),
+  [ageFilter, getAttendanceBadgeKey, selectedBadgeKeySet]);
 
   // Keep refs in sync
   useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
@@ -1989,7 +2083,12 @@ const AttendancePage: React.FC = () => {
       allRecentVisitorsPool.forEach(v => { if (v.id) poolMap.set(v.id, v); });
       allVisitors.forEach(v => { if (v.id) poolMap.set(v.id, v); });
       const filtered = Array.from(poolMap.values()).filter(v => v.name.toLowerCase().includes(search));
-      return groupVisitors(filtered);
+      return filterAttendanceGroups(
+        groupVisitors(filtered),
+        ageFilter,
+        selectedBadgeKeySet,
+        getAttendanceBadgeKey,
+      );
     }
     
     // When not searching, preserve the original order of all visitors
@@ -2004,12 +2103,22 @@ const AttendancePage: React.FC = () => {
     allVisitors.forEach(v => { if (v.id) poolMap.set(v.id, v); });
     
     const allVisitorsInOrder = Array.from(poolMap.values());
-    return groupVisitors(allVisitorsInOrder);
-  }, [searchTerm, allRecentVisitorsPool, allVisitors, groupVisitors]);
+    return filterAttendanceGroups(
+      groupVisitors(allVisitorsInOrder),
+      ageFilter,
+      selectedBadgeKeySet,
+      getAttendanceBadgeKey,
+    );
+  }, [searchTerm, allRecentVisitorsPool, allVisitors, groupVisitors, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKey]);
 
   // Filter families based on search term and sort members (memoized)
   const filteredGroupedAttendees = useMemo(() => {
-    const groups = Object.values(groupedAttendees) as any[];
+    const groups = filterAttendanceGroups(
+      Object.values(groupedAttendees) as any[],
+      ageFilter,
+      selectedBadgeKeySet,
+      getAttendanceBadgeKey,
+    );
     const filtered = groups.filter((group: any) => {
       if (!searchTerm.trim()) return true;
       const searchLower = searchTerm.toLowerCase();
@@ -2033,7 +2142,7 @@ const AttendancePage: React.FC = () => {
       });
     });
     return filtered;
-  }, [groupedAttendees, searchTerm, groupByFamily]);
+  }, [groupedAttendees, searchTerm, groupByFamily, ageFilter, selectedBadgeKeySet, getAttendanceBadgeKey]);
 
   const filteredGroupedVisitors = displayedGroupedVisitors;
 
@@ -2050,11 +2159,12 @@ const AttendancePage: React.FC = () => {
     // Filter to show only church people NOT currently visible in this gathering
     const availableChurchPeople = allChurchVisitors.filter(person => 
       !currentlyVisibleIds.has(person.id) && 
-      (search === '' || person.name.toLowerCase().includes(search))
+      (search === '' || person.name.toLowerCase().includes(search)) &&
+      matchesPeopleFilters(person)
     );
     
     return groupVisitors(availableChurchPeople);
-  }, [allChurchVisitors, attendanceList, allRecentVisitorsPool, searchTerm, groupVisitors]);
+  }, [allChurchVisitors, attendanceList, allRecentVisitorsPool, searchTerm, groupVisitors, matchesPeopleFilters]);
 
   // Sorting is already done inside filteredGroupedAttendees useMemo above
 
@@ -2731,23 +2841,93 @@ const AttendancePage: React.FC = () => {
               </div>
             )}
 
-            {/* Group by Family Toggle - Only show for standard gatherings */}
+            {/* View, badge, and age filters - Only show for standard gatherings */}
             {selectedGathering?.attendanceType === 'standard' && (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center">
-                  <input
-                    id="groupByFamily"
-                    type="checkbox"
-                    checked={groupByFamily}
-                    onChange={(e) => handleGroupByFamilyChange(e.target.checked)}
-                    className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                  />
-                  <label htmlFor="groupByFamily" className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
-                    Group people by family
-                  </label>
+              <div
+                className="md:col-span-2 w-full pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-x-4 gap-y-3"
+                role="group"
+                aria-label="Attendance display filters"
+              >
+                <div
+                  className="inline-flex items-center justify-self-center sm:justify-self-start space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
+                  role="group"
+                  aria-label="View people as"
+                >
+                  {(['families', 'individuals'] as const).map((value) => {
+                    const selected = value === 'families' ? groupByFamily : !groupByFamily;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => handleGroupByFamilyChange(value === 'families')}
+                        className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                          selected
+                            ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                        }`}
+                      >
+                        {value === 'families' ? 'Families' : 'Individuals'}
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="text-sm text-gray-500 dark:text-gray-400">
-                  {groupByFamily ? 'Families grouped together' : 'Individuals listed separately'}
+
+                {usedBadgeOptions.length > 0 ? (
+                  <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filter by badge">
+                    {usedBadgeOptions.map((badge) => {
+                      const selected = selectedBadgeKeySet.has(badge.key);
+                      return (
+                        <button
+                          key={badge.key}
+                          type="button"
+                          aria-label={`Filter by badge: ${badge.helperText}`}
+                          aria-pressed={selected}
+                          title={badge.helperText}
+                          onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
+                            ? current.filter((key) => key !== badge.key)
+                            : [...current, badge.key])}
+                          className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
+                            selected
+                              ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
+                              : 'hover:scale-110'
+                          }`}
+                          style={{ backgroundColor: badge.backgroundColor, color: badge.color }}
+                        >
+                          {badge.icon && (
+                            <BadgeIcon type={badge.icon as BadgeIconType} className="h-4 w-4" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div aria-hidden="true" />
+                )}
+
+                <div
+                  className="inline-flex items-center justify-self-center sm:justify-self-end space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
+                  role="group"
+                  aria-label="Filter by age"
+                >
+                  {(['all', 'adult', 'child'] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={ageFilter === value}
+                      onClick={() => setAgeFilter(value)}
+                      className={`flex items-center space-x-1.5 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                        ageFilter === value
+                          ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      {value === 'child' && badgeConfig.child.defaultIcon && (
+                        <BadgeIcon type={badgeConfig.child.defaultIcon as BadgeIconType} className="w-4 h-4" />
+                      )}
+                      <span>{value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
@@ -3147,7 +3327,7 @@ const AttendancePage: React.FC = () => {
                         const isSaving = Boolean(savingById[person.id] || person.isSaving);
                         const displayName = getPersonDisplayName(person, group.familyName);
                         const needsWideLayout = shouldUseWideLayout(displayName);
-                        const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(person) : null;
+                        const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
                         return (
                           <label
@@ -3295,7 +3475,7 @@ const AttendancePage: React.FC = () => {
                       const isPresent = person.id ? visitorAttendance[person.id] || false : false;
                       const displayName = getPersonDisplayName(person, group.familyName);
                       const needsWideLayout = shouldUseWideLayout(displayName);
-                      const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(person) : null;
+                      const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
                       const isHighlighted = shouldHighlightVisitor(person, index);
 
@@ -3448,7 +3628,7 @@ const AttendancePage: React.FC = () => {
                             const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
                             const displayName = getPersonDisplayName(person, group.familyName);
                             const needsWideLayout = shouldUseWideLayout(displayName);
-                            const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(person) : null;
+                            const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
                             return (
                               <div
