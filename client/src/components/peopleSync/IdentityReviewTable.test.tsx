@@ -299,8 +299,8 @@ describe('IdentityReviewTable rendering', () => {
     const table = screen.getByTestId('desktop-identity-table');
     expect(table).toHaveClass('hidden', 'md:table');
     expect(table.closest('[class*="overflow-x"]')).toBeNull();
-    expect(within(table).getByRole('columnheader', { name: 'Integration source name' })).toBeVisible();
-    expect(within(table).getByRole('columnheader', { name: 'Integration source family/household' })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: 'Planning Center name' })).toBeVisible();
+    expect(within(table).getByRole('columnheader', { name: 'Planning Center family/household' })).toBeVisible();
     expect(within(table).getByRole('columnheader', { name: 'LMPG name' })).toBeVisible();
     expect(within(table).getByRole('columnheader', { name: 'LMPG family' })).toBeVisible();
     expect(within(table).getByRole('columnheader', { name: 'Row action' })).toBeVisible();
@@ -314,7 +314,7 @@ describe('IdentityReviewTable rendering', () => {
 
     const mobile = screen.getByTestId('mobile-identity-row-ext-01');
     expect(mobile).toHaveClass('md:hidden');
-    expect(within(mobile).getByText('Integration source')).toBeVisible();
+    expect(within(mobile).getByText('Planning Center')).toBeVisible();
     expect(within(mobile).getByText('LMPG')).toBeVisible();
   });
 

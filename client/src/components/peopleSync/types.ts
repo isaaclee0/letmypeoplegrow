@@ -102,6 +102,7 @@ export interface PeopleSyncBatch {
   sourceStatus: SourceStatus;
   sourceStatusCheckedAt: string | null;
   sourceStatusErrorCode: string | null;
+  unresolvedIdentityCount?: number | null;
   operationalState: BatchOperationalState;
   reviewable: boolean;
   runnable: boolean;

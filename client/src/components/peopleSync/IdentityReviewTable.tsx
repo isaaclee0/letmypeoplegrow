@@ -157,6 +157,7 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
   const [correctionFailure, setCorrectionFailure] = useState<CorrectionFailure | null>(null);
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
   const [desktopLayout, setDesktopLayout] = useState(desktopLayoutMatches);
+  const externalProviderLabel = review.plan.provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
   const tabGroupId = useId();
   const stateRef = useRef(state);
   const previewGenerationRef = useRef(0);
@@ -658,8 +659,8 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
         </colgroup>
         <thead>
           <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-            <th scope="col" className="border-b border-gray-200 px-3 py-2 dark:border-gray-700">Integration source name</th>
-            <th scope="col" className="border-b border-gray-200 px-3 py-2 dark:border-gray-700">Integration source family/household</th>
+            <th scope="col" className="border-b border-gray-200 px-3 py-2 dark:border-gray-700">{externalProviderLabel} name</th>
+            <th scope="col" className="border-b border-gray-200 px-3 py-2 dark:border-gray-700">{externalProviderLabel} family/household</th>
             <th scope="col" className="border-b border-gray-200 px-3 py-2 dark:border-gray-700">LMPG name</th>
             <th scope="col" className="border-b border-gray-200 px-3 py-2 dark:border-gray-700">LMPG family</th>
             <th scope="col" className="border-b border-gray-200 px-3 py-2 text-center dark:border-gray-700">
@@ -708,7 +709,7 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
             className="relative space-y-3 p-3 pr-11 md:hidden"
           >
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Integration source</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{externalProviderLabel}</p>
               <p className="mt-1 break-words text-sm font-semibold text-gray-950 dark:text-white">{personDisplayName(row.externalPerson)}</p>
               <div className="mt-1 break-words text-sm text-gray-600 dark:text-gray-300">{sourceFamily(row)}</div>
             </div>

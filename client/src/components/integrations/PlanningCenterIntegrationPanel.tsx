@@ -552,6 +552,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           <p className="mt-1 text-xs font-medium text-gray-700 dark:text-gray-300">{BATCH_OPERATIONAL_STATE_LABELS[batch.operationalState]}</p>
                           {batch.operationalState === 'prepared' && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Switch source of truth to activate this batch.</p>}
                           {batch.operationalState === 'source_review_required' && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · the selected people source will not run until reviewed.</p>}
+                          {batch.unresolvedIdentityCount !== null && batch.unresolvedIdentityCount > 0 && (
+                            <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                              {batch.unresolvedIdentityCount} identity decision{batch.unresolvedIdentityCount === 1 ? '' : 's'} still need{batch.unresolvedIdentityCount === 1 ? 's' : ''} review.
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>

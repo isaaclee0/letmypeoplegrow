@@ -627,7 +627,6 @@ function SafeSyncReview({
     || refreshOnlyError
     || unsafeReview
     || !correctionsReady
-    || incompleteExternalIds.length > 0
     || collisions.length > 0
     || !allPlannedArchivesAccepted
     || (requiresConfirmation && !confirmedDestructiveChanges);
@@ -895,7 +894,7 @@ function SafeSyncReview({
           <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
             {incompleteExternalIds.map((externalId) => (
               <p key={externalId}>
-                {externalPerson(externalId)} needs a decision before you can apply this {isPeopleImport ? 'import' : 'sync'}.{' '}
+                {externalPerson(externalId)} will remain pending after this {isPeopleImport ? 'import' : 'sync'}.{' '}
                 <button type="button" className="font-semibold underline underline-offset-2" onClick={() => focusAffected(externalId)}>
                   Review {externalPerson(externalId)}
                 </button>

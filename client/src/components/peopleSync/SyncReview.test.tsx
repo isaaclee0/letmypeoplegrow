@@ -297,9 +297,9 @@ describe('SyncReview compact V2 workflow', () => {
     render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
 
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('Blair Jones needs a decision');
+    expect(alert).toHaveTextContent('Blair Jones will remain pending after this sync');
     const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
-    expect(apply).toBeDisabled();
+    expect(apply).toBeEnabled();
     await user.click(within(alert).getByRole('button', { name: /Review Blair Jones/ }));
     const needsAttentionFilter = screen.getAllByRole('button', { name: 'Needs attention 1' })
       .find((button) => button.hasAttribute('aria-pressed'));
@@ -451,7 +451,7 @@ describe('SyncReview compact V2 workflow', () => {
       applying={false}
     />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Change LMPG match for Blair Jones' })).toHaveTextContent('Choose a decision'));
-    expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeEnabled();
   });
 
   it('does not treat matcher source coverage as local-only lifecycle state', () => {
