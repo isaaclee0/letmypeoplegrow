@@ -71,7 +71,9 @@ async function findUserByContact(contact, specificChurchId = null) {
   const isEmail = emailRegex.test(contact);
 
   let normalizedContact = contact;
-  if (!isEmail) {
+  if (isEmail) {
+    normalizedContact = contact.toLowerCase();
+  } else {
     const countryCode = await getChurchCountry();
     normalizedContact = getInternationalFormat(contact, countryCode) || contact;
   }
@@ -81,18 +83,18 @@ async function findUserByContact(contact, specificChurchId = null) {
     churchId = specificChurchId;
   } else {
     const lookup = isEmail
-      ? Database.lookupChurchByEmail(contact)
+      ? Database.lookupChurchByEmail(normalizedContact)
       : Database.lookupChurchByMobile(normalizedContact);
 
     if (!lookup) return { users: [], isEmail, normalizedContact, churchId: null };
     churchId = lookup.church_id;
   }
 
-  const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
+  const whereClause = isEmail ? 'LOWER(email) = ?' : 'mobile_number = ?';
   const users = await Database.queryForChurch(
     churchId,
     `SELECT id, email, mobile_number, primary_contact_method, role, is_active, church_id FROM users WHERE ${whereClause}`,
-    [isEmail ? contact : normalizedContact]
+    [normalizedContact]
   );
 
   return { users, isEmail, normalizedContact, churchId };
@@ -132,7 +134,9 @@ router.post('/request-code',
       const contactType = isEmail ? 'email' : 'sms';
 
       let normalizedContact = contact;
-      if (!isEmail) {
+      if (isEmail) {
+        normalizedContact = contact.toLowerCase();
+      } else {
         const countryCode = await getChurchCountry();
         const internationalFormat = getInternationalFormat(contact, countryCode);
         if (!internationalFormat) {
@@ -143,7 +147,7 @@ router.post('/request-code',
 
       if (!selectedChurchId) {
         const allLookups = isEmail
-          ? Database.lookupAllChurchesByEmail(contact)
+          ? Database.lookupAllChurchesByEmail(normalizedContact)
           : Database.lookupAllChurchesByMobile(normalizedContact);
 
         if (allLookups.length > 1) {
@@ -158,12 +162,12 @@ router.post('/request-code',
       }
 
       let { users, churchId } = await findUserByContact(
-        isEmail ? contact : normalizedContact,
+        normalizedContact,
         selectedChurchId || null
       );
 
       if (users.length === 0) {
-        if (isDev && devBypassEnabled && contact === 'dev@church.local') {
+        if (isDev && devBypassEnabled && normalizedContact === 'dev@church.local') {
           console.log('🔧 Development mode: Auto-creating dev user for dev@church.local');
           try {
             let devChurchId = 'devch1';
@@ -225,7 +229,7 @@ router.post('/request-code',
       if (contactType === 'email' && user.email && user.mobile_number && user.primary_contact_method !== contactType) {
         if (user.primary_contact_method === 'email') {
           finalContactMethod = 'email';
-          finalContact = user.email;
+          finalContact = user.email.toLowerCase();
         } else if (user.primary_contact_method === 'sms') {
           finalContactMethod = 'sms';
           finalContact = user.mobile_number;
@@ -349,7 +353,9 @@ router.post('/verify-code',
       const contactType = isEmail ? 'email' : 'sms';
 
       let normalizedContact = contact;
-      if (!isEmail) {
+      if (isEmail) {
+        normalizedContact = contact.toLowerCase();
+      } else {
         const countryCode = await getChurchCountry();
         const internationalFormat = getInternationalFormat(contact, countryCode);
         if (!internationalFormat) {
@@ -359,7 +365,7 @@ router.post('/verify-code',
       }
 
       const searchResult = await findUserByContact(
-        isEmail ? contact : normalizedContact,
+        normalizedContact,
         selectedChurchId || null
       );
       const { users, churchId } = searchResult;
@@ -375,7 +381,7 @@ router.post('/verify-code',
       const userChurchId = churchId || user.church_id;
 
       let validOtcRecord = null;
-      if (isDev && devBypassEnabled && user.email === 'dev@church.local' && code === '000000') {
+      if (isDev && devBypassEnabled && user.email && user.email.toLowerCase() === 'dev@church.local' && code === '000000') {
         console.log('🔓 Development bypass: Accepting "000000" for dev@church.local');
         validOtcRecord = { id: 'dev-bypass' };
       } else {
@@ -391,7 +397,7 @@ router.post('/verify-code',
           validOtcRecord = otcRecords[0];
         } else if (user.email && user.mobile_number) {
           const altContactType = contactType === 'email' ? 'sms' : 'email';
-          const altContact = contactType === 'email' ? user.mobile_number : user.email;
+          const altContact = contactType === 'email' ? user.mobile_number : user.email.toLowerCase();
 
           const altOtcRecords = await Database.queryForChurch(
             userChurchId,
@@ -418,7 +424,7 @@ router.post('/verify-code',
       if (user.email) {
         cleanupTasks.push(Database.queryForChurch(
           userChurchId,
-          "DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
+          "DELETE FROM otc_codes WHERE LOWER(contact_identifier) = LOWER(?) AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
           [user.email, 'email']
         ));
       }

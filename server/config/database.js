@@ -1034,7 +1034,7 @@ class Database {
        JOIN churches c ON c.church_id = ul.church_id
        WHERE ul.church_id != ?
          AND (
-           (? IS NOT NULL AND ul.email = ?) OR
+           (? IS NOT NULL AND LOWER(ul.email) = LOWER(?)) OR
            (? IS NOT NULL AND ul.mobile_number = ?) OR
            (? IS NOT NULL AND ul.person_id = ?)
          )`
@@ -1108,7 +1108,7 @@ class Database {
   static lookupChurchByEmail(email) {
     if (!registryDb) return null;
     return registryDb.prepare(
-      'SELECT church_id, user_id FROM user_lookup WHERE email = ?'
+      'SELECT church_id, user_id FROM user_lookup WHERE LOWER(email) = LOWER(?)'
     ).get(email) || null;
   }
 
@@ -1135,7 +1135,7 @@ class Database {
       `SELECT ul.church_id, ul.user_id, c.church_name
        FROM user_lookup ul
        JOIN churches c ON c.church_id = ul.church_id
-       WHERE ul.email = ?`
+       WHERE LOWER(ul.email) = LOWER(?)`
     ).all(email);
   }
 

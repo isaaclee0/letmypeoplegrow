@@ -58,6 +58,36 @@ test('resyncUserLookup: refreshes a stale registry row after email is updated di
   });
 });
 
+test('lookupChurchByEmail: matches email case-insensitively', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const insert = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 1, ?)`,
+      ['Dave@Example.COM', churchId]
+    );
+    Database.registerUserLookup(insert.insertId, 'Dave@Example.COM', null, churchId);
+
+    const found = Database.lookupChurchByEmail('dave@example.com');
+    assert.ok(found, 'lookup should ignore email case');
+    assert.strictEqual(found.church_id, churchId);
+    assert.strictEqual(found.user_id, insert.insertId);
+  });
+});
+
+test('lookupAllChurchesByEmail: matches email case-insensitively', async () => {
+  await withTestChurchDb(async (churchId) => {
+    Database.ensureChurch(churchId, 'Test Church');
+    const insert = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 1, ?)`,
+      ['Dave@Example.COM', churchId]
+    );
+    Database.registerUserLookup(insert.insertId, 'Dave@Example.COM', null, churchId);
+
+    const found = Database.lookupAllChurchesByEmail('DAVE@EXAMPLE.COM');
+    assert.strictEqual(found.length, 1);
+    assert.strictEqual(found[0].church_id, churchId);
+  });
+});
+
 const { randomUUID } = require('crypto');
 
 test('lookupLinkedChurches: finds a church linked by matching email', async () => {
