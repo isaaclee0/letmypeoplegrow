@@ -29,11 +29,15 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
     assert.deepEqual(
       {
         authority_provider: settings[0]?.authority_provider,
+        sync_enabled: settings[0]?.sync_enabled,
+        people_editing_locked: settings[0]?.people_editing_locked,
         elvanto_include_contacts: settings[0]?.elvanto_include_contacts,
         elvanto_align_people_type: settings[0]?.elvanto_align_people_type
       },
       {
         authority_provider: 'none',
+        sync_enabled: 1,
+        people_editing_locked: 1,
         elvanto_include_contacts: 1,
         elvanto_align_people_type: 1
       }
@@ -98,6 +102,8 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
         authority_provider: "'none'",
         elvanto_include_contacts: '1',
         elvanto_align_people_type: '1',
+        sync_enabled: '1',
+        people_editing_locked: '1',
         full_reconciliation_frequency: "'weekly'",
         full_reconciliation_day: '1',
         created_at: "datetime('now')",

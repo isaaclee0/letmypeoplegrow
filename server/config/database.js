@@ -207,6 +207,20 @@ function ensureCompatibleUpdatedAtTriggers(db) {
 function ensureProviderNeutralSyncSchema(db) {
   db.exec(PROVIDER_NEUTRAL_SYNC_SCHEMA);
 
+  const settingsColumns = db.prepare('PRAGMA table_info(people_sync_settings)').all();
+  if (!settingsColumns.some((column) => column.name === 'sync_enabled')) {
+    db.exec('ALTER TABLE people_sync_settings ADD COLUMN sync_enabled INTEGER NOT NULL DEFAULT 1');
+    db.exec(`UPDATE people_sync_settings
+      SET sync_enabled = 0
+      WHERE authority_provider = 'planning_center'
+        AND church_id IN (
+          SELECT church_id FROM church_settings WHERE planning_center_sync_enabled = 0
+        )`);
+  }
+  if (!settingsColumns.some((column) => column.name === 'people_editing_locked')) {
+    db.exec('ALTER TABLE people_sync_settings ADD COLUMN people_editing_locked INTEGER NOT NULL DEFAULT 1');
+  }
+
   const batchColumns = db.prepare('PRAGMA table_info(people_sync_batches)').all();
   const missingBatchColumns = [
     ['filter_revision', 'INTEGER NOT NULL DEFAULT 1'],

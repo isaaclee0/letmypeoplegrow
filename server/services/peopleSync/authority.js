@@ -108,6 +108,46 @@ async function getAuthority(churchId) {
   );
 }
 
+async function getPeopleSyncPolicyWithConnection(conn, churchId) {
+  const [row] = await conn.query(
+    `SELECT sync_enabled, people_editing_locked
+       FROM people_sync_settings
+      WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  return {
+    syncEnabled: row?.sync_enabled === undefined ? true : !!row.sync_enabled,
+    peopleEditingLocked: row?.people_editing_locked === undefined ? true : !!row.people_editing_locked,
+  };
+}
+
+async function getPeopleSyncPolicy(churchId) {
+  return Database.transactionForChurch(churchId, (conn) =>
+    getPeopleSyncPolicyWithConnection(conn, churchId)
+  );
+}
+
+async function updatePeopleSyncPolicy(churchId, patch) {
+  return Database.transactionForChurch(churchId, async (conn) => {
+    await conn.query(
+      `INSERT INTO people_sync_settings (church_id, sync_enabled, people_editing_locked)
+       VALUES (?, ?, ?)
+       ON CONFLICT(church_id) DO UPDATE SET
+         sync_enabled = COALESCE(?, people_sync_settings.sync_enabled),
+         people_editing_locked = COALESCE(?, people_sync_settings.people_editing_locked),
+         updated_at = datetime('now')`,
+      [
+        churchId,
+        patch.syncEnabled === undefined ? 1 : patch.syncEnabled ? 1 : 0,
+        patch.peopleEditingLocked === undefined ? 1 : patch.peopleEditingLocked ? 1 : 0,
+        patch.syncEnabled === undefined ? null : patch.syncEnabled ? 1 : 0,
+        patch.peopleEditingLocked === undefined ? null : patch.peopleEditingLocked ? 1 : 0,
+      ]
+    );
+    return getPeopleSyncPolicyWithConnection(conn, churchId);
+  });
+}
+
 async function beginAuthoritySwitch(churchId, provider, authorityPreviewId = null) {
   assertAuthorityProvider(provider);
   if (authorityPreviewId !== null) assertAuthorityPreviewId(authorityPreviewId);
@@ -242,7 +282,7 @@ async function commitAuthoritySwitchWithConnection(conn, churchId, provider, aut
   }
   const result = await conn.query(
     `UPDATE people_sync_settings
-        SET authority_provider = ?, pending_authority_provider = NULL,
+        SET authority_provider = ?, pending_authority_provider = NULL, sync_enabled = 1,
             updated_at = datetime('now')
       WHERE church_id = ? AND pending_authority_provider = ?`,
     [provider, churchId, provider]
@@ -376,6 +416,9 @@ module.exports = {
   getAuthorityWithConnection,
   assertAuthorityExpectationWithConnection,
   getAuthority,
+  getPeopleSyncPolicyWithConnection,
+  getPeopleSyncPolicy,
+  updatePeopleSyncPolicy,
   beginAuthoritySwitch,
   getAuthorityPreviewIntent,
   cancelAuthoritySwitch,

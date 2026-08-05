@@ -203,6 +203,8 @@ CREATE TABLE IF NOT EXISTS people_sync_settings (
     CHECK(pending_authority_provider IS NULL OR pending_authority_provider IN ('planning_center', 'elvanto')),
   elvanto_include_contacts INTEGER NOT NULL DEFAULT 1,
   elvanto_align_people_type INTEGER NOT NULL DEFAULT 1,
+  sync_enabled INTEGER NOT NULL DEFAULT 1,
+  people_editing_locked INTEGER NOT NULL DEFAULT 1,
   full_reconciliation_frequency TEXT NOT NULL DEFAULT 'weekly',
   full_reconciliation_day INTEGER NOT NULL DEFAULT 1,
   created_at TEXT DEFAULT (datetime('now')),
