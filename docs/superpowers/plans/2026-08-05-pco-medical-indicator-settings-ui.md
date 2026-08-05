@@ -171,3 +171,85 @@ Expected: all focused tests and the production build pass; `git diff --check` pr
 git add client/src/components/integrations/PlanningCenterMedicalNotesSettings.tsx client/src/components/integrations/PlanningCenterMedicalNotesSettings.test.tsx
 git commit -m "fix(pco): align adoption confirmation actions"
 ```
+
+### Task 3: Group and filter medical badges
+
+**Files:**
+- Create: `client/src/utils/badgeFilters.ts`
+- Create: `client/src/utils/badgeFilters.test.ts`
+- Modify: `client/src/components/people/PersonCard.tsx`
+- Test: `client/src/components/people/PersonCard.medicalNotes.test.tsx`
+- Modify: `client/src/pages/PeoplePage.tsx`
+- Test: `client/src/pages/PeoplePage.externalSource.test.tsx`
+- Modify: `client/src/pages/AttendancePage.tsx`
+- Modify: `client/src/utils/attendancePeopleFilters.ts`
+- Test: `client/src/utils/attendancePeopleFilters.test.ts`
+
+**Interfaces:**
+- Produces: `createBadgeFilterKey`, `createMedicalBadgeFilterOption`, `getApplicableBadgeFilterKeys`, and `matchesSelectedBadgeKeys` in `badgeFilters.ts`.
+- Consumes: an ordinary badge key, `hasMedicalNotes`, and the configured medical appearance; no API contract changes.
+
+- [ ] **Step 1: Write failing placement and filter tests**
+
+Update the PersonCard test to locate a `role="group"` labelled for the person's badges and assert the ordinary and medical icons share it with a small gap. Extend the People-page fixture to accept `medicalNotesIndicator`, then assert the **Medical note recorded** filter includes both medical-only and medical-plus-ordinary people. Extend the attendance filter tests so a person may return both ordinary and medical keys and matches either selected key.
+
+- [ ] **Step 2: Run tests and verify RED**
+
+Run:
+
+```bash
+cd client && npm test -- --run src/components/people/PersonCard.medicalNotes.test.tsx src/pages/PeoplePage.externalSource.test.tsx src/utils/attendancePeopleFilters.test.ts
+```
+
+Expected: FAIL because the medical badge is beside the name, no medical filter option exists, and attendance accepts only one badge key per person.
+
+- [ ] **Step 3: Add shared badge-filter primitives**
+
+Create `badgeFilters.ts` with literal visual option construction and OR matching:
+
+```ts
+export function getApplicableBadgeFilterKeys(
+  ordinaryKey: string | null,
+  hasMedicalNotes: boolean,
+  medicalKey: string | null,
+): string[] {
+  return [ordinaryKey, hasMedicalNotes ? medicalKey : null]
+    .filter((key): key is string => Boolean(key));
+}
+
+export function matchesSelectedBadgeKeys(
+  selected: ReadonlySet<string>,
+  applicable: readonly string[],
+): boolean {
+  return selected.size === 0 || applicable.some((key) => selected.has(key));
+}
+```
+
+`createMedicalBadgeFilterOption` returns `null` without a configured appearance; otherwise it returns an icon-only option labelled `Medical note recorded`, with contrast colour from `getChildBadgeStyles`.
+
+- [ ] **Step 4: Group People-card badges**
+
+Remove the medical indicator from the name row. Replace the single ordinary-badge wrapper with an accessible top-right badge group rendered when either badge exists. Keep ordinary first, medical second, and use `gap-1`.
+
+- [ ] **Step 5: Wire People and Attendance filters**
+
+Replace both pages' local key builders with `createBadgeFilterKey`. Append the configured medical option to `usedBadgeOptions` whenever `medicalNotesIndicator` exists. Compute all applicable keys per person and match selected filters with `matchesSelectedBadgeKeys`. Update `attendancePeopleFilters` to consume `(person) => readonly string[]`, preserving age AND badge logic and badge OR semantics.
+
+- [ ] **Step 6: Run focused verification**
+
+Run:
+
+```bash
+cd client && npm test -- --run src/utils/badgeFilters.test.ts src/components/people/PersonCard.medicalNotes.test.tsx src/pages/PeoplePage.externalSource.test.tsx src/utils/attendancePeopleFilters.test.ts
+cd client && npm run build
+git diff --check
+```
+
+Expected: all focused tests and the production build pass; `git diff --check` prints no errors.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add client/src/utils/badgeFilters.ts client/src/utils/badgeFilters.test.ts client/src/components/people/PersonCard.tsx client/src/components/people/PersonCard.medicalNotes.test.tsx client/src/pages/PeoplePage.tsx client/src/pages/PeoplePage.externalSource.test.tsx client/src/pages/AttendancePage.tsx client/src/utils/attendancePeopleFilters.ts client/src/utils/attendancePeopleFilters.test.ts
+git commit -m "feat(pco): filter people by medical badges"
+```
