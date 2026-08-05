@@ -17,7 +17,9 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
       'external_family_links',
       'people_sync_settings',
       'people_sync_batches',
-      'people_sync_runs'
+      'people_sync_runs',
+      'people_sync_batch_identity_projection_states',
+      'people_sync_batch_identity_projection_items',
     ]) {
       assert.ok(names.has(name), `missing ${name}`);
     }

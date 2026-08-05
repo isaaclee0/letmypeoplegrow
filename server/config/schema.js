@@ -266,6 +266,40 @@ CREATE TABLE IF NOT EXISTS people_sync_batches (
 CREATE INDEX IF NOT EXISTS idx_people_sync_batches_church ON people_sync_batches(church_id);
 CREATE INDEX IF NOT EXISTS idx_people_sync_batches_provider ON people_sync_batches(church_id, provider);
 
+-- Observational, source-bound attribution for unresolved identities. Durable
+-- holds/exclusions remain provider-wide authority; these rows only let batch
+-- cards identify which current source memberships need attention.
+CREATE TABLE IF NOT EXISTS people_sync_batch_identity_projection_states (
+  batch_id INTEGER PRIMARY KEY,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  source_role TEXT NOT NULL CHECK(source_role IN ('active', 'draft')),
+  source_identity_digest TEXT NOT NULL,
+  source_revision INTEGER NOT NULL CHECK(source_revision >= 1),
+  source_base_revision INTEGER,
+  observed_at TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_batch_identity_projection_state_lookup
+  ON people_sync_batch_identity_projection_states(church_id, provider, batch_id);
+
+CREATE TABLE IF NOT EXISTS people_sync_batch_identity_projection_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  batch_id INTEGER NOT NULL,
+  external_person_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK(reason IN ('identity_decision_required', 'deferred', 'pair_rejected')),
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, batch_id, external_person_id),
+  FOREIGN KEY (batch_id) REFERENCES people_sync_batch_identity_projection_states(batch_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_batch_identity_projection_item_lookup
+  ON people_sync_batch_identity_projection_items(church_id, provider, batch_id);
+
 ${peopleSyncRunsTableSql('people_sync_runs')}
 CREATE INDEX IF NOT EXISTS idx_people_sync_runs_church ON people_sync_runs(church_id);
 CREATE INDEX IF NOT EXISTS idx_people_sync_runs_lookup ON people_sync_runs(church_id, provider, batch_id, started_at);
