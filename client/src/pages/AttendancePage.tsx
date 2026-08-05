@@ -2715,8 +2715,18 @@ const AttendancePage: React.FC = () => {
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Search by family member or visitor name..."
-                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md"
+                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-10 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md"
                   />
+                  {searchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchTerm('')}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                      aria-label="Clear search"
+                    >
+                      <XMarkIcon className="h-5 w-5" />
+                    </button>
+                  )}
                 </div>
               </div>
             )}
