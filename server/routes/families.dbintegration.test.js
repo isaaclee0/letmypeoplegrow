@@ -596,6 +596,15 @@ test('integration settings expose authority and provider-neutral Elvanto options
         planningCenterSyncIndicator: false,
         planningCenterSyncEnabled: true,
         planningCenterTrackBackgroundChecks: true,
+        planningCenterMedicalNotes: {
+          enabled: false,
+          minimumRole: 'admin',
+          gatheringTypeIds: [],
+          badgeIcon: null,
+          badgeColor: null,
+          lastRefreshedAt: null,
+          lastRefreshResult: null,
+        },
       });
     } finally {
       await app.close();
