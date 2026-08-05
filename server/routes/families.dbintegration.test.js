@@ -109,6 +109,38 @@ async function activateAuthority(churchId, provider) {
   await commitAuthoritySwitch(churchId, provider);
 }
 
+test('People exposes medical booleans only for people assigned to a relevant gathering', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const gatheringId = await seedGatheringType(churchId, 'Sunday');
+    const eligible = await Database.query(
+      `INSERT INTO individuals (first_name, last_name, church_id, planning_center_id, pco_has_medical_notes)
+       VALUES ('Eligible', 'Person', ?, 'p1', 1)`, [churchId]);
+    const outside = await Database.query(
+      `INSERT INTO individuals (first_name, last_name, church_id, planning_center_id, pco_has_medical_notes)
+       VALUES ('Outside', 'Person', ?, 'p2', 1)`, [churchId]);
+    await Database.query('INSERT INTO gathering_lists (gathering_type_id, individual_id, church_id) VALUES (?, ?, ?)', [gatheringId, eligible.insertId, churchId]);
+    await Database.query('INSERT INTO planning_center_medical_note_gatherings (church_id, gathering_type_id) VALUES (?, ?)', [churchId, gatheringId]);
+    await Database.query(
+      `UPDATE church_settings SET planning_center_medical_notes_enabled = 1,
+       planning_center_medical_notes_minimum_role = 'admin',
+       planning_center_medical_notes_badge_icon = 'heart',
+       planning_center_medical_notes_badge_color = '#facc15' WHERE church_id = ?`, [churchId]);
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request('/api/individuals');
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body.medicalNotesIndicator, { icon: 'heart', color: '#facc15' });
+      const eligibleRow = response.body.people.find((person) => person.firstName === 'Eligible');
+      const outsideRow = response.body.people.find((person) => person.firstName === 'Outside');
+      assert.equal(eligibleRow.hasMedicalNotes, true);
+      assert.equal(Object.hasOwn(outsideRow, 'hasMedicalNotes'), false);
+      assert.equal(JSON.stringify(response.body).includes('medical_notes'), false);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 async function seedFamily(churchId, name = 'Example') {
   const result = await Database.query(
     `INSERT INTO families (church_id, family_name) VALUES (?, ?)`,

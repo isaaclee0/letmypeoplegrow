@@ -13,6 +13,7 @@ const {
   lockedResponse,
 } = require('../services/peopleSync/authority');
 const { listPersonLinks } = require('../services/peopleSync/linkRepository');
+const { getMedicalNotesVisibility } = require('../services/planningCenter/medicalNotesPolicy');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -233,8 +234,12 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 // Get all individuals with their family and gathering assignments
 router.get('/', async (req, res) => {
   try {
+    const medicalVisibility = await getMedicalNotesVisibility(req.user.church_id, req.user.role);
+    const relevantGatherings = new Set(medicalVisibility.gatheringTypeIds);
     const canSeeBackgroundCheckStatus = ['admin', 'coordinator'].includes(req.user.role);
     const backgroundCheckSelect = canSeeBackgroundCheckStatus ? 'i.pco_background_check_cleared,' : '';
+    const medicalNotesSelect = medicalVisibility.authorized && medicalVisibility.indicator
+      ? 'i.pco_has_medical_notes,' : '';
 
     const individuals = await Database.query(`
       SELECT
@@ -252,6 +257,7 @@ router.get('/', async (req, res) => {
         i.created_at,
         i.planning_center_id,
         ${backgroundCheckSelect}
+        ${medicalNotesSelect}
         GROUP_CONCAT(DISTINCT gt.id || char(31) || gt.name) as gathering_pairs
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
@@ -263,7 +269,12 @@ router.get('/', async (req, res) => {
     `, [req.user.church_id]);
 
     // Process gathering assignments and use systematic conversion utility
-    const processedIndividuals = await addPeopleAuthorityMetadata(req.user.church_id, individuals.map(individual => ({
+    const processedIndividuals = await addPeopleAuthorityMetadata(req.user.church_id, individuals.map(({ pco_has_medical_notes, ...individual }) => {
+      const gatheringAssignments = parseGatheringPairs(individual.gathering_pairs);
+      const medicalEligible = medicalVisibility.authorized && medicalVisibility.indicator
+        && Boolean(individual.planning_center_id)
+        && gatheringAssignments.some(({ id }) => relevantGatherings.has(id));
+      return ({
       ...individual,
       isActive: Boolean(individual.is_active),
       isChild: Boolean(individual.is_child),
@@ -273,10 +284,14 @@ router.get('/', async (req, res) => {
           ? null
           : Boolean(individual.pco_background_check_cleared)
       } : {}),
-      gatheringAssignments: parseGatheringPairs(individual.gathering_pairs)
-    })));
+      ...(medicalEligible ? { hasMedicalNotes: Boolean(pco_has_medical_notes) } : {}),
+      gatheringAssignments
+    }); }));
 
     const responseData = processApiResponse({ people: processedIndividuals });
+    if (medicalVisibility.authorized && medicalVisibility.indicator) {
+      responseData.medicalNotesIndicator = medicalVisibility.indicator;
+    }
     restoreProviderLinkKeys(responseData.people);
     res.json(responseData);
   } catch (error) {

@@ -6,6 +6,7 @@ const { processApiResponse } = require('../utils/caseConverter');
 const websocketBroadcast = require('../utils/websocketBroadcast');
 const logger = require('../config/logger');
 const { isBackgroundCheckTrackingEnabled } = require('../services/planningCenter/mode');
+const { getMedicalNotesVisibility } = require('../services/planningCenter/medicalNotesPolicy');
 
 const router = express.Router();
 
@@ -1071,6 +1072,10 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
   try {
     const { gatheringTypeId, date } = req.params;
     const { search } = req.query;
+    const medicalVisibility = await getMedicalNotesVisibility(req.user.church_id, req.user.role);
+    const showMedicalNotes = medicalVisibility.authorized && medicalVisibility.indicator
+      && medicalVisibility.gatheringTypeIds.includes(Number(gatheringTypeId));
+    const medicalNotesSelect = showMedicalNotes ? ', i.pco_has_medical_notes' : '';
 
     // We'll reuse the logic from the individual endpoints but execute in parallel where possible
     const results = {};
@@ -1195,7 +1200,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           i.is_child,
           i.last_attendance_date,
           i.created_at as individual_created_at,
-          i.pco_background_check_cleared,
+          i.pco_background_check_cleared
+          ${medicalNotesSelect},
           COALESCE(ar.people_type_at_time, i.people_type) as people_type,
           f.id as family_id,
           f.family_name,
@@ -1245,7 +1251,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           createdAt: individual.individual_created_at,
           peopleType: individual.people_type,
           notes: null,
-          pcoBackgroundCheckCleared: individual.pco_background_check_cleared
+          pcoBackgroundCheckCleared: individual.pco_background_check_cleared,
+          ...(showMedicalNotes ? { hasMedicalNotes: Boolean(individual.pco_has_medical_notes) } : {})
         });
       });
 
@@ -1272,7 +1279,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             peopleType: member.peopleType,
             lastAttendanceDate: member.lastAttendanceDate,
             createdAt: member.createdAt,
-            pcoBackgroundCheckCleared: member.pcoBackgroundCheckCleared
+            pcoBackgroundCheckCleared: member.pcoBackgroundCheckCleared,
+            ...(showMedicalNotes ? { hasMedicalNotes: member.hasMedicalNotes } : {})
           };
         })
       );
@@ -1292,7 +1300,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     let attendanceListQuery = `
       SELECT i.id, i.first_name, i.last_name, i.is_child,
              i.badge_text, i.badge_color, i.badge_icon,
-             i.pco_background_check_cleared,
+             i.pco_background_check_cleared
+             ${medicalNotesSelect},
              f.family_name, f.id as family_id,
              f.family_notes,
              COALESCE(ar.present, 0) as present,
@@ -1419,7 +1428,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       sessionId: sessionId,
       excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
       showBackgroundCheckStatus,
-      attendanceList: attendanceList.map(({ pco_background_check_cleared, ...attendee }) => ({
+      attendanceList: attendanceList.map(({ pco_background_check_cleared, pco_has_medical_notes, ...attendee }) => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
         isChild: Boolean(attendee.is_child),
@@ -1431,6 +1440,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             ? null
             : Boolean(pco_background_check_cleared)
         } : {}),
+        ...(showMedicalNotes ? { hasMedicalNotes: Boolean(pco_has_medical_notes) } : {}),
         familyNotes: attendee.family_notes || null,
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
@@ -1448,14 +1458,15 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         withinAbsenceLimit: visitor.within_absence_limit === 1 || visitor.within_absence_limit === true
       })),
       recentVisitors: results.recentVisitors || [],
-      allChurchPeople: (results.allChurchPeople || []).map(({ pco_background_check_cleared, ...p }) => ({
+      allChurchPeople: (results.allChurchPeople || []).map(({ pco_background_check_cleared, pco_has_medical_notes, ...p }) => ({
         ...p,
         ...(showBackgroundCheckStatus ? {
           backgroundCheckCleared: pco_background_check_cleared === null || pco_background_check_cleared === undefined
             ? null
             : Boolean(pco_background_check_cleared)
         } : {})
-      }))
+      })),
+      ...(showMedicalNotes ? { medicalNotesIndicator: medicalVisibility.indicator } : {})
     });
 
     res.json(responseData);
