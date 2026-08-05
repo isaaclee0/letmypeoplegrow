@@ -107,6 +107,30 @@ test('integration settings expose boolean-only medical configuration and adoptab
   });
 });
 
+test('medical indicators cannot be enabled without a Planning Center connection', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gathering = await Database.query("INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)", [churchId]);
+    const app = await startApp(churchId);
+    try {
+      const response = await app.request({ planningCenterMedicalNotes: {
+        enabled: true,
+        minimumRole: 'admin',
+        gatheringTypeIds: [gathering.insertId],
+        badgeIcon: 'heart',
+        badgeColor: '#facc15',
+        adoptExistingAppearance: false,
+      } });
+      assert.equal(response.status, 409);
+      assert.equal(response.body.code, 'PCO_CONNECTION_REQUIRED');
+      const [settings] = await Database.query(
+        'SELECT planning_center_medical_notes_enabled AS enabled FROM church_settings WHERE church_id = ?', [churchId]);
+      assert.equal(settings.enabled, 0);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 test('legacy settings route may disable active PCO authority without activating another provider', async () => {
   await withTestChurchDb(async (churchId) => {
     await Database.query(

@@ -6,6 +6,7 @@ const { getAuthority } = require('../services/peopleSync/authority');
 const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
 const medicalNotesPolicy = require('../services/planningCenter/medicalNotesPolicy');
 const medicalNotesSync = require('../services/planningCenter/medicalNotesSync');
+const pcoCredentialMigration = require('../services/peopleSync/pcoCredentialMigration');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -591,6 +592,13 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     }
     let medicalNotesResult = null;
     if (planningCenterMedicalNotes !== undefined) {
+      if (planningCenterMedicalNotes?.enabled === true
+          && !(await pcoCredentialMigration.getOrMigrateCredentials(req.user.church_id))) {
+        return res.status(409).json({
+          error: 'Connect Planning Center before enabling medical-note indicators.',
+          code: 'PCO_CONNECTION_REQUIRED',
+        });
+      }
       medicalNotesResult = await medicalNotesPolicy.saveMedicalNotesSettings(
         req.user.church_id,
         { userId: req.user.id, ipAddress: req.ip, userAgent: req.get('user-agent') },
