@@ -23,12 +23,17 @@ test('runs record only camel-cased safe audit fields and provider/church scoped 
   });
 });
 
-test('Planning Center runs persist supplementary background-check outcome counts', async () => {
+test('Planning Center runs persist supplementary provider-refresh outcome counts', async () => {
   await withTestChurchDb(async (churchId) => {
     const run = await startRun({
       churchId, provider: 'planning_center', batchId: null, trigger: 'manual', fetchMode: 'full',
     });
-    const counts = { backgroundCheckSynced: 7, backgroundCheckSyncFailed: 0 };
+    const counts = {
+      backgroundCheckSynced: 7,
+      backgroundCheckSyncFailed: 0,
+      medicalNotesSynced: 5,
+      medicalNotesSyncFailed: 0,
+    };
 
     const finished = await finishRun({
       churchId, provider: 'planning_center', runId: run.id, status: 'applied', counts,

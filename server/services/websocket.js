@@ -2010,6 +2010,7 @@ class WebSocketService {
       });
 
       const Database = require('../config/database');
+      const { columnExists } = require('../utils/databaseSchema');
 
       await Database.transactionForChurch(socket.churchId, async (conn) => {
         // Insert kiosk checkin/checkout records
