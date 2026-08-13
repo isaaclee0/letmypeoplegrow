@@ -40,8 +40,8 @@ export function formatInstant(
   if (!instant) return '';
 
   return new Intl.DateTimeFormat(locale, {
-    timeZone: normalizeTimeZone(timeZone),
     ...options,
+    timeZone: normalizeTimeZone(timeZone),
   }).format(instant);
 }
 
@@ -94,15 +94,24 @@ export function formatDateOnly(
   const date = dateOnlyToUtcNoon(value);
   if (!date) return '';
 
-  return new Intl.DateTimeFormat(locale, { timeZone: 'UTC', ...options }).format(date);
+  return new Intl.DateTimeFormat(locale, { ...options, timeZone: 'UTC' }).format(date);
 }
 
 export function addDateOnly(value: string, amount: DateOnlyAmount): string {
   const date = dateOnlyToUtcNoon(value);
   if (!date) return value;
 
-  if (amount.years) date.setUTCFullYear(date.getUTCFullYear() + amount.years);
-  if (amount.months) date.setUTCMonth(date.getUTCMonth() + amount.months);
+  const years = amount.years ?? 0;
+  const months = amount.months ?? 0;
+  const currentYear = date.getUTCFullYear();
+  const currentMonth = date.getUTCMonth();
+  const currentDay = date.getUTCDate();
+  const targetMonth = currentYear * 12 + currentMonth + years * 12 + months;
+  const targetYear = Math.floor(targetMonth / 12);
+  const targetMonthIndex = ((targetMonth % 12) + 12) % 12;
+  const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonthIndex + 1, 0)).getUTCDate();
+
+  date.setUTCFullYear(targetYear, targetMonthIndex, Math.min(currentDay, daysInTargetMonth));
   if (amount.days) date.setUTCDate(date.getUTCDate() + amount.days);
 
   return date.toISOString().slice(0, 10);
