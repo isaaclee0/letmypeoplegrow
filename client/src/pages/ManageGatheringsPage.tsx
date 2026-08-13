@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useChurchTime } from '../hooks/useChurchTime';
+import { addDateOnly } from '../utils/churchTime';
 import { useNavigate } from 'react-router-dom';
 import { gatheringsAPI, onboardingAPI, kioskAPI, settingsAPI } from '../services/api';
 import logger from '../utils/logger';
@@ -73,6 +74,63 @@ interface CreateGatheringData {
   individualMode?: boolean;
   requiresBackgroundCheck?: boolean;
   customDatesText?: string;
+}
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function weekdayForDateOnly(date: string): string {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' })
+    .format(new Date(`${date}T12:00:00Z`));
+}
+
+function dateOnlyForDayOfMonth(monthStart: string, dayOfMonth: number): string | null {
+  const nextMonthStart = addDateOnly(monthStart, { months: 1 });
+  const lastDay = Number(addDateOnly(nextMonthStart, { days: -1 }).slice(-2));
+  return dayOfMonth <= lastDay ? `${monthStart.slice(0, 8)}${String(dayOfMonth).padStart(2, '0')}` : null;
+}
+
+export function generateGatheringOccurrences(gathering: Gathering, churchToday: string): Array<{ date: string; canDelete: boolean }> {
+  const occurrences: Array<{ date: string; canDelete: boolean }> = [];
+  const futureDate = addDateOnly(churchToday, { months: 3 });
+  const include = (date: string) => date >= churchToday && date <= futureDate;
+
+  if (gathering.attendanceType === 'headcount' && gathering.customSchedule) {
+    const { customSchedule } = gathering;
+    if (customSchedule.type === 'one_off') {
+      if (include(customSchedule.startDate)) occurrences.push({ date: customSchedule.startDate, canDelete: true });
+    } else if (customSchedule.pattern) {
+      const endDate = customSchedule.endDate && customSchedule.endDate < futureDate ? customSchedule.endDate : futureDate;
+      const pattern = customSchedule.pattern;
+      if (pattern.frequency === 'monthly' && pattern.dayOfMonth) {
+        let monthStart = `${customSchedule.startDate.slice(0, 7)}-01`;
+        while (monthStart <= endDate) {
+          const candidate = dateOnlyForDayOfMonth(monthStart, pattern.dayOfMonth);
+          if (candidate && candidate >= customSchedule.startDate && include(candidate)) occurrences.push({ date: candidate, canDelete: true });
+          monthStart = addDateOnly(monthStart, { months: pattern.interval || 1 });
+        }
+      } else {
+        let currentDate = customSchedule.startDate;
+        while (currentDate <= endDate) {
+          const isIncluded = pattern.frequency === 'daily'
+            || (pattern.frequency === 'weekly' && !!pattern.daysOfWeek?.includes(weekdayForDateOnly(currentDate)));
+          if (isIncluded && include(currentDate)) occurrences.push({ date: currentDate, canDelete: true });
+          currentDate = addDateOnly(currentDate, { days: pattern.frequency === 'daily' ? (pattern.interval || 1) : 1 });
+        }
+      }
+    }
+  } else {
+    const targetDay = WEEKDAY_NAMES.indexOf(gathering.dayOfWeek || 'Sunday');
+    let currentDate = churchToday;
+    while (weekdayForDateOnly(currentDate) !== WEEKDAY_NAMES[targetDay]) currentDate = addDateOnly(currentDate, { days: 1 });
+    while (currentDate <= futureDate) {
+      occurrences.push({ date: currentDate, canDelete: true });
+      currentDate = gathering.frequency === 'monthly'
+        ? addDateOnly(currentDate, { months: 1 })
+        : addDateOnly(currentDate, { days: gathering.frequency === 'biweekly' ? 14 : 7 });
+    }
+  }
+
+  return occurrences;
 }
 
 const ManageGatheringsPage: React.FC = () => {
@@ -514,91 +572,8 @@ const ManageGatheringsPage: React.FC = () => {
   };
 
   // Generate occurrences for a gathering (for display purposes)
-  const generateGatheringOccurrences = (gathering: Gathering): Array<{ date: string; canDelete: boolean }> => {
-    const occurrences: Array<{ date: string; canDelete: boolean }> = [];
-    const now = new Date(`${today()}T12:00:00`);
-    const futureDate = new Date(now);
-    futureDate.setMonth(futureDate.getMonth() + 3); // Show next 3 months
-
-    if (gathering.attendanceType === 'headcount' && gathering.customSchedule) {
-      // Handle custom schedule
-      if (gathering.customSchedule.type === 'one_off') {
-        const date = new Date(gathering.customSchedule.startDate);
-        occurrences.push({
-          date: date.toISOString().split('T')[0],
-          canDelete: true
-        });
-      } else if (gathering.customSchedule.type === 'recurring' && gathering.customSchedule.pattern) {
-        const startDate = new Date(gathering.customSchedule.startDate);
-        const endDate = gathering.customSchedule.endDate ? new Date(gathering.customSchedule.endDate) : futureDate;
-        const pattern = gathering.customSchedule.pattern;
-
-        let currentDate = new Date(startDate);
-        while (currentDate <= endDate && currentDate <= futureDate) {
-          let shouldInclude = false;
-
-          if (pattern.frequency === 'daily') {
-            shouldInclude = true;
-            currentDate.setDate(currentDate.getDate() + (pattern.interval || 1));
-          } else if (pattern.frequency === 'weekly' && pattern.daysOfWeek) {
-            const dayName = formatDateOnly(currentDate.toISOString().slice(0, 10), { weekday: 'long' }, 'en-US');
-            if (pattern.daysOfWeek.includes(dayName)) {
-              shouldInclude = true;
-            }
-            currentDate.setDate(currentDate.getDate() + 1);
-          } else if (pattern.frequency === 'monthly' && pattern.dayOfMonth) {
-            if (currentDate.getDate() === pattern.dayOfMonth) {
-              shouldInclude = true;
-            }
-            currentDate.setMonth(currentDate.getMonth() + (pattern.interval || 1));
-            currentDate.setDate(pattern.dayOfMonth);
-          }
-
-          if (shouldInclude && currentDate >= now) {
-            occurrences.push({
-              date: currentDate.toISOString().split('T')[0],
-              canDelete: true
-            });
-          }
-        }
-      }
-    } else {
-      // Handle regular schedule
-      const dayMap: { [key: string]: number } = {
-        'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-        'Thursday': 4, 'Friday': 5, 'Saturday': 6
-      };
-
-      const targetDay = dayMap[gathering.dayOfWeek || 'Sunday'];
-      let currentDate = new Date(now);
-      
-      // Find next occurrence
-      while (currentDate.getDay() !== targetDay) {
-        currentDate.setDate(currentDate.getDate() + 1);
-      }
-
-      // Generate occurrences based on frequency
-      while (currentDate <= futureDate) {
-        occurrences.push({
-          date: currentDate.toISOString().split('T')[0],
-          canDelete: true
-        });
-
-        if (gathering.frequency === 'weekly') {
-          currentDate.setDate(currentDate.getDate() + 7);
-        } else if (gathering.frequency === 'biweekly') {
-          currentDate.setDate(currentDate.getDate() + 14);
-        } else if (gathering.frequency === 'monthly') {
-          currentDate.setMonth(currentDate.getMonth() + 1);
-        }
-      }
-    }
-
-    return occurrences;
-  };
-
   const handleManageOccurrences = (gathering: Gathering) => {
-    const occurrences = generateGatheringOccurrences(gathering);
+    const occurrences = generateGatheringOccurrences(gathering, today());
     setGatheringOccurrences({ gathering, occurrences });
     setSelectedOccurrences([]);
     setShowManageOccurrencesModal(true);

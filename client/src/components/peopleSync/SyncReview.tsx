@@ -469,7 +469,6 @@ function ReviewOperationMismatch({
 }
 
 export default function SyncReview(props: SyncReviewProps) {
-  const { formatInstant } = useChurchTime();
   if (!operationKindMatchesReview(props.operationKind, props.review)) {
     return <ReviewOperationMismatch {...props} />;
   }
@@ -494,6 +493,7 @@ function SafeSyncReview({
   requireAllPlannedArchivesAccepted = false,
   initialIdentityFilter,
 }: SyncReviewProps) {
+  const { formatInstant } = useChurchTime();
   const initialState = stateForReview(review, operationKind);
   const [effectiveReview, setEffectiveReview] = useState<PeopleSyncReview>(review);
   const [state, setState] = useState<SyncSelectionState>(initialState);
