@@ -110,17 +110,20 @@ describe('BatchSourceControls', () => {
   });
 
   it.each([
-    ['green', '2026-07-29T11:00:00.000Z'],
-    ['orange', '2026-07-20T12:00:00.000Z'],
-    ['red', '2026-06-20T12:00:00.000Z'],
+    ['green', 1],
+    ['orange', 8],
+    ['red', 31],
     ['unknown', null],
-  ] as const)('shows Planning Center %s freshness as text and colour without a refresh action', async (band, providerRefreshedAt) => {
+  ] as const)('shows Planning Center %s freshness as text and colour without a refresh action', async (band, ageInDays) => {
+    const providerRefreshedAt = ageInDays === null ? null : new Date(Date.now() - ageInDays * 24 * 60 * 60 * 1000).toISOString();
     vi.mocked(peopleSyncAPI.listSources).mockResolvedValue({ data: { success: true, sources: [source({ providerRefreshedAt })] } });
     render(<Controlled />);
 
     const freshness = await screen.findByTestId('planning-center-freshness');
     expect(freshness).toHaveClass(`source-freshness-${band}`);
-    if (providerRefreshedAt) expect(freshness).toHaveAttribute('title', expect.stringContaining(new Date(providerRefreshedAt).toLocaleString()));
+    if (providerRefreshedAt) expect(freshness).toHaveAttribute('title', expect.stringContaining(new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC',
+    }).format(new Date(providerRefreshedAt))));
     expect(screen.getByText('If recent members are missing, refresh this List in Planning Center.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /refresh|run/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/stale/i)).not.toBeInTheDocument();
@@ -131,7 +134,9 @@ describe('BatchSourceControls', () => {
     const checkedAt = '2026-07-29T12:00:00.000Z';
     render(<Controlled provider="elvanto" initial={{ sourceKind: 'elvanto_category', sourceExternalId: 'category-1' }} currentBatch={batch({ provider: 'elvanto', source: source({ kind: 'elvanto_category', externalId: 'category-1', name: 'Members' }), sourceStatusCheckedAt: checkedAt })} />);
 
-    expect(await screen.findByText(`Last checked by LMPG ${new Date(checkedAt).toLocaleString()}`)).toBeInTheDocument();
+    expect(await screen.findByText(`Last checked by LMPG ${new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC',
+    }).format(new Date(checkedAt))}`)).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

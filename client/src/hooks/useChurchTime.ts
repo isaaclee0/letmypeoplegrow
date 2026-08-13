@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useOptionalAuth } from '../contexts/AuthContext';
 import {
   formatDateOnly,
   formatInstant,
@@ -10,7 +10,8 @@ import {
 } from '../utils/churchTime';
 
 export function useChurchTime() {
-  const { user } = useAuth();
+  const auth = useOptionalAuth();
+  const user = auth?.user;
   const timeZone = normalizeTimeZone(user?.timezone);
 
   return useMemo(() => ({

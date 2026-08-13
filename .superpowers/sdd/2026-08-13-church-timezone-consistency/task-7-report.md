@@ -21,3 +21,10 @@
 - Moved the church-time hook into `SafeSyncReview`, the component that renders the snapshot, and added a snapshot regression test with the hook mocked to a church formatter.
 - Replaced gathering-occurrence browser-local `Date` construction and `toISOString` conversions with date-only string arithmetic. Monthly day-of-month schedules now skip months that do not contain the requested day instead of rolling into the next month.
 - Verification: `TZ=America/Los_Angeles npm test -- --run src/components/peopleSync/SyncReview.test.tsx src/pages/ManageGatheringsPage.test.ts src/utils/sourceFreshness.test.ts src/utils/reportDateRanges.test.ts`; `npm run build`.
+
+## Final verification fix round
+
+- Added `useOptionalAuth` for low-level display hooks only; `useAuth` still throws outside `AuthProvider` for all general callers.
+- `useChurchTime` now falls back to UTC when a component is rendered without authentication context, while retaining the active church timezone inside a provider.
+- Added hook coverage for both paths and made source-control freshness tests clock-independent while asserting UTC fallback formatting.
+- Verification: `TZ=America/Los_Angeles npm test -- --run src/hooks/useChurchTime.test.tsx src/components/peopleSync/BatchSourceControls.test.tsx src/components/peopleSync/SyncReview.test.tsx src/components/integrations/IntegrationsTab.test.tsx`; `npm run build`.
