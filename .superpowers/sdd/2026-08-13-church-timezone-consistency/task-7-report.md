@@ -34,3 +34,10 @@
 - Restored `useChurchTime` to consume the established `useAuth` contract, so existing test mocks continue to work. It catches only `useAuth`'s missing-provider error and otherwise defaults to UTC.
 - Removed the optional context accessor; `useAuth` retains its original strict provider contract.
 - Verification: `TZ=America/Los_Angeles npm test -- --run src/pages src/components/checkins src/components/integrations src/components/peopleSync src/contexts src/utils` — 371 passed; five pre-existing `PeoplePage.import` failures remain. `npm run build` passed.
+
+## Fix Round 4 — legal context access
+
+- Extracted the auth context value and types into `authContextValue.ts`; `AuthContext.tsx` re-exports the context while keeping `useAuth` strict.
+- `useChurchTime` now uses `useContext` directly on the shared context, avoiding a hook call in `try`/`catch` and preserving module mocks of `useAuth`.
+- Updated the check-in history test to provide the shared context independently of its existing `useAuth` mock.
+- Verification: `TZ=America/Los_Angeles npm test -- --run src/pages src/components/checkins src/components/integrations src/components/peopleSync src/contexts src/utils` — 371 passed; five pre-existing `PeoplePage.import` failures remain. `npm run build` passed.

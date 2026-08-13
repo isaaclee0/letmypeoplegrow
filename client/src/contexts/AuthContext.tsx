@@ -1,27 +1,9 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode, useRef } from 'react';
+import React, { useContext, useEffect, useState, ReactNode, useRef } from 'react';
 import { authAPI, onboardingAPI, User } from '../services/api';
+import { AuthContext, type AuthContextType, type MyChurch } from './authContextValue';
 
-export interface MyChurch {
-  churchId: string;
-  churchName: string;
-}
-
-interface AuthContextType {
-  user: User | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  needsOnboarding: boolean;
-  myChurches: MyChurch[];
-  login: (token: string, userData: User) => Promise<void>;
-  logout: () => void;
-  updateUser: (userData: Partial<User>) => void;
-  refreshOnboardingStatus: () => Promise<void>;
-  refreshUserData: () => Promise<void>;
-  refreshTokenAndUserData: () => Promise<boolean>;
-  switchChurch: (targetChurchId: string) => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+export { AuthContext } from './authContextValue';
+export type { AuthContextType, MyChurch } from './authContextValue';
 
 export const useAuth = () => {
   const context = useContext(AuthContext);

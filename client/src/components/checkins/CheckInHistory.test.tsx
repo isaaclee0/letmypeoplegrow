@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import CheckInHistory from './CheckInHistory';
+import { AuthContext } from '../../contexts/authContextValue';
 
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ user: { role: 'admin', timezone: 'Australia/Hobart' } }),
@@ -26,7 +27,11 @@ vi.mock('../../services/api', () => ({
 
 describe('CheckInHistory', () => {
   it('displays timestamps in the church timezone', async () => {
-    render(<CheckInHistory gatheringId={1} gatheringName="Sunday" />);
+    render(
+      <AuthContext.Provider value={{ user: { timezone: 'Australia/Hobart' } } as never}>
+        <CheckInHistory gatheringId={1} gatheringName="Sunday" />
+      </AuthContext.Provider>,
+    );
     fireEvent.click(await screen.findByRole('button', { name: /Thursday, August 13, 2026/i }));
     expect(await screen.findByText(/12:15/)).toBeInTheDocument();
   });
