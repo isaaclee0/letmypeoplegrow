@@ -57,6 +57,7 @@ test('prepared, source-review, and disabled batches skip due checks, connection 
 function baseOptions(overrides = {}) {
   return {
     now: MONDAY,
+    timeZone: 'UTC',
     getAuthority: async () => ({ active: 'planning_center', pending: null }),
     getConnection: async () => ({ connectionStatus: 'connected' }),
     getUnattendedProviderEnabled: async () => true,
@@ -73,6 +74,17 @@ test('isDueToday behaves exactly as the original planningCenterSync implementati
   assert.equal(isDueToday('weekly', 1, MONDAY), true);
   assert.equal(isDueToday('weekly', 2, MONDAY), false);
   assert.equal(isDueToday('monthly', 6, new Date('2026-07-06T02:00:00')), true);
+});
+
+test('isDueToday uses the church weekday across UTC midnight', () => {
+  const now = new Date('2026-08-13T14:30:00Z'); // Friday in Hobart, Thursday UTC
+  assert.equal(isDueToday('weekly', 5, now, 'Australia/Hobart'), true);
+  assert.equal(isDueToday('weekly', 4, now, 'Australia/Hobart'), false);
+});
+
+test('monthly scheduling clamps using the church-local month', () => {
+  const now = new Date('2026-04-30T14:30:00Z'); // May 1 in Hobart
+  assert.equal(isDueToday('monthly', 1, now, 'Australia/Hobart'), true);
 });
 
 test('runChurch refreshes medical indicators once before authority and batch gates', async () => {

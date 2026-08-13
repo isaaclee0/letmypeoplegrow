@@ -3,6 +3,7 @@ const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { generateCaregiverDigests, sendWeeklyCaregiverDigests } = require('../services/weeklyCaregiverEmail');
 const { buildExportTable, toCsv, toTsv, toXlsx } = require('../utils/attendanceExport');
+const { getChurchDate, loadChurchTimeZone } = require('../utils/churchTime');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -91,8 +92,8 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
     }
     
     // Check if dates are in the future (which might cause issues)
-    const today = new Date();
-    if (startDateObj > today || endDateObj > today) {
+    const today = getChurchDate(new Date(), await loadChurchTimeZone(req.user.church_id));
+    if (startDate > today || endDate > today) {
       console.log('Warning: Date range includes future dates');
     }
     
@@ -367,10 +368,9 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
     const weeklyData = {};
     attendanceDataFiltered.forEach(session => {
       // Use native JavaScript to get week number instead of moment.js
-      const date = new Date(session.session_date);
-      const weekStart = new Date(date);
-      weekStart.setDate(date.getDate() - date.getDay()); // Start of week (Sunday)
-      const weekKey = weekStart.toISOString().split('T')[0];
+      const date = new Date(`${session.session_date}T12:00:00Z`);
+      date.setUTCDate(date.getUTCDate() - date.getUTCDay()); // Start of week (Sunday)
+      const weekKey = date.toISOString().split('T')[0];
       
       if (!weeklyData[weekKey]) {
         weeklyData[weekKey] = { totalPresent: 0, sessionCount: 0 };

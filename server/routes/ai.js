@@ -5,6 +5,7 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const logger = require('../config/logger');
 const { distillGuidance } = require('../services/weeklyReviewGuidance');
 const { truncateGuidance } = require('../services/weeklyReviewInsight');
+const { getChurchDate, addDateOnly, getZonedParts } = require('../utils/churchTime');
 
 const router = express.Router();
 
@@ -68,6 +69,9 @@ function makeHttpsRequest(url, options = {}) {
 // ===== Helper: build church data context for the LLM =====
 async function buildChurchContext(churchId) {
   const sections = [];
+  const timeZoneRows = await Database.query('SELECT timezone FROM church_settings WHERE church_id = ? LIMIT 1', [churchId]);
+  const timeZone = timeZoneRows[0]?.timezone || 'UTC';
+  const today = getChurchDate(new Date(), timeZone);
 
   // 1. Church info
   try {
@@ -149,10 +153,7 @@ async function buildChurchContext(churchId) {
 
   // 4. Recent attendance data (last 3 months)
   try {
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    const startDate = threeMonthsAgo.toISOString().split('T')[0];
-    const today = new Date().toISOString().split('T')[0];
+    const startDate = addDateOnly(today, { months: -3 });
 
     const sessions = await Database.query(`
       SELECT 
@@ -249,7 +250,7 @@ async function buildChurchContext(churchId) {
   }
 
   // 5. Today's date for reference
-  sections.push(`Today's date: ${new Date().toISOString().split('T')[0]}`);
+  sections.push(`Today's date: ${today}`);
 
   return sections.join('\n\n');
 }
@@ -719,13 +720,14 @@ async function buildEnrichedContext(churchId) {
 
   // Get church location and country
   const church = await Database.query(
-    'SELECT country_code, location_name, location_lat, location_lng FROM church_settings WHERE church_id = ? LIMIT 1',
+    'SELECT country_code, location_name, location_lat, location_lng, timezone FROM church_settings WHERE church_id = ? LIMIT 1',
     [churchId]
   );
 
   if (church.length === 0) return { enrichedContext: '', hasLocation: false };
 
   const { country_code, location_name, location_lat, location_lng } = church[0];
+  const timeZone = church[0].timezone || 'UTC';
 
   if (!location_lat || !location_lng) {
     return { enrichedContext: '', hasLocation: false };
@@ -733,9 +735,9 @@ async function buildEnrichedContext(churchId) {
 
   // Date ranges
   const now = new Date();
-  const threeMonthsAgo = new Date();
-  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-  const currentYear = now.getFullYear();
+  const today = getChurchDate(now, timeZone);
+  const threeMonthsAgo = addDateOnly(today, { months: -3 });
+  const currentYear = getZonedParts(now, timeZone).year;
   const lastYear = currentYear - 1;
 
   // Fetch holidays and weather in parallel
@@ -743,8 +745,8 @@ async function buildEnrichedContext(churchId) {
     fetchHolidays(country_code || 'US', [lastYear, currentYear]),
     fetchWeatherHistory(
       location_lat, location_lng,
-      threeMonthsAgo.toISOString().split('T')[0],
-      now.toISOString().split('T')[0]
+      threeMonthsAgo,
+      today
     ),
     fetchWeatherForecast(location_lat, location_lng)
   ]);
@@ -754,11 +756,9 @@ async function buildEnrichedContext(churchId) {
 
   // Holidays — filter to relevant window (last 3 months + next 2 months)
   if (holidays.length > 0) {
-    const twoMonthsFromNow = new Date();
-    twoMonthsFromNow.setMonth(twoMonthsFromNow.getMonth() + 2);
+    const twoMonthsFromNow = addDateOnly(today, { months: 2 });
     const relevantHolidays = holidays.filter(h => {
-      const d = new Date(h.date);
-      return d >= threeMonthsAgo && d <= twoMonthsFromNow;
+      return h.date >= threeMonthsAgo && h.date <= twoMonthsFromNow;
     });
     if (relevantHolidays.length > 0) {
       const lines = relevantHolidays.map(h => `  - ${h.date}: ${h.name} (${h.type})`);
@@ -775,7 +775,7 @@ async function buildEnrichedContext(churchId) {
       WHERE church_id = ? AND session_date >= ?
         AND excluded_from_stats = 0
       ORDER BY session_date
-    `, [churchId, threeMonthsAgo.toISOString().split('T')[0]]);
+    `, [churchId, threeMonthsAgo]);
 
     const sessionDateSet = new Set(sessionDates.map(r => r.d));
 
