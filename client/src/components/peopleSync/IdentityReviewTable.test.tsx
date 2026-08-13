@@ -35,7 +35,7 @@ function reviewFixture(): PeopleSyncReview {
     const externalId = `ext-${String(index).padStart(2, '0')}`;
     return [externalId, {
       firstName: index === 1 ? 'Alex' : `Provider${index}`,
-      lastName: index === 1 ? 'Smith' : 'Person',
+      lastName: index === 1 ? 'Smith' : index >= 50 && index <= 54 ? 'Zulu' : 'Person',
       family: index === 1
         ? {
           state: 'known' as const,
@@ -68,7 +68,7 @@ function reviewFixture(): PeopleSyncReview {
       canCreate: true,
       createPerson: {
         firstName: index === 1 ? 'Alex' : `Provider${index}`,
-        lastName: index === 1 ? 'Smith' : 'Person',
+        lastName: index === 1 ? 'Smith' : index >= 50 && index <= 54 ? 'Zulu' : 'Person',
         isChild: false,
         externalFamilyId: null,
         peopleType: 'regular' as const,
@@ -412,7 +412,7 @@ describe('IdentityReviewTable rendering', () => {
 
     expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveValue('50');
     expect(screen.getByText('Showing 1–50 of 55')).toBeVisible();
-    expect(screen.queryByText('Provider55 Person')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provider54 Zulu')).not.toBeInTheDocument();
 
     await user.click(within(desktopRow('ext-01')).getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add new person' }));
@@ -490,11 +490,11 @@ describe('IdentityReviewTable decisions', () => {
     const tableRef = createRef<IdentityReviewTableHandle>();
     render(<TableHarness tableRef={tableRef} />);
 
-    act(() => tableRef.current?.focusExternalId('ext-55'));
+    act(() => tableRef.current?.focusExternalId('ext-54'));
 
     await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeVisible());
     await waitFor(() => expect(
-      within(desktopRow('ext-55')).getByRole('button', { name: 'Change LMPG match for Provider55 Person' }),
+      within(desktopRow('ext-54')).getByRole('button', { name: 'Change LMPG match for Provider54 Zulu' }),
     ).toHaveFocus());
   });
 });

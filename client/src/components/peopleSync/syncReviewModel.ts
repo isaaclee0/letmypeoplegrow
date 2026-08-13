@@ -72,6 +72,22 @@ function statusForDecision(decision: IdentityDecision | null | undefined): Revie
   return 'skipped';
 }
 
+function familySortName(row: ReviewIdentityRow): string {
+  if (row.externalFamily?.state === 'known' && row.externalFamily.name.trim()) {
+    return row.externalFamily.name;
+  }
+  return row.externalPerson?.lastName || '';
+}
+
+function compareReviewRowsByFamily(left: ReviewIdentityRow, right: ReviewIdentityRow): number {
+  const compare = (leftValue: string, rightValue: string) =>
+    leftValue.localeCompare(rightValue, undefined, { sensitivity: 'base' });
+  return compare(familySortName(left), familySortName(right))
+    || compare(left.externalPerson?.lastName || '', right.externalPerson?.lastName || '')
+    || compare(left.externalPerson?.firstName || '', right.externalPerson?.firstName || '')
+    || left.externalId.localeCompare(right.externalId);
+}
+
 export function buildDecisionRows(review: PeopleSyncReview, state: SyncSelectionState): ReviewIdentityRow[] {
   const context = review.plan.reviewContext;
   if (!context || review.decisionContractVersion !== 2) return [];
@@ -80,7 +96,6 @@ export function buildDecisionRows(review: PeopleSyncReview, state: SyncSelection
   const establishedIds = new Set(Object.keys(context.establishedLinks || {}));
   return Object.keys(context.identities)
     .filter((externalId) => !establishedIds.has(externalId))
-    .sort((left, right) => left.localeCompare(right))
     .map((externalId) => {
       const entry = context.identities[externalId];
       const decision = state.identityDecisions?.[externalId] ?? null;
@@ -102,7 +117,8 @@ export function buildDecisionRows(review: PeopleSyncReview, state: SyncSelection
         externalFamily: externalPerson?.family,
         ...localDetails(directory, target, fallback),
       };
-    });
+    })
+    .sort(compareReviewRowsByFamily);
 }
 
 export function buildEstablishedRows(review: PeopleSyncReview, state: SyncSelectionState): ReviewIdentityRow[] {
@@ -111,7 +127,6 @@ export function buildEstablishedRows(review: PeopleSyncReview, state: SyncSelect
 
   const directory = directoryFor(review);
   return Object.keys(context.establishedLinks || {})
-    .sort((left, right) => left.localeCompare(right))
     .map((externalId) => {
       const established = context.establishedLinks?.[externalId];
       const correction = state.linkCorrections?.[externalId];
@@ -130,7 +145,8 @@ export function buildEstablishedRows(review: PeopleSyncReview, state: SyncSelect
         externalFamily: externalPerson?.family,
         ...localDetails(directory, localIndividualId, correction?.outcome === 'unlink' ? 'Skipped for now' : 'Name unavailable'),
       };
-    });
+    })
+    .sort(compareReviewRowsByFamily);
 }
 
 export function editLinkCorrectionDraft(

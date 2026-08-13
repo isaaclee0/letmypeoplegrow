@@ -147,6 +147,46 @@ describe('review identity row model', () => {
     expect(established.map((row) => row.externalId)).toEqual(['ext-established']);
   });
 
+  it('sorts decision and established rows by provider family surname', () => {
+    const review = reviewWith55Identities();
+    review.plan.reviewContext!.identities = Object.fromEntries(
+      ['ext-01', 'ext-02', 'ext-03'].map((id) => [id, review.plan.reviewContext!.identities[id]]),
+    );
+    review.plan.people!.external['ext-01'] = {
+      firstName: 'Amy', lastName: 'Zephyr',
+      family: { state: 'known', name: 'Zephyr, Amy and Ben', members: [], totalOtherMembers: 0 },
+    };
+    review.plan.people!.external['ext-02'] = {
+      firstName: 'Cara', lastName: 'Able',
+      family: { state: 'known', name: 'Able, Cara', members: [], totalOtherMembers: 0 },
+    };
+    review.plan.people!.external['ext-03'] = {
+      firstName: 'Bo', lastName: 'Baker', family: { state: 'none' },
+    };
+    review.plan.people!.external['ext-established-a'] = {
+      firstName: 'Nina', lastName: 'Young',
+      family: { state: 'known', name: 'Young, Nina', members: [], totalOtherMembers: 0 },
+    };
+    review.plan.people!.external['ext-established-z'] = {
+      firstName: 'Oscar', lastName: 'Adams',
+      family: { state: 'known', name: 'Adams, Oscar', members: [], totalOtherMembers: 0 },
+    };
+    review.plan.reviewContext!.establishedLinks = {
+      'ext-established-a': { individualId: 40 },
+      'ext-established-z': { individualId: 30 },
+    };
+
+    expect(buildDecisionRows(review, stateWith()).map((row) => row.externalId)).toEqual([
+      'ext-02',
+      'ext-03',
+      'ext-01',
+    ]);
+    expect(buildEstablishedRows(review, stateWith()).map((row) => row.externalId)).toEqual([
+      'ext-established-z',
+      'ext-established-a',
+    ]);
+  });
+
   it('shows the signed projected target for a relink and a skip label for an unlink', () => {
     const review = reviewWith55Identities();
     const relinked = buildEstablishedRows(review, stateWith({
