@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useChurchTime } from '../../hooks/useChurchTime';
 import { kioskAPI } from '../../services/api';
+import { buildCheckInHistoryTsv, CheckInHistoryDetail } from './checkInHistoryExport';
 import {
   ClockIcon,
   ChevronDownIcon,
@@ -23,18 +25,6 @@ interface HistorySession {
   }>;
 }
 
-interface HistoryDetail {
-  date: string;
-  individuals: Array<{
-    individualId: number;
-    firstName: string;
-    lastName: string;
-    familyName: string | null;
-    checkins: Array<{ time: string; signerName: string | null; userName?: string | null }>;
-    checkouts: Array<{ time: string; signerName: string | null; userName?: string | null }>;
-  }>;
-}
-
 interface CheckInHistoryProps {
   gatheringId: number;
   gatheringName: string;
@@ -42,10 +32,11 @@ interface CheckInHistoryProps {
 
 const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringName }) => {
   const { user } = useAuth();
+  const { timeZone, formatInstant, formatDateOnly } = useChurchTime();
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
-  const [historyDetail, setHistoryDetail] = useState<HistoryDetail | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<CheckInHistoryDetail | null>(null);
   const [historyDetailLoading, setHistoryDetailLoading] = useState(false);
   const [deletingSession, setDeletingSession] = useState<string | null>(null);
 
@@ -86,42 +77,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
   const exportToTSV = () => {
     if (!historyDetail) return;
 
-    const lines: string[] = [];
-    lines.push(['Name', 'Family', 'Check-in Time', 'Checked In By', 'User', 'Check-out Time', 'Checked Out By', 'User'].join('\t'));
-
-    for (const person of historyDetail.individuals) {
-      const checkinTime = person.checkins.length > 0
-        ? new Date(person.checkins[0].time).toLocaleTimeString()
-        : '';
-      const checkinSigner = person.checkins.length > 0
-        ? (person.checkins[0].signerName || '')
-        : '';
-      const checkinUser = person.checkins.length > 0
-        ? (person.checkins[0].userName || '')
-        : '';
-      const checkoutTime = person.checkouts.length > 0
-        ? new Date(person.checkouts[0].time).toLocaleTimeString()
-        : '';
-      const checkoutSigner = person.checkouts.length > 0
-        ? (person.checkouts[0].signerName || '')
-        : '';
-      const checkoutUser = person.checkouts.length > 0
-        ? (person.checkouts[0].userName || '')
-        : '';
-
-      lines.push([
-        `${person.firstName} ${person.lastName}`,
-        person.familyName || '',
-        checkinTime,
-        checkinSigner,
-        checkinUser,
-        checkoutTime,
-        checkoutSigner,
-        checkoutUser,
-      ].join('\t'));
-    }
-
-    const tsv = lines.join('\n');
+    const tsv = buildCheckInHistoryTsv(historyDetail, timeZone);
     const blob = new Blob([tsv], { type: 'text/tab-separated-values;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -135,7 +91,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
   };
 
   const handleDeleteSession = async (date: string) => {
-    const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
+    const formattedDate = formatDateOnly(date, {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     });
     if (!window.confirm(`Delete the check-in session for ${formattedDate}?\n\nThis will permanently remove all check-in/check-out records for this date. Attendance records will not be affected.`)) {
@@ -190,7 +146,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                   >
                     <div>
                       <div className="font-medium text-gray-900 dark:text-gray-100">
-                        {new Date(session.date + 'T00:00:00').toLocaleDateString('en-US', {
+                        {formatDateOnly(session.date, {
                           weekday: 'long',
                           year: 'numeric',
                           month: 'long',
@@ -264,7 +220,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                                   </td>
                                   <td className="py-2 pr-4 text-green-600">
                                     {person.checkins.length > 0
-                                      ? new Date(person.checkins[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                      ? formatInstant(person.checkins[0].time, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
                                       : '-'}
                                   </td>
                                   <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">
@@ -277,7 +233,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                                   </td>
                                   <td className="py-2 pr-4 text-orange-600">
                                     {person.checkouts.length > 0
-                                      ? new Date(person.checkouts[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                      ? formatInstant(person.checkouts[0].time, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
                                       : '-'}
                                   </td>
                                   <td className="py-2 text-gray-500 dark:text-gray-400">

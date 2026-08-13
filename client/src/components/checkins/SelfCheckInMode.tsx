@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useAuth } from '../../contexts/AuthContext';
 import { useCheckIns } from '../../contexts/CheckInsContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
+import { useChurchTime } from '../../hooks/useChurchTime';
 import { gatheringsAPI, attendanceAPI, familiesAPI, kioskAPI, GatheringType, Individual } from '../../services/api';
 import {
   MagnifyingGlassIcon,
@@ -57,7 +58,13 @@ function escapeAndInline(text: string): string {
 }
 
 type KioskPhase = 'setup' | 'pin' | 'active';
-type KioskMode = 'checkin' | 'checkout';
+export type KioskMode = 'checkin' | 'checkout';
+
+export function defaultKioskMode(currentMinutes: number, endTime: string): KioskMode {
+  const [hour, minute] = endTime.split(':').map(Number);
+  const minutesUntilEnd = (hour * 60 + minute - currentMinutes + 1440) % 1440;
+  return minutesUntilEnd <= 15 ? 'checkout' : 'checkin';
+}
 
 // ===== Offline caching helpers =====
 const KIOSK_ATTENDANCE_CACHE_KEY = 'kiosk_attendance_cache';
@@ -139,6 +146,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
   onBack,
 }) => {
   const { user, logout } = useAuth();
+  const { clockMinutes } = useChurchTime();
   const checkIns = useCheckIns();
   const { isConnected, socket, sendKioskAction, onAttendanceUpdate, onKioskCheckout, onReconnect } = useWebSocket();
 
@@ -244,22 +252,8 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
   // ===== Time-based mode defaulting =====
   const computeDefaultMode = useCallback((): KioskMode => {
-    const now = new Date();
-    const [sh, sm] = startTime.split(':').map(Number);
-    const [eh, em] = endTime.split(':').map(Number);
-
-    const startDate = new Date(now);
-    startDate.setHours(sh, sm, 0, 0);
-    const endDate = new Date(now);
-    endDate.setHours(eh, em, 0, 0);
-
-    const checkoutThreshold = new Date(endDate.getTime() - 15 * 60 * 1000);
-
-    if (now >= checkoutThreshold) {
-      return 'checkout';
-    }
-    return 'checkin';
-  }, [startTime, endTime]);
+    return defaultKioskMode(clockMinutes(), endTime);
+  }, [clockMinutes, endTime]);
 
   // Set default mode on entry, then auto-switch every 15 minutes
   const modeTimerRef = useRef<NodeJS.Timeout | null>(null);
