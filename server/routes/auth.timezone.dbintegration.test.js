@@ -71,6 +71,10 @@ test('auth payloads expose the active church timezone for login, me, and church 
       assert.equal(me.status, 200);
       assert.equal(me.body.user.timezone, 'Australia/Hobart');
 
+      const refreshed = await app.request('/api/auth/refresh', { method: 'POST' });
+      assert.equal(refreshed.status, 200);
+      assert.equal(refreshed.body.user.timezone, 'Australia/Hobart');
+
       const switched = await app.request('/api/auth/switch-church', {
         method: 'POST', body: JSON.stringify({ targetChurchId: otherChurchId }),
       });

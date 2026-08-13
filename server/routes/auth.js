@@ -714,10 +714,11 @@ router.post('/refresh', verifyToken, authLimiter, refreshLimiter, async (req, re
     };
     if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
     res.cookie('authToken', token, cookieOptions);
+    const timezone = await loadChurchTimeZone(user.church_id);
 
     res.json({
       message: 'Token refreshed successfully',
-      user: { id: user.id, email: user.email, role: user.role, firstName: user.first_name, lastName: user.last_name }
+      user: { id: user.id, email: user.email, role: user.role, firstName: user.first_name, lastName: user.last_name, timezone }
     });
   } catch (error) {
     console.error('💥 Refresh token error:', error);
