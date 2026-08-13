@@ -21,15 +21,10 @@ interface AuthContextType {
   switchChurch: (targetChurchId: string) => Promise<void>;
 }
 
-export const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-// Some low-level display hooks are also rendered in isolated component tests and
-// must be able to use a conservative UTC fallback. General authenticated callers
-// should continue using `useAuth`, which preserves its provider requirement.
-export const useOptionalAuth = () => useContext(AuthContext);
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
-  const context = useOptionalAuth();
+  const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }

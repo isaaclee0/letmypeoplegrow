@@ -28,3 +28,9 @@
 - `useChurchTime` now falls back to UTC when a component is rendered without authentication context, while retaining the active church timezone inside a provider.
 - Added hook coverage for both paths and made source-control freshness tests clock-independent while asserting UTC fallback formatting.
 - Verification: `TZ=America/Los_Angeles npm test -- --run src/hooks/useChurchTime.test.tsx src/components/peopleSync/BatchSourceControls.test.tsx src/components/peopleSync/SyncReview.test.tsx src/components/integrations/IntegrationsTab.test.tsx`; `npm run build`.
+
+## Fix Round 3 — auth mock compatibility
+
+- Restored `useChurchTime` to consume the established `useAuth` contract, so existing test mocks continue to work. It catches only `useAuth`'s missing-provider error and otherwise defaults to UTC.
+- Removed the optional context accessor; `useAuth` retains its original strict provider contract.
+- Verification: `TZ=America/Los_Angeles npm test -- --run src/pages src/components/checkins src/components/integrations src/components/peopleSync src/contexts src/utils` — 371 passed; five pre-existing `PeoplePage.import` failures remain. `npm run build` passed.

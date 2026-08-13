@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useOptionalAuth } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext';
 import {
   formatDateOnly,
   formatInstant,
@@ -10,8 +10,13 @@ import {
 } from '../utils/churchTime';
 
 export function useChurchTime() {
-  const auth = useOptionalAuth();
-  const user = auth?.user;
+  let user: { timezone?: string | null } | null | undefined;
+  try {
+    user = useAuth().user;
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== 'useAuth must be used within an AuthProvider') throw error;
+    user = null;
+  }
   const timeZone = normalizeTimeZone(user?.timezone);
 
   return useMemo(() => ({
