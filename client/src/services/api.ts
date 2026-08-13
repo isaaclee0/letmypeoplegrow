@@ -226,7 +226,7 @@ export interface User {
   defaultGatheringId?: number;
   church_id?: string;
   churchName?: string;
-  timezone?: string;
+  timezone: string;
   gatheringAssignments: GatheringType[];
   unreadNotifications?: number;
   hasSampleData?: boolean;
