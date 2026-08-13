@@ -118,6 +118,16 @@ function addDateOnly(value, amount = {}) {
   return formatDateOnly(date);
 }
 
+async function loadChurchTimeZone(churchId) {
+  const Database = require('../config/database');
+  const rows = await Database.queryForChurch(
+    churchId,
+    'SELECT timezone FROM church_settings WHERE church_id = ? LIMIT 1',
+    [churchId]
+  );
+  return normalizeTimeZone(rows[0]?.timezone);
+}
+
 module.exports = {
   DEFAULT_TIME_ZONE,
   normalizeTimeZone,
@@ -127,4 +137,5 @@ module.exports = {
   parseSqliteUtc,
   addDateOnly,
   daysInDateOnlyMonth,
+  loadChurchTimeZone,
 };

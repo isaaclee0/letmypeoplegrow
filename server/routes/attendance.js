@@ -7,6 +7,7 @@ const websocketBroadcast = require('../utils/websocketBroadcast');
 const logger = require('../config/logger');
 const { isBackgroundCheckTrackingEnabled } = require('../services/planningCenter/mode');
 const { getMedicalNotesVisibility } = require('../services/planningCenter/medicalNotesPolicy');
+const { getChurchDate, addDateOnly, parseSqliteUtc, loadChurchTimeZone } = require('../utils/churchTime');
 
 const router = express.Router();
 
@@ -21,7 +22,16 @@ const router = express.Router();
  * @param {string} churchId - The church ID
  * @param {string} date - The session date (YYYY-MM-DD)
  */
-async function createRosterSnapshot(conn, sessionId, gatheringTypeId, churchId, date) {
+function classifyChurchDate(date, timeZone, now = new Date()) {
+  const today = getChurchDate(now, timeZone);
+  return date < today ? 'past' : date > today ? 'future' : 'today';
+}
+
+function getRecentVisitorsAnchor(timeZone, now = new Date()) {
+  return getChurchDate(now, timeZone);
+}
+
+async function createRosterSnapshot(conn, sessionId, gatheringTypeId, churchId, date, timeZone) {
   try {
     // Check if already snapshotted
     const session = await conn.query(
@@ -33,11 +43,7 @@ async function createRosterSnapshot(conn, sessionId, gatheringTypeId, churchId, 
     }
 
     // Don't snapshot future dates
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const sessionDate = new Date(date);
-    sessionDate.setHours(0, 0, 0, 0);
-    if (sessionDate > today) {
+    if (classifyChurchDate(date, timeZone) === 'future') {
       return;
     }
 
@@ -1163,9 +1169,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     // NOTE: This duplicates the logic from the main GET endpoint below
     // We could refactor to share this code, but for now keeping it inline for clarity
 
-    const thresholdDate = new Date(date);
-    thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
-    const thresholdDateStr = thresholdDate.toISOString().split('T')[0];
+    const thresholdDateStr = addDateOnly(date, { days: -thresholdDays });
 
     // Get attendance session
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
@@ -1318,12 +1322,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         ${glChurchFilterFull}
     `;
 
-    const currentDate = new Date(date);
-    const sixWeeksAgo = new Date(currentDate);
-    sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42);
-
-    const twoWeeksAgo = new Date(currentDate);
-    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+    const sixWeeksAgo = addDateOnly(date, { days: -42 });
+    const twoWeeksAgo = addDateOnly(date, { days: -14 });
 
     let attendanceListParams = [sessionId, gatheringTypeId, req.user.church_id];
     if (hasGatheringListsChurchIdFull) {
@@ -1416,7 +1416,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         AND i.is_active = 1
         AND i.church_id = ?
       ORDER BY f.family_name, i.first_name
-    `, [sixWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0], req.user.church_id]);
+    `, [sixWeeksAgo, twoWeeksAgo, req.user.church_id]);
 
     // Filter potential visitors: only show those present in recent sessions
     const filteredPotentialVisitors = potentialVisitors.filter(visitor => {
@@ -1481,6 +1481,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
   try {
     const { gatheringTypeId, date } = req.params;
     const { search } = req.query; // Add search parameter
+    const timeZone = await loadChurchTimeZone(req.user.church_id);
     
     // Determine gathering frequency to compute an "infrequent" threshold
     let thresholdDays = 7; // default weekly
@@ -1495,9 +1496,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     } catch (err) {
       console.error('Error looking up gathering frequency:', err);
     }
-    const thresholdDate = new Date(date);
-    thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
-    const thresholdDateStr = thresholdDate.toISOString().split('T')[0];
+    const thresholdDateStr = addDateOnly(date, { days: -thresholdDays });
 
     // Get attendance session (support schemas with/without church_id)
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
@@ -1870,14 +1869,6 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         ${glChurchFilter}
     `;
 
-    // Calculate date ranges for filtering
-    const currentDate = new Date(date);
-    const sixWeeksAgo = new Date(currentDate);
-    sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42); // 6 weeks = 42 days
-
-    const twoWeeksAgo = new Date(currentDate);
-    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14); // 2 weeks = 14 days
-
     let attendanceListParams = [sessionId, gatheringTypeId, req.user.church_id];
     if (hasGatheringListsChurchId) {
       attendanceListParams.push(req.user.church_id);
@@ -2036,10 +2027,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const potentialVisitors = search && search.trim() ?
       allPotentialVisitors :
       allPotentialVisitors.filter(visitor => {
-        const currentDate = new Date(date);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const isPastGathering = currentDate < today;
+        const isPastGathering = classifyChurchDate(date, timeZone) === 'past';
 
         // For archived visitors: only show them if they have attendance records for past gatherings
         if (visitor.is_active === false || visitor.is_active === 0) {
@@ -2086,6 +2074,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
   try {
     const { gatheringTypeId, date } = req.params;
     const { attendanceRecords, visitors, clientTimeOffset = 0 } = req.body;
+    const timeZone = await loadChurchTimeZone(req.user.church_id);
 
     logger.debugLog('GENERIC ROUTE MATCHED', {
       path: req.path,
@@ -2141,7 +2130,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 
       // Snapshot roster when any record is being marked present
       if (attendanceRecords && attendanceRecords.some(r => r.present)) {
-        await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date);
+        await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date, timeZone);
       }
 
       // Update individual attendance records with timestamp-based conflict detection
@@ -2169,7 +2158,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
           // Conflict detection: skip update if existing record is newer
           if (existingRecords.length > 0) {
             const existingRecord = existingRecords[0];
-            const serverTimestamp = new Date(existingRecord.updated_at);
+            const serverTimestamp = parseSqliteUtc(existingRecord.updated_at);
 
             // If server record is newer than client's change, skip this update
             if (serverTimestamp > clientTimestamp) {
@@ -2329,7 +2318,8 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId } = req.params;
-    const today = new Date().toISOString().split('T')[0];
+    const timeZone = await loadChurchTimeZone(req.user.church_id);
+    const today = getRecentVisitorsAnchor(timeZone);
     const visitorConfig = await getVisitorConfig(req.user.church_id);
     const showBackgroundCheckStatus = await getShowBackgroundCheckStatus(gatheringTypeId, req.user.church_id);
     const { visitors } = await getRecentVisitors(gatheringTypeId, req.user.church_id, today, visitorConfig, showBackgroundCheckStatus);
@@ -3003,6 +2993,7 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
     const gatheringTypeId = Number(req.params.gatheringTypeId);
     const date = req.params.date;
     const familyId = Number(req.params.familyId);
+    const timeZone = await loadChurchTimeZone(req.user.church_id);
 
     if (!Number.isInteger(gatheringTypeId) || gatheringTypeId <= 0) {
       return res.status(400).json({ error: 'Invalid gathering type' });
@@ -3063,7 +3054,7 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
       const sessionId = Number(sessionsLookup[0].id);
 
       // Snapshot roster before recording visitor attendance
-      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date);
+      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date, timeZone);
 
       // Get all individuals in the visitor family (use numeric id for FK consistency)
       const individuals = await conn.query(`
@@ -3179,6 +3170,7 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
 router.post('/:gatheringTypeId/:date/individual/:individualId', requireGatheringAccess, auditLog('ADD_INDIVIDUAL_TO_SERVICE'), async (req, res) => {
   try {
     const { gatheringTypeId, date, individualId } = req.params;
+    const timeZone = await loadChurchTimeZone(req.user.church_id);
     
     logger.debugLog('🔍 Adding individual to service:', {
       gatheringTypeId,
@@ -3238,7 +3230,7 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
       const sessionId = Number(sessionsLookup[0].id);
 
       // Snapshot roster before recording individual attendance
-      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date);
+      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date, timeZone);
 
       // Add individual to gathering list if not already there
       const existingGatheringList = await conn.query(
@@ -3360,5 +3352,9 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
   }
 });
 
+
+router.classifyChurchDate = classifyChurchDate;
+router.getRecentVisitorsAnchor = getRecentVisitorsAnchor;
+router.loadChurchTimeZone = loadChurchTimeZone;
 
 module.exports = router;
