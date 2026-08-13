@@ -11,6 +11,8 @@ const {
   INDIVIDUALS_UPDATED_AT_TRIGGER,
 } = require('./schema');
 const { randomUUID } = require('crypto');
+const logger = require('./logger');
+const { timeZoneFromCoordinates } = require('../utils/churchTime');
 
 const asyncLocalStorage = new AsyncLocalStorage();
 const churchDbs = new Map();
@@ -42,6 +44,12 @@ const PEOPLE_IMPORT_RUN_TRIGGER_MIGRATION = Object.freeze({
   description: 'Allow one-time provider people imports in the people-sync run audit log',
 });
 
+const CHURCH_TIMEZONE_MIGRATION = Object.freeze({
+  version: 'v2.2.5_church_timezone_from_location',
+  name: 'church_timezone_from_location',
+  description: 'Backfill church timezone from its saved location coordinates',
+});
+
 function ensureMigrationTrackingSchema(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS migrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +62,38 @@ function ensureMigrationTrackingSchema(db) {
     error_message TEXT
   )`);
   db.exec('CREATE INDEX IF NOT EXISTS idx_migrations_version ON migrations(version)');
+}
+
+function migrateChurchTimezoneFromLocation(db, churchId) {
+  ensureMigrationTrackingSchema(db);
+  db.transaction(() => {
+    const applied = db.prepare(
+      "SELECT 1 FROM migrations WHERE version = ? AND status = 'success'"
+    ).get(CHURCH_TIMEZONE_MIGRATION.version);
+    if (applied) return;
+
+    const settings = db.prepare(`SELECT timezone, location_lat, location_lng
+      FROM church_settings WHERE church_id = ? LIMIT 1`).get(churchId);
+    if (!settings) return;
+
+    try {
+      const timezone = timeZoneFromCoordinates(Number(settings.location_lat), Number(settings.location_lng));
+      if (settings.location_lat !== null && settings.location_lng !== null && timezone !== settings.timezone) {
+        db.prepare(`UPDATE church_settings SET timezone = ?, updated_at = datetime('now')
+          WHERE church_id = ?`).run(timezone, churchId);
+      }
+    } catch (error) {
+      logger.warn(`Timezone backfill skipped for church ${churchId}: ${error.message}`);
+    }
+
+    db.prepare(`INSERT INTO migrations
+      (version, name, description, execution_time_ms, status, executed_at)
+      VALUES (?, ?, ?, 0, 'success', datetime('now'))`).run(
+      CHURCH_TIMEZONE_MIGRATION.version,
+      CHURCH_TIMEZONE_MIGRATION.name,
+      CHURCH_TIMEZONE_MIGRATION.description,
+    );
+  })();
 }
 
 function markScheduledPcoAuthorityMigrationApplied(db) {
@@ -797,6 +837,7 @@ class Database {
       backfillProviderNeutralSync(db, churchId);
     }
 
+    migrateChurchTimezoneFromLocation(db, churchId);
     migratePeopleImportRunTrigger(db);
 
     // Existing SQLite triggers are not replaced by CREATE TRIGGER IF NOT
