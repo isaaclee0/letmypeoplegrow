@@ -28,6 +28,6 @@ describe('CheckInHistory', () => {
   it('displays timestamps in the church timezone', async () => {
     render(<CheckInHistory gatheringId={1} gatheringName="Sunday" />);
     fireEvent.click(await screen.findByRole('button', { name: /Thursday, August 13, 2026/i }));
-    expect(await screen.findByText('12:15')).toBeInTheDocument();
+    expect(await screen.findByText(/12:15/)).toBeInTheDocument();
   });
 });

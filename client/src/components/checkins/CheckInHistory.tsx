@@ -220,7 +220,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                                   </td>
                                   <td className="py-2 pr-4 text-green-600">
                                     {person.checkins.length > 0
-                                      ? formatInstant(person.checkins[0].time, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+                                      ? formatInstant(person.checkins[0].time, { hour: '2-digit', minute: '2-digit' })
                                       : '-'}
                                   </td>
                                   <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">
@@ -233,7 +233,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                                   </td>
                                   <td className="py-2 pr-4 text-orange-600">
                                     {person.checkouts.length > 0
-                                      ? formatInstant(person.checkouts[0].time, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+                                      ? formatInstant(person.checkouts[0].time, { hour: '2-digit', minute: '2-digit' })
                                       : '-'}
                                   </td>
                                   <td className="py-2 text-gray-500 dark:text-gray-400">
