@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { parseInstant } from '../utils/churchTime';
 import { useCheckIns } from '../contexts/CheckInsContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
@@ -445,7 +446,10 @@ const Layout: React.FC = () => {
                                         {notification.message}
                                       </p>
                                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                                        {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
+                                        {(() => {
+                                          const createdAt = parseInstant(notification.created_at);
+                                          return createdAt ? formatDistanceToNow(createdAt, { addSuffix: true }) : 'Time unavailable';
+                                        })()}
                                       </p>
                                     </div>
                                   </div>

@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useChurchTime } from '../hooks/useChurchTime';
+import { differenceInDateOnlyDays, addDateOnly } from '../utils/churchTime';
+import { reportDateRange, type ReportDateRangePreset } from '../utils/reportDateRanges';
 import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI, familiesAPI, usersAPI, contactsAPI } from '../services/api';
 import AttendanceHistoryPopover from '../components/reports/AttendanceHistoryPopover';
 import { userPreferences, PREFERENCE_KEYS } from '../services/userPreferences';
@@ -44,6 +47,7 @@ const EXPORT_FORMATS: { id: ExportFormat; label: string; mime: string }[] = [
 
 const ReportsPage: React.FC = () => {
   const { user, refreshUserData } = useAuth();
+  const { today, formatDateOnly } = useChurchTime();
 
   // Detect dark mode for Chart.js label colors
   const [isDarkMode, setIsDarkMode] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -112,7 +116,7 @@ const ReportsPage: React.FC = () => {
 
   // Get current year for date examples
   const getCurrentYear = () => {
-    return new Date().getFullYear();
+    return Number(today().slice(0, 4));
   };
 
   // Get default gathering ID for integration examples
@@ -146,12 +150,10 @@ const ReportsPage: React.FC = () => {
 
   // Initialize default date range to last 4 weeks on every open
   useEffect(() => {
-    const today = new Date();
-    const fourWeeksAgo = new Date(today);
-    fourWeeksAgo.setDate(today.getDate() - 28);
-    setEndDate(today.toISOString().split('T')[0]);
-    setStartDate(fourWeeksAgo.toISOString().split('T')[0]);
-  }, []);
+    const range = reportDateRange('last-4-weeks', today());
+    setEndDate(range.end);
+    setStartDate(range.start);
+  }, [today]);
 
   // Save current reports state to preferences
   const saveReportsPreferences = useCallback(async () => {
@@ -321,13 +323,12 @@ const ReportsPage: React.FC = () => {
       type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; periodPresence: Map<number, boolean> };
       const regularMap = new Map<number, RegularEntry>();
       const visitorCounts = new Map<string, { name: string; count: number; familyId: number | null }>();
-      const now = new Date();
+      const churchToday = today();
 
       responses.forEach((resp: any, idx: number) => {
         const data = resp.data as { attendanceList?: any[]; visitors?: any[] };
         const sessionDateStr = limitedDates[idx];
-        const sessionDate = new Date(sessionDateStr);
-        const withinSixWeeks = (now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24) <= 42;
+        const withinSixWeeks = differenceInDateOnlyDays(churchToday, sessionDateStr) <= 42;
         const periodIndex = periodIndexByDate.get(sessionDateStr)!;
 
         const list = data.attendanceList || [];
@@ -442,7 +443,7 @@ const ReportsPage: React.FC = () => {
     } finally {
       setIsLoadingDetails(false);
     }
-  }, [selectedGatherings, metrics?.attendanceData]);
+  }, [selectedGatherings, metrics?.attendanceData, today]);
 
   // Removed YoY metrics logic
 
@@ -543,12 +544,8 @@ const ReportsPage: React.FC = () => {
   // Attendance chart based on selected period sessions
   const formatShortDate = (isoDate: string) => {
     try {
-      const d = new Date(isoDate);
-      if (isNaN(d.getTime())) return isoDate;
-      const day = String(d.getDate()).padStart(2, '0');
-      const month = d.toLocaleString(undefined, { month: 'short' });
-      const year = String(d.getFullYear()).slice(-2);
-      return `${day} ${month} ${year}`;
+      const formatted = formatDateOnly(isoDate, { day: '2-digit', month: 'short', year: '2-digit' });
+      return formatted || isoDate;
     } catch {
       return isoDate;
     }
@@ -714,62 +711,23 @@ const ReportsPage: React.FC = () => {
   const quickDateOptions = [
     { 
       label: 'Last 4 weeks', 
-      getDates: () => {
-        const today = new Date();
-        const fourWeeksAgo = new Date(today);
-        fourWeeksAgo.setDate(today.getDate() - 28);
-        return {
-          start: fourWeeksAgo.toISOString().split('T')[0],
-          end: today.toISOString().split('T')[0]
-        };
-      }
+      getDates: () => reportDateRange('last-4-weeks', today())
     },
     { 
       label: 'Last 8 weeks', 
-      getDates: () => {
-        const today = new Date();
-        const eightWeeksAgo = new Date(today);
-        eightWeeksAgo.setDate(today.getDate() - 56);
-        return {
-          start: eightWeeksAgo.toISOString().split('T')[0],
-          end: today.toISOString().split('T')[0]
-        };
-      }
+      getDates: () => reportDateRange('last-8-weeks', today())
     },
     { 
       label: 'Last 3 months', 
-      getDates: () => {
-        const today = new Date();
-        const threeMonthsAgo = new Date(today);
-        threeMonthsAgo.setMonth(today.getMonth() - 3);
-        return {
-          start: threeMonthsAgo.toISOString().split('T')[0],
-          end: today.toISOString().split('T')[0]
-        };
-      }
+      getDates: () => reportDateRange('last-3-months', today())
     },
     { 
       label: 'Last 6 months', 
-      getDates: () => {
-        const today = new Date();
-        const sixMonthsAgo = new Date(today);
-        sixMonthsAgo.setMonth(today.getMonth() - 6);
-        return {
-          start: sixMonthsAgo.toISOString().split('T')[0],
-          end: today.toISOString().split('T')[0]
-        };
-      }
+      getDates: () => reportDateRange('last-6-months', today())
     },
     { 
       label: 'Year to date', 
-      getDates: () => {
-        const today = new Date();
-        const startOfYear = new Date(today.getFullYear(), 0, 1);
-        return {
-          start: startOfYear.toISOString().split('T')[0],
-          end: today.toISOString().split('T')[0]
-        };
-      }
+      getDates: () => reportDateRange('year-to-date', today())
     }
   ];
 
@@ -1002,7 +960,7 @@ const ReportsPage: React.FC = () => {
                     id="start-date"
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
-                    max={new Date().toISOString().split('T')[0]}
+                    max={today()}
                     className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
                   />
                   <span className="text-gray-500 dark:text-gray-400 text-center sm:text-left">to</span>
@@ -1011,7 +969,7 @@ const ReportsPage: React.FC = () => {
                     id="end-date"
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
-                    max={new Date().toISOString().split('T')[0]}
+                    max={today()}
                     className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
                   />
                 </div>

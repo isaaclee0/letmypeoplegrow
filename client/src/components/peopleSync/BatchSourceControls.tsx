@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { peopleSyncAPI } from '../../services/api';
 import { sourceFreshness } from '../../utils/sourceFreshness';
+import { useChurchTime } from '../../hooks/useChurchTime';
 import type { PeopleSyncBatch, PeopleSyncSourceState, ProviderSource, SourceKind, SourceSelection, SyncProvider } from './types';
 
 export interface BatchSourceControlsProps {
@@ -32,6 +33,7 @@ function sourceKindFor(provider: SyncProvider, selection: SourceSelection | null
 }
 
 export default function BatchSourceControls({ provider, batch, value, onChange, onDiscarded }: BatchSourceControlsProps) {
+  const { timeZone, formatInstant } = useChurchTime();
   const [sources, setSources] = useState<ProviderSource[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,7 +104,7 @@ export default function BatchSourceControls({ provider, batch, value, onChange, 
     }
   };
 
-  const freshness = provider === 'planning_center' ? sourceFreshness(visibleSelection?.providerRefreshedAt ?? null) : null;
+  const freshness = provider === 'planning_center' ? sourceFreshness(visibleSelection?.providerRefreshedAt ?? null, timeZone) : null;
 
   return <section className="space-y-4 border-t border-gray-200 pt-4 dark:border-gray-700">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -142,7 +144,7 @@ export default function BatchSourceControls({ provider, batch, value, onChange, 
       </select>
       {selectedName ? <p className="text-sm text-gray-700 dark:text-gray-200">{selectedName}</p> : null}
       {missing ? <p className="text-sm font-medium text-red-700 dark:text-red-300">Source missing</p> : null}
-      {batch?.sourceStatusCheckedAt ? <p className="text-sm text-gray-600 dark:text-gray-300">Last checked by LMPG {new Date(batch.sourceStatusCheckedAt).toLocaleString()}</p> : null}
+      {batch?.sourceStatusCheckedAt ? <p className="text-sm text-gray-600 dark:text-gray-300">Last checked by LMPG {formatInstant(batch.sourceStatusCheckedAt, { dateStyle: 'medium', timeStyle: 'short' })}</p> : null}
     </div>}
   </section>;
 }

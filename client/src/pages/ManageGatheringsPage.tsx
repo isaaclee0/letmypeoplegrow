@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useChurchTime } from '../hooks/useChurchTime';
 import { useNavigate } from 'react-router-dom';
 import { gatheringsAPI, onboardingAPI, kioskAPI, settingsAPI } from '../services/api';
 import logger from '../utils/logger';
@@ -77,6 +78,7 @@ interface CreateGatheringData {
 const ManageGatheringsPage: React.FC = () => {
 
   const { user, refreshUserData } = useAuth();
+  const { today, formatDateOnly } = useChurchTime();
   const navigate = useNavigate();
   const [gatherings, setGatherings] = useState<Gathering[]>([]);
   const [selectedGathering, setSelectedGathering] = useState<Gathering | null>(null);
@@ -514,8 +516,8 @@ const ManageGatheringsPage: React.FC = () => {
   // Generate occurrences for a gathering (for display purposes)
   const generateGatheringOccurrences = (gathering: Gathering): Array<{ date: string; canDelete: boolean }> => {
     const occurrences: Array<{ date: string; canDelete: boolean }> = [];
-    const today = new Date();
-    const futureDate = new Date();
+    const now = new Date(`${today()}T12:00:00`);
+    const futureDate = new Date(now);
     futureDate.setMonth(futureDate.getMonth() + 3); // Show next 3 months
 
     if (gathering.attendanceType === 'headcount' && gathering.customSchedule) {
@@ -539,7 +541,7 @@ const ManageGatheringsPage: React.FC = () => {
             shouldInclude = true;
             currentDate.setDate(currentDate.getDate() + (pattern.interval || 1));
           } else if (pattern.frequency === 'weekly' && pattern.daysOfWeek) {
-            const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'long' });
+            const dayName = formatDateOnly(currentDate.toISOString().slice(0, 10), { weekday: 'long' }, 'en-US');
             if (pattern.daysOfWeek.includes(dayName)) {
               shouldInclude = true;
             }
@@ -552,7 +554,7 @@ const ManageGatheringsPage: React.FC = () => {
             currentDate.setDate(pattern.dayOfMonth);
           }
 
-          if (shouldInclude && currentDate >= today) {
+          if (shouldInclude && currentDate >= now) {
             occurrences.push({
               date: currentDate.toISOString().split('T')[0],
               canDelete: true
@@ -568,7 +570,7 @@ const ManageGatheringsPage: React.FC = () => {
       };
 
       const targetDay = dayMap[gathering.dayOfWeek || 'Sunday'];
-      let currentDate = new Date(today);
+      let currentDate = new Date(now);
       
       // Find next occurrence
       while (currentDate.getDay() !== targetDay) {
@@ -833,7 +835,7 @@ const ManageGatheringsPage: React.FC = () => {
                             gathering.customSchedule.type === 'one_off' ? (
                               <div>
                                 <div className="font-medium text-gray-900 dark:text-gray-100">One-off Event</div>
-                                <div className="text-gray-600 dark:text-gray-400">{new Date(gathering.customSchedule.startDate).toLocaleDateString('en-US', { 
+                                <div className="text-gray-600 dark:text-gray-400">{formatDateOnly(gathering.customSchedule.startDate, { 
                                   weekday: 'long',
                                   year: 'numeric',
                                   month: 'long',
@@ -846,7 +848,7 @@ const ManageGatheringsPage: React.FC = () => {
                                 <div className="text-gray-600 dark:text-gray-400">
                                   {gathering.customSchedule.pattern?.customDates?.length
                                     ? `${gathering.customSchedule.pattern.customDates.length} specific date${gathering.customSchedule.pattern.customDates.length === 1 ? '' : 's'}`
-                                    : `${gathering.customSchedule.pattern?.frequency || 'recurring'} from ${new Date(gathering.customSchedule.startDate).toLocaleDateString()}${gathering.customSchedule.endDate ? ` to ${new Date(gathering.customSchedule.endDate).toLocaleDateString()}` : ''}`
+                                    : `${gathering.customSchedule.pattern?.frequency || 'recurring'} from ${formatDateOnly(gathering.customSchedule.startDate)}${gathering.customSchedule.endDate ? ` to ${formatDateOnly(gathering.customSchedule.endDate)}` : ''}`
                                   }
                                 </div>
                               </div>
@@ -1223,9 +1225,9 @@ const ManageGatheringsPage: React.FC = () => {
                     <h4 className="text-sm font-medium text-blue-900 dark:text-blue-300 mb-2">Custom Schedule</h4>
                     <div className="text-sm text-blue-700 dark:text-blue-300">
                       <p><strong>Type:</strong> {editFormData.customSchedule.type === 'one_off' ? 'One-off event' : 'Recurring pattern'}</p>
-                      <p><strong>Start Date:</strong> {new Date(editFormData.customSchedule.startDate).toLocaleDateString()}</p>
+                      <p><strong>Start Date:</strong> {formatDateOnly(editFormData.customSchedule.startDate)}</p>
                       {editFormData.customSchedule.endDate && (
-                        <p><strong>End Date:</strong> {new Date(editFormData.customSchedule.endDate).toLocaleDateString()}</p>
+                        <p><strong>End Date:</strong> {formatDateOnly(editFormData.customSchedule.endDate)}</p>
                       )}
                       {editFormData.customSchedule.pattern && (
                         <>
@@ -1498,7 +1500,7 @@ const ManageGatheringsPage: React.FC = () => {
                               ...createGatheringData, 
                               customSchedule: {
                                 type: 'one_off',
-                                startDate: new Date().toISOString().split('T')[0]
+                                startDate: today()
                               }
                             })}
                             className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
@@ -1859,16 +1861,16 @@ const ManageGatheringsPage: React.FC = () => {
                         <h5 className="text-sm font-medium text-blue-900 dark:text-blue-300 mb-1">Schedule Preview</h5>
                         <p className="text-sm text-blue-700 dark:text-blue-300">
                           {createGatheringData.customSchedule.type === 'one_off' ? (
-                            `Single event on ${new Date(createGatheringData.customSchedule.startDate).toLocaleDateString()}`
+                            `Single event on ${formatDateOnly(createGatheringData.customSchedule.startDate)}`
                           ) : (
                             `Recurring ${createGatheringData.customSchedule.pattern?.frequency || 'weekly'} event` +
                             (createGatheringData.customSchedule.pattern?.frequency === 'weekly' && createGatheringData.customSchedule.pattern?.daysOfWeek?.length ? 
                               ` on ${createGatheringData.customSchedule.pattern.daysOfWeek.join(', ')}` : '') +
                             (createGatheringData.customSchedule.pattern?.frequency === 'monthly' && createGatheringData.customSchedule.pattern?.dayOfMonth ? 
                               ` on day ${createGatheringData.customSchedule.pattern.dayOfMonth}` : '') +
-                            ` from ${new Date(createGatheringData.customSchedule.startDate).toLocaleDateString()}` +
+                            ` from ${formatDateOnly(createGatheringData.customSchedule.startDate)}` +
                             (createGatheringData.customSchedule.endDate ? 
-                              ` to ${new Date(createGatheringData.customSchedule.endDate).toLocaleDateString()}` : '')
+                              ` to ${formatDateOnly(createGatheringData.customSchedule.endDate)}` : '')
                           )}
                         </p>
                       </div>
@@ -2154,7 +2156,7 @@ const ManageGatheringsPage: React.FC = () => {
                           />
                           <div className="ml-3">
                             <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                              {new Date(occurrence.date).toLocaleDateString('en-US', { 
+                              {formatDateOnly(occurrence.date, { 
                                 weekday: 'long',
                                 year: 'numeric',
                                 month: 'long',
@@ -2162,7 +2164,7 @@ const ManageGatheringsPage: React.FC = () => {
                               })}
                             </p>
                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                              {new Date(occurrence.date).toLocaleDateString()}
+                              {formatDateOnly(occurrence.date)}
                             </p>
                           </div>
                         </div>

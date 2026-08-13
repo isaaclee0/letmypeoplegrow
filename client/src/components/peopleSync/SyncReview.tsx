@@ -19,6 +19,7 @@ import {
 import { isReviewDirty, selectedChangeCount } from './syncReviewModel';
 import type { ReviewRowFilter } from './syncReviewModel';
 import { hasForbiddenImportMutations } from '../peopleImport/types';
+import { useChurchTime } from '../../hooks/useChurchTime';
 import type { PeopleImportReview } from '../peopleImport/types';
 import type {
   AmbiguousPersonAction,
@@ -43,12 +44,6 @@ const MATCH_REASON_COPY: Record<string, string> = {
 };
 
 const providerLabel = (provider: SyncProvider) => provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
-
-function snapshotTimeLabel(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Unavailable';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
-}
 
 export interface CandidateSearchRenderProps {
   action: AmbiguousPersonAction;
@@ -474,6 +469,7 @@ function ReviewOperationMismatch({
 }
 
 export default function SyncReview(props: SyncReviewProps) {
+  const { formatInstant } = useChurchTime();
   if (!operationKindMatchesReview(props.operationKind, props.review)) {
     return <ReviewOperationMismatch {...props} />;
   }
@@ -781,7 +777,7 @@ function SafeSyncReview({
                 </p>
               )}
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Source snapshot: {fetchedAt ? <time dateTime={fetchedAt}>{snapshotTimeLabel(fetchedAt)}</time> : 'Unavailable'}
+                Source snapshot: {fetchedAt ? <time dateTime={fetchedAt}>{formatInstant(fetchedAt, { dateStyle: 'medium', timeStyle: 'short' }) || 'Unavailable'}</time> : 'Unavailable'}
               </p>
             </div>
             <button
