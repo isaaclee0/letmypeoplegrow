@@ -501,10 +501,10 @@ router.delete('/:id', requireRole(['admin']), auditLog('DELETE_GATHERING_TYPE'),
   try {
     const { id } = req.params;
     
-    // Check if gathering exists and user has permission
+    // Admins may manage any gathering in their church, regardless of who created it.
     const gathering = await Database.query(
-      'SELECT id FROM gathering_types WHERE id = ? AND created_by = ? AND church_id = ?',
-      [id, req.user.id, req.user.church_id]
+      'SELECT id FROM gathering_types WHERE id = ? AND church_id = ?',
+      [id, req.user.church_id]
     );
     
     if (gathering.length === 0) {
