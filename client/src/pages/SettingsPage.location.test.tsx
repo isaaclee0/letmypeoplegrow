@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsPage from './SettingsPage';
 import { settingsAPI } from '../services/api';
 
+const { updateUser } = vi.hoisted(() => ({ updateUser: vi.fn() }));
+
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     user: {
@@ -13,7 +15,7 @@ vi.mock('../contexts/AuthContext', () => ({
       lastName: 'User',
       primaryContactMethod: 'email',
     },
-    updateUser: vi.fn(),
+    updateUser,
   }),
 }));
 
@@ -122,5 +124,36 @@ describe('SettingsPage location search', () => {
     await act(async () => { vi.advanceTimersByTime(301); });
 
     expect(screen.getByText('Location search is temporarily unavailable.')).toBeInTheDocument();
+  });
+
+  it('persists a selected location and updates the active church timezone', async () => {
+    vi.mocked(settingsAPI.searchLocation).mockResolvedValue({
+      data: { results: [{
+        name: 'Hobart', admin1: 'Tasmania', country: 'Australia', countryCode: 'AU',
+        lat: -42.8821, lng: 147.3272, timezone: 'Australia/Hobart',
+        displayName: 'Hobart, Tasmania, Australia',
+      }] },
+    } as never);
+    vi.mocked(settingsAPI.updateLocation).mockResolvedValue({
+      data: { location: {
+        name: 'Hobart, Tasmania, Australia', lat: -42.8821, lng: 147.3272, timezone: 'Australia/Hobart',
+      } },
+    } as never);
+    render(<SettingsPage />);
+
+    fireEvent.change(screen.getByLabelText('Search for your city'), { target: { value: 'Hobart' } });
+    await act(async () => {
+      vi.advanceTimersByTime(301);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Hobart/ }));
+      await Promise.resolve();
+    });
+
+    expect(settingsAPI.updateLocation).toHaveBeenCalledWith({
+      name: 'Hobart, Tasmania, Australia', lat: -42.8821, lng: 147.3272,
+    });
+    expect(updateUser).toHaveBeenCalledWith({ timezone: 'Australia/Hobart' });
   });
 });

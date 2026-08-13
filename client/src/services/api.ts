@@ -226,9 +226,21 @@ export interface User {
   defaultGatheringId?: number;
   church_id?: string;
   churchName?: string;
+  timezone?: string;
   gatheringAssignments: GatheringType[];
   unreadNotifications?: number;
   hasSampleData?: boolean;
+}
+
+export interface ChurchLocationResult {
+  name: string;
+  admin1: string | null;
+  country: string | null;
+  countryCode: string | null;
+  lat: number;
+  lng: number;
+  timezone: string | null;
+  displayName: string;
 }
 
 export interface GatheringType {
@@ -888,8 +900,11 @@ export const settingsAPI = {
     redirectUri: string;
   }) => api.put('/settings/elvanto-config', data),
   // Location
-  searchLocation: (q: string) => api.get('/settings/location-search', { params: { q } }),
-  updateLocation: (data: { name: string; lat: number; lng: number }) => api.put('/settings/location', data),
+  searchLocation: (q: string) => api.get<{ results: ChurchLocationResult[] }>('/settings/location-search', { params: { q } }),
+  updateLocation: (data: { name: string; lat: number; lng: number }) => api.put<{
+    message: string;
+    location: { name: string; lat: number; lng: number; timezone: string };
+  }>('/settings/location', data),
   updateChildFlairColor: (color: string) => api.put('/settings/child-flair-color', { color }),
   updateDefaultBadge: (data: { text?: string; color?: string }) => api.put('/settings/default-badge', data),
   // Weekly review

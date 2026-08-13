@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import IntegrationsTab from '../components/integrations/IntegrationsTab';
-import { usersAPI, settingsAPI, visitorConfigAPI, takeoutAPI, aiAPI } from '../services/api';
+import { ChurchLocationResult, usersAPI, settingsAPI, visitorConfigAPI, takeoutAPI, aiAPI } from '../services/api';
 import WeeklyReviewGuidanceWizard from '../components/WeeklyReviewGuidanceWizard';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
@@ -38,7 +38,7 @@ const SettingsPage: React.FC = () => {
   // Location state
   const [locationName, setLocationName] = useState<string | null>(null);
   const [locationSearch, setLocationSearch] = useState('');
-  const [locationResults, setLocationResults] = useState<any[]>([]);
+  const [locationResults, setLocationResults] = useState<ChurchLocationResult[]>([]);
   const [locationSearching, setLocationSearching] = useState(false);
   const [locationSaving, setLocationSaving] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -195,18 +195,19 @@ const SettingsPage: React.FC = () => {
   };
 
   // Handle location selection
-  const handleLocationSelect = async (result: any) => {
+  const handleLocationSelect = async (result: ChurchLocationResult) => {
     try {
       locationRequestIdRef.current += 1;
       if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current);
       setLocationSaving(true);
       setLocationError(null);
       setShowLocationDropdown(false);
-      await settingsAPI.updateLocation({
+      const response = await settingsAPI.updateLocation({
         name: result.displayName,
         lat: result.lat,
         lng: result.lng
       });
+      updateUser({ timezone: response.data.location.timezone });
       setLocationName(result.displayName);
       setLocationSearch('');
       setLocationResults([]);

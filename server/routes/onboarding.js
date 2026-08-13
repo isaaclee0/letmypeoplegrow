@@ -9,6 +9,7 @@ const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
 const { getSupportedCountries, supportsMobileNumbers } = require('../utils/phoneNumber');
+const { normalizeTimeZone, timeZoneFromCoordinates } = require('../utils/churchTime');
 
 // Helper function to create sample attendance sessions for testing
 const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId) => {
@@ -247,6 +248,10 @@ router.post('/church-info',
       }
 
       const { churchName, countryCode, timezone, emailFromName, emailFromAddress, locationName, locationLat, locationLng } = req.body;
+      const hasLocationCoordinates = locationLat != null && locationLng != null;
+      const effectiveTimezone = hasLocationCoordinates
+        ? timeZoneFromCoordinates(locationLat, locationLng)
+        : normalizeTimeZone(timezone, 'Australia/Sydney');
 
       // Check if settings already exist
       const existingSettings = await Database.query('SELECT id FROM church_settings WHERE church_id = ? LIMIT 1', [req.user.church_id]);
@@ -257,7 +262,7 @@ router.post('/church-info',
         const params = [
           churchName,
           countryCode.toUpperCase(),
-          timezone || 'America/New_York',
+          effectiveTimezone,
           emailFromName || 'Let My People Grow',
           emailFromAddress || 'noreply@redeemercc.org.au'
         ];
@@ -279,7 +284,7 @@ router.post('/church-info',
           `, [
             churchName,
             countryCode.toUpperCase(),
-            timezone || 'America/New_York',
+            effectiveTimezone,
             emailFromName || 'Let My People Grow',
             emailFromAddress || 'noreply@redeemercc.org.au',
             locationName, locationLat, locationLng,
@@ -292,7 +297,7 @@ router.post('/church-info',
           `, [
             churchName,
             countryCode.toUpperCase(),
-            timezone || 'America/New_York',
+            effectiveTimezone,
             emailFromName || 'Let My People Grow',
             emailFromAddress || 'noreply@redeemercc.org.au',
             req.user.church_id
@@ -968,4 +973,4 @@ router.post('/clear-sample-data',
   }
 );
 
-module.exports = router; 
+module.exports = router;
