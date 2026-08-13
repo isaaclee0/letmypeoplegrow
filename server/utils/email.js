@@ -683,12 +683,13 @@ function formatLastAttendances(lastAttendances) {
  *   Individual: { type:'individual', name, familyName, streak, gatheringName, lastAttendances }
  *   where lastAttendances is an array (most recent first, up to 3) of { date, gatheringName }
  */
-const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entries) => {
+const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entries, options = {}) => {
   const subject = `${churchName} — Pastoral follow-up this week`;
   const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
 
-  const today = new Date();
-  const dateLabel = today.toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const dateLabel = new Intl.DateTimeFormat('en-AU', {
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: options.timeZone || 'UTC',
+  }).format(options.now || new Date());
 
   const cardCardsHtml = entries.map(entry => {
     if (entry.type === 'family') {

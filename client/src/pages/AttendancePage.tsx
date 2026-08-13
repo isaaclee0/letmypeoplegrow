@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
+import { useChurchTime } from '../hooks/useChurchTime';
+import { addDateOnly, differenceInDateOnlyDays } from '../utils/churchTime';
 import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, individualsAPI, GatheringType, Individual, Visitor } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
@@ -64,13 +66,15 @@ interface VisitorFormState {
 
 const AttendancePage: React.FC = () => {
   const { user, updateUser, refreshUserData } = useAuth();
+  const { today, formatDateOnly } = useChurchTime();
   const { showSuccess, showToast } = useToast();
   const navigate = useNavigate();
   const { badgeConfig, getBadgeInfo, isLoading: badgeSettingsLoading } = useBadgeSettings();
   // Initialize selectedDate to today - will be updated by gathering selection logic
   const [selectedDate, setSelectedDate] = useState(() => {
-    logger.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
-    return format(new Date(), 'yyyy-MM-dd');
+    const churchToday = today();
+    logger.log('📅 Initializing selectedDate to today:', churchToday);
+    return churchToday;
   });
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
@@ -201,15 +205,13 @@ const AttendancePage: React.FC = () => {
   
   // Helper function to get date status
   const getDateStatus = (date: string) => {
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const selectedDateTime = new Date(date).getTime();
-    const todayTime = new Date(today).getTime();
-    
-    if (selectedDateTime < todayTime) {
-      const daysDiff = Math.floor((todayTime - selectedDateTime) / (1000 * 60 * 60 * 24));
+    const churchToday = today();
+    const difference = differenceInDateOnlyDays(date, churchToday);
+    if (difference < 0) {
+      const daysDiff = Math.abs(difference);
       return { type: 'past', daysDiff };
-    } else if (selectedDateTime > todayTime) {
-      const daysDiff = Math.floor((selectedDateTime - todayTime) / (1000 * 60 * 60 * 24));
+    } else if (difference > 0) {
+      const daysDiff = difference;
       return { type: 'future', daysDiff };
     } else {
       return { type: 'today', daysDiff: 0 };
@@ -252,15 +254,13 @@ const AttendancePage: React.FC = () => {
   const findNearestDate = useCallback((dates: string[]) => {
     if (dates.length === 0) return null;
     
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const todayTime = new Date(today).getTime();
+    const churchToday = today();
     
     let nearestDate = dates[0];
-    let minDiff = Math.abs(new Date(nearestDate).getTime() - todayTime);
+    let minDiff = Math.abs(differenceInDateOnlyDays(nearestDate, churchToday));
     
     for (const date of dates) {
-      const dateTime = new Date(date).getTime();
-      const diff = Math.abs(dateTime - todayTime);
+      const diff = Math.abs(differenceInDateOnlyDays(date, churchToday));
       
       if (diff < minDiff) {
         minDiff = diff;
@@ -269,7 +269,7 @@ const AttendancePage: React.FC = () => {
     }
     
     return nearestDate;
-  }, []);
+  }, [today]);
 
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [ageFilter, setAgeFilter] = useState<AttendanceAgeFilter>('all');
@@ -549,7 +549,7 @@ const AttendancePage: React.FC = () => {
       } else if (customSchedule.type === 'recurring' && customSchedule.pattern) {
         const pattern = customSchedule.pattern;
         const scheduleStart = parseISO(customSchedule.startDate);
-        const scheduleEnd = customSchedule.endDate ? parseISO(customSchedule.endDate) : addWeeks(new Date(), 4);
+        const scheduleEnd = customSchedule.endDate ? parseISO(customSchedule.endDate) : parseISO(addDateOnly(today(), { days: 28 }));
         
         if (pattern.frequency === 'daily') {
           if (pattern.customDates && pattern.customDates.length > 0) {
@@ -631,9 +631,9 @@ const AttendancePage: React.FC = () => {
     if (targetDay === undefined || gathering.dayOfWeek === null) return [];
 
     const dates: string[] = [];
-    const today = startOfDay(new Date());
-    const rangeStart = addWeeks(today, -26);
-    const rangeEnd = addWeeks(today, 4);
+    const churchToday = parseISO(today());
+    const rangeStart = addWeeks(churchToday, -26);
+    const rangeEnd = addWeeks(churchToday, 4);
 
     let currentDate = startOfWeek(rangeStart, { weekStartsOn: 0 });
     currentDate = addDays(currentDate, targetDay);
@@ -662,7 +662,7 @@ const AttendancePage: React.FC = () => {
     }
 
     return dates.sort((a, b) => b.localeCompare(a));
-  }, []);
+  }, [today]);
 
   // Fetch the dates that already have a session for the selected gathering, so
   // imported/historical attendance (older than the rolling window) stays reachable.
@@ -2795,11 +2795,10 @@ const AttendancePage: React.FC = () => {
                         <span className="text-gray-900 dark:text-gray-100">
                           {selectedDate ? (
                             (() => {
-                              const dateObj = new Date(selectedDate);
-                              const isToday = format(dateObj, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd');
+                              const isToday = selectedDate === today();
                               return isToday 
-                                ? `Today (${format(dateObj, 'MMM d, yyyy')})`
-                                : format(dateObj, 'EEEE, MMM d, yyyy');
+                                ? `Today (${formatDateOnly(selectedDate, { month: 'short', day: 'numeric', year: 'numeric' })})`
+                                : formatDateOnly(selectedDate, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
                             })()
                           ) : (
                             'Select a date'
@@ -3186,7 +3185,7 @@ const AttendancePage: React.FC = () => {
                     </button>
                     
                     <div className="text-sm font-medium text-gray-700 dark:text-gray-300 px-4">
-                      {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', {
+                      {selectedDate ? formatDateOnly(selectedDate, {
                         weekday: 'long',
                         year: 'numeric',
                         month: 'long',
@@ -3256,7 +3255,7 @@ const AttendancePage: React.FC = () => {
                     </button>
                     
                     <div className="text-sm font-medium text-gray-700 dark:text-gray-300 px-4">
-                      {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', {
+                      {selectedDate ? formatDateOnly(selectedDate, {
                         weekday: 'long',
                         year: 'numeric',
                         month: 'long',

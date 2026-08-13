@@ -1059,6 +1059,7 @@ router.post('/planning-center/disconnect', async (req, res) => {
 });
 
 const checkinsImport = require('../services/planningCenter/checkinsImport');
+const { getChurchDate, loadChurchTimeZone } = require('../utils/churchTime');
 
 // Fetches ALL check-ins for a range (paginated) and returns the merged
 // { data, included } payload plus the church timezone.
@@ -1205,10 +1206,10 @@ async function loadCheckinImportState(churchId) {
   try { return JSON.parse(rows[0].s); } catch { return null; }
 }
 
-function resolveRange(startDate, endDate) {
+function resolveRange(startDate, endDate, timeZone = 'UTC', now = new Date()) {
   const range = {
     startDate: startDate || PCO_HISTORY_FLOOR,
-    endDate: endDate || new Date().toISOString().slice(0, 10),
+    endDate: endDate || getChurchDate(now, timeZone),
   };
   // Both dates flow into the PCO request URL — validate format (FIX 4).
   const dateFormat = /^\d{4}-\d{2}-\d{2}$/;
@@ -1227,7 +1228,7 @@ router.get('/planning-center/checkins/events', async (req, res) => {
     if (!(await hasLinkedPeople(churchId))) {
       return res.status(403).json(notLinkedResponse());
     }
-    const { startDate, endDate } = resolveRange(req.query.startDate, req.query.endDate);
+    const { startDate, endDate } = resolveRange(req.query.startDate, req.query.endDate, await loadChurchTimeZone(churchId));
 
     const owned = await getChurchPlanningCenterTokens(churchId);
     if (!owned || !owned.tokens || !owned.tokens.access_token) {
@@ -1489,7 +1490,7 @@ async function runCheckinImport({ req, commit }) {
     err.code = body.code;
     throw err;
   }
-  const { startDate, endDate } = resolveRange(req.body.startDate, req.body.endDate);
+  const { startDate, endDate } = resolveRange(req.body.startDate, req.body.endDate, await loadChurchTimeZone(churchId));
   const mappings = Array.isArray(req.body.mappings) ? req.body.mappings : [];
 
   const jobId = req.body.jobId;
@@ -1693,7 +1694,7 @@ async function runCheckinImport({ req, commit }) {
         [churchId]
       );
       const activeIndividualIds = new Set(activeRows.map((r) => r.id));
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getChurchDate(new Date(), await loadChurchTimeZone(churchId));
       const adds = checkinsImport.buildGatheringListAdds(
         normalized, activeIndividualIds, personToIndividual, newEventToGathering, recencyWeeks, today
       );

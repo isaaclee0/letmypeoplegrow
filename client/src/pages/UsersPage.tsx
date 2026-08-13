@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useChurchTime } from '../hooks/useChurchTime';
 import { usersAPI, gatheringsAPI, contactsAPI } from '../services/api';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -194,6 +195,7 @@ function ContactModal({
 }
 
 const UsersPage: React.FC = () => {
+  const { formatInstant } = useChurchTime();
   const { user: currentUser } = useAuth();
   const [searchParams] = useSearchParams();
   const [users, setUsers] = useState<User[]>([]);
@@ -842,9 +844,7 @@ const UsersPage: React.FC = () => {
 
   const formatDateTime = (value?: string | null): string => {
     if (!value) return '—';
-    const dt = new Date(value);
-    if (isNaN(dt.getTime())) return '—';
-    return dt.toLocaleString();
+    return formatInstant(value, { dateStyle: 'medium', timeStyle: 'short' }) || '—';
   };
 
   if (isLoading) {

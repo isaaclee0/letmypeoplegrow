@@ -15,6 +15,12 @@ import {
   type PeopleSyncReview,
 } from './types';
 
+vi.mock('../../hooks/useChurchTime', () => ({
+  useChurchTime: () => ({
+    formatInstant: (value: string) => `church time: ${value}`,
+  }),
+}));
+
 const emptyBuckets = (): Omit<PeopleSyncPlan, 'provider' | 'authoritative' | 'snapshot'> => ({
   linkPeople: [], linkFamilies: [], addPeople: [], addFamilies: [], updateManagedFields: [],
   promoteToRegular: [], demoteToLocalVisitor: [], archive: [], reactivate: [], moveFamily: [],
@@ -255,6 +261,12 @@ async function beginEstablishedCorrection(target: 'Replacement Local' | 'Alterna
 }
 
 describe('SyncReview compact V2 workflow', () => {
+  it('renders the source snapshot through the church-time formatter', () => {
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={v2Review({ attention: false })} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(screen.getByText('church time: 2026-08-02T01:00:00.000Z')).toBeInTheDocument();
+  });
+
   it('renders the table, compact metadata, and one bottom-only apply action', async () => {
     const user = userEvent.setup();
     const review = v2Review({

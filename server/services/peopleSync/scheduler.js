@@ -33,6 +33,7 @@ const unattendedPolicy = require('./unattendedPolicy');
 const { isBatchRunnable } = require('./batchOperationalState');
 const medicalNotesPolicy = require('../planningCenter/medicalNotesPolicy');
 const medicalNotesSync = require('../planningCenter/medicalNotesSync');
+const { getChurchDate, getZonedParts, daysInDateOnlyMonth, loadChurchTimeZone } = require('../../utils/churchTime');
 
 const PROVIDERS = ['planning_center', 'elvanto'];
 
@@ -42,7 +43,9 @@ const PROVIDERS = ['planning_center', 'elvanto'];
 // Weekly day-of-week: 0=Sunday..6=Saturday (JS Date convention). Monthly
 // day-of-month: 1-31, clamped to the last day of shorter months (e.g. day 31
 // runs on April 30th; day 29 runs on Feb 28th outside leap years).
-function isDueToday(frequency, day, now = new Date()) {
+function isDueToday(frequency, day, now = new Date(), timeZone) {
+  const zoned = getZonedParts(now, timeZone);
+  const churchDate = getChurchDate(now, timeZone);
   if (frequency === 'daily') return true;
   if (frequency === 'monthly') {
     // A stored day < 1 (e.g. a legacy row saved as day=0 back when this
@@ -51,12 +54,11 @@ function isDueToday(frequency, day, now = new Date()) {
     // resolve to Math.min(0, lastDayOfMonth) === 0, which would never match
     // any date and silently stop the schedule from ever firing again.
     const targetDay = typeof day === 'number' && day >= 1 ? day : 1;
-    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    return now.getDate() === Math.min(targetDay, lastDayOfMonth);
+    return zoned.day === Math.min(targetDay, daysInDateOnlyMonth(churchDate));
   }
   // weekly (default, and fallback for unrecognized frequencies)
   const targetDay = typeof day === 'number' ? day : 1;
-  return now.getDay() === targetDay;
+  return zoned.weekday === targetDay;
 }
 
 // Legacy church-wide reconciliation setting retained for stored-data and
@@ -98,9 +100,12 @@ async function runChurch(churchId, options = {}) {
     refreshMedicalNoteStatuses = medicalNotesSync.refreshMedicalNoteStatuses,
     skipScheduleCheck = false,
     now = new Date(),
+    getChurchTimeZone = loadChurchTimeZone,
+    timeZone: configuredTimeZone,
   } = options;
 
   return Database.setChurchContext(churchId, async () => {
+    const timeZone = configuredTimeZone || await getChurchTimeZone(churchId);
     try {
       if (await isUnattendedMedicalNotesRefreshEnabled(churchId)) {
         await refreshMedicalNoteStatuses(churchId);
@@ -152,7 +157,7 @@ async function runChurch(churchId, options = {}) {
 
       const dueBatches = (batches || []).filter((batch) =>
         isBatchRunnable(batch, authorityState.active) && batch.scheduleEnabled &&
-        (skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay, now)));
+        (skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay, now, timeZone)));
       if (!dueBatches.length) continue;
 
       // Loaded for observability and as a fast-skip for a connection already

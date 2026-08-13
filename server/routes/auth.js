@@ -10,12 +10,22 @@ const { sendOTCEmail, sendNewChurchApprovalEmail } = require('../utils/email');
 const { generateOTC, sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
 const { verifyToken } = require('../middleware/auth');
 const { checkSmsSendAllowed, recordSmsSend } = require('../utils/smsRateLimit');
+const { normalizeTimeZone } = require('../utils/churchTime');
 const logger = require('../config/logger');
 
 const router = express.Router();
 
 const isDev = process.env.NODE_ENV === 'development';
 const devBypassEnabled = process.env.AUTH_DEV_BYPASS === 'true';
+
+async function loadChurchTimeZone(churchId) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    'SELECT timezone FROM church_settings WHERE church_id = ? LIMIT 1',
+    [churchId],
+  );
+  return normalizeTimeZone(rows[0]?.timezone);
+}
 
 router.get('/', (req, res) => {
   const externalServices = {
@@ -477,6 +487,7 @@ router.post('/verify-code',
       );
 
       const assignmentsWithNumbers = assignments.map(a => ({ ...a, id: Number(a.id) }));
+      const timezone = await loadChurchTimeZone(userChurchId);
 
       if (!fullUser.first_login_completed) {
         if (assignments.length > 0 || fullUser.role === 'admin') {
@@ -500,6 +511,7 @@ router.post('/verify-code',
           lastName: fullUser.last_name,
           church_id: fullUser.church_id,
           churchName: Database.getChurchName(fullUser.church_id),
+          timezone,
           isChurchApproved: Database.isChurchApproved(fullUser.church_id),
           isFirstLogin,
           defaultGatheringId: fullUser.default_gathering_id,
@@ -534,7 +546,7 @@ router.get('/me', verifyToken, async (req, res) => {
     );
 
     const churchSettings = await Database.query(
-      'SELECT has_sample_data FROM church_settings WHERE church_id = ? LIMIT 1',
+      'SELECT has_sample_data, timezone FROM church_settings WHERE church_id = ? LIMIT 1',
       [user.church_id]
     );
 
@@ -549,6 +561,7 @@ router.get('/me', verifyToken, async (req, res) => {
         lastName: user.last_name,
         church_id: user.church_id,
         churchName: Database.getChurchName(user.church_id),
+        timezone: normalizeTimeZone(churchSettings[0]?.timezone),
         isChurchApproved: Database.isChurchApproved(user.church_id),
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
@@ -632,6 +645,7 @@ router.post('/switch-church',
         [targetUser.id]
       );
       const assignmentsWithNumbers = assignments.map(a => ({ ...a, id: Number(a.id) }));
+      const timezone = await loadChurchTimeZone(targetChurchId);
 
       const cookieOptions = {
         httpOnly: true,
@@ -655,6 +669,7 @@ router.post('/switch-church',
           lastName: targetUser.last_name,
           church_id: targetUser.church_id,
           churchName: Database.getChurchName(targetUser.church_id),
+          timezone,
           isChurchApproved: true,
           isFirstLogin: !targetUser.first_login_completed,
           defaultGatheringId: targetUser.default_gathering_id,
@@ -699,10 +714,11 @@ router.post('/refresh', verifyToken, authLimiter, refreshLimiter, async (req, re
     };
     if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
     res.cookie('authToken', token, cookieOptions);
+    const timezone = await loadChurchTimeZone(user.church_id);
 
     res.json({
       message: 'Token refreshed successfully',
-      user: { id: user.id, email: user.email, role: user.role, firstName: user.first_name, lastName: user.last_name }
+      user: { id: user.id, email: user.email, role: user.role, firstName: user.first_name, lastName: user.last_name, timezone }
     });
   } catch (error) {
     console.error('💥 Refresh token error:', error);

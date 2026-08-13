@@ -20,6 +20,7 @@ interface LocationResult {
   countryCode: string | null;
   lat: number;
   lng: number;
+  timezone: string | null;
   displayName: string;
 }
 
@@ -122,6 +123,7 @@ const OnboardingPage: React.FC = () => {
           countryCode: r.country_code || null,
           lat: r.latitude,
           lng: r.longitude,
+          timezone: r.timezone || null,
           displayName: [r.name, r.admin1, r.country].filter(Boolean).join(', ')
         }));
         setLocationResults(results);
@@ -170,7 +172,6 @@ const OnboardingPage: React.FC = () => {
       const churchInfo: any = {
         churchName,
         countryCode: 'AU',
-        timezone: 'Australia/Sydney',
         emailFromName: 'Let My People Grow',
         emailFromAddress: 'noreply@letmypeoplegrow.com.au',
       };
@@ -178,6 +179,8 @@ const OnboardingPage: React.FC = () => {
         churchInfo.locationName = selectedLocation.displayName;
         churchInfo.locationLat = selectedLocation.lat;
         churchInfo.locationLng = selectedLocation.lng;
+      } else {
+        churchInfo.timezone = 'Australia/Sydney';
       }
       await onboardingAPI.saveChurchInfo(churchInfo);
 

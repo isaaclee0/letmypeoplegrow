@@ -9,9 +9,10 @@ const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
 const { getSupportedCountries, supportsMobileNumbers } = require('../utils/phoneNumber');
+const { normalizeTimeZone, timeZoneFromCoordinates, getChurchDate, getZonedParts, addDateOnly, loadChurchTimeZone } = require('../utils/churchTime');
 
 // Helper function to create sample attendance sessions for testing
-const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId) => {
+const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId, churchId, timeZone) => {
   try {
     const dayMap = {
       'Sunday': 0,
@@ -24,25 +25,21 @@ const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId) =>
     };
     
     const targetDay = dayMap[dayOfWeek];
-    const today = new Date();
+    const today = getChurchDate(new Date(), timeZone);
+    const todayWeekday = getZonedParts(new Date(), timeZone).weekday;
     const sessions = [];
     
     // Create sessions for the past 4 weeks
     for (let i = 1; i <= 4; i++) {
-      const sessionDate = new Date(today);
-      
       // Go back to the most recent occurrence of the target day
-      const daysToSubtract = (today.getDay() - targetDay + 7) % 7;
-      sessionDate.setDate(today.getDate() - daysToSubtract - (7 * i));
-      
-      // Format date as YYYY-MM-DD
-      const formattedDate = sessionDate.toISOString().split('T')[0];
+      const daysToSubtract = (todayWeekday - targetDay + 7) % 7;
+      const formattedDate = addDateOnly(today, { days: -daysToSubtract - (7 * i) });
       
       // Create attendance session
       const sessionResult = await Database.query(`
         INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
         VALUES (?, ?, ?, ?)
-      `, [gatheringId, formattedDate, userId, req.user.church_id]);
+      `, [gatheringId, formattedDate, userId, churchId]);
       
       sessions.push({
         id: Number(sessionResult.insertId),
@@ -247,6 +244,10 @@ router.post('/church-info',
       }
 
       const { churchName, countryCode, timezone, emailFromName, emailFromAddress, locationName, locationLat, locationLng } = req.body;
+      const hasLocationCoordinates = locationLat != null && locationLng != null;
+      const effectiveTimezone = hasLocationCoordinates
+        ? timeZoneFromCoordinates(locationLat, locationLng)
+        : normalizeTimeZone(timezone, 'Australia/Sydney');
 
       // Check if settings already exist
       const existingSettings = await Database.query('SELECT id FROM church_settings WHERE church_id = ? LIMIT 1', [req.user.church_id]);
@@ -257,7 +258,7 @@ router.post('/church-info',
         const params = [
           churchName,
           countryCode.toUpperCase(),
-          timezone || 'America/New_York',
+          effectiveTimezone,
           emailFromName || 'Let My People Grow',
           emailFromAddress || 'noreply@redeemercc.org.au'
         ];
@@ -279,7 +280,7 @@ router.post('/church-info',
           `, [
             churchName,
             countryCode.toUpperCase(),
-            timezone || 'America/New_York',
+            effectiveTimezone,
             emailFromName || 'Let My People Grow',
             emailFromAddress || 'noreply@redeemercc.org.au',
             locationName, locationLat, locationLng,
@@ -292,7 +293,7 @@ router.post('/church-info',
           `, [
             churchName,
             countryCode.toUpperCase(),
-            timezone || 'America/New_York',
+            effectiveTimezone,
             emailFromName || 'Let My People Grow',
             emailFromAddress || 'noreply@redeemercc.org.au',
             req.user.church_id
@@ -357,7 +358,7 @@ router.post('/gathering',
       `, [req.user.id, Number(result.insertId), req.user.id]);
 
       // Create sample attendance sessions for testing (going back 4 weeks)
-      await createSampleAttendanceSessions(Number(result.insertId), dayOfWeek, req.user.id);
+      await createSampleAttendanceSessions(Number(result.insertId), dayOfWeek, req.user.id, req.user.church_id, await loadChurchTimeZone(req.user.church_id));
 
       // Get all gatherings for this user to save progress
       const userGatherings = await Database.query(`
@@ -776,6 +777,7 @@ router.post('/sample-data',
 
       const churchId = req.user.church_id;
       const userId = req.user.id;
+      const timeZone = await loadChurchTimeZone(churchId);
 
       await Database.transaction(async (conn) => {
         // 1. Create gathering
@@ -839,15 +841,13 @@ router.post('/sample-data',
         }
 
         // 7. Create 2 attendance sessions (last 2 Sundays)
-        const today = new Date();
-        const dayOfWeek = today.getDay(); // 0 = Sunday
+        const today = getChurchDate(new Date(), timeZone);
+        const dayOfWeek = getZonedParts(new Date(), timeZone).weekday; // 0 = Sunday
         const daysToLastSunday = (dayOfWeek === 0) ? 7 : dayOfWeek;
 
         const sessionDates = [];
         for (let i = 0; i < 2; i++) {
-          const d = new Date(today);
-          d.setDate(today.getDate() - daysToLastSunday - (7 * i));
-          sessionDates.push(d.toISOString().split('T')[0]);
+          sessionDates.push(addDateOnly(today, { days: -daysToLastSunday - (7 * i) }));
         }
 
         const sessionIds = [];
@@ -968,4 +968,4 @@ router.post('/clear-sample-data',
   }
 );
 
-module.exports = router; 
+module.exports = router;

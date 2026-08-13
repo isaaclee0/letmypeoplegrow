@@ -13,6 +13,7 @@ import type {
   PeopleSyncSettings,
 } from '../peopleSync/types';
 import type { ElvantoStatus, PanelProps, PeopleSyncPanelProps } from './types';
+import { useChurchTime } from '../../hooks/useChurchTime';
 
 type Props = PanelProps<ElvantoStatus> & PeopleSyncPanelProps & { initialAction?: 'disconnect' };
 
@@ -50,6 +51,7 @@ function ConnectionSection({
   initialAction?: 'disconnect';
   syncControl?: React.ReactNode;
 }) {
+  const { formatInstant } = useChurchTime();
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -200,6 +202,7 @@ function ElvantoOptions({
 }
 
 function RecentRuns({ runs }: { runs: PeopleSyncRun[] }) {
+  const { formatInstant } = useChurchTime();
   const providerRuns = runs.filter((run) => run.provider === 'elvanto');
   return (
     <section className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
@@ -212,7 +215,7 @@ function RecentRuns({ runs }: { runs: PeopleSyncRun[] }) {
             const archived = run.counts.archive || 0;
             return (
               <li key={run.id} className="rounded bg-gray-50 p-3 text-sm dark:bg-gray-800">
-                <p className="font-medium">{run.status.replace('_', ' ')} · {new Date(run.startedAt).toLocaleString()}</p>
+                <p className="font-medium">{run.status.replace('_', ' ')} · {formatInstant(run.startedAt, { dateStyle: 'medium', timeStyle: 'short' })}</p>
                 <p className="text-xs text-gray-600">{added} added, {updated} updated, {archived} archived.</p>
                 {run.errorMessage && <p className="text-xs text-red-600">{run.errorMessage}</p>}
               </li>
@@ -236,6 +239,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
+  const { formatInstant } = useChurchTime();
   const navigate = useNavigate();
   const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
   const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
@@ -403,7 +407,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium">{batch.name}</p>
-                      <p className="text-xs text-gray-500">{batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}{batch.lastSyncAt ? ` · Last run ${new Date(batch.lastSyncAt).toLocaleString()}` : ''}</p>
+                      <p className="text-xs text-gray-500">{batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}{batch.lastSyncAt ? ` · Last run ${formatInstant(batch.lastSyncAt, { dateStyle: 'medium', timeStyle: 'short' })}` : ''}</p>
                       {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'elvanto_group' ? 'Elvanto Group' : 'Elvanto Category'}: {batch.source.name}</p>}
                       {batch.sourceStatus === 'missing' && <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">Source missing</p>}
                       {batch.sourceStatus === 'error' && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Source check failed{batch.sourceStatusErrorCode ? ` · ${batch.sourceStatusErrorCode}` : ''}</p>}

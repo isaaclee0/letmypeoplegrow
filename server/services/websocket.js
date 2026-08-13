@@ -2,6 +2,11 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
 const Database = require('../config/database');
+const { getChurchDate, parseSqliteUtc, loadChurchTimeZone } = require('../utils/churchTime');
+
+function canSnapshotRoster(date, timeZone, now = new Date()) {
+  return date <= getChurchDate(now, timeZone);
+}
 
 class WebSocketService {
   constructor() {
@@ -483,6 +488,8 @@ class WebSocketService {
         return;
       }
 
+      const timeZone = await loadChurchTimeZone(socket.churchId);
+
       // Create deduplication key based on user, gathering, date, and records
       const recordsKey = records.map(r => `${r.individualId}:${r.present}`).sort().join(',');
       const dedupeKey = `${socket.userId}:${gatheringId}:${date}:${recordsKey}`;
@@ -576,11 +583,7 @@ class WebSocketService {
               [sessionId]
             );
             if (sessionCheck.length > 0 && sessionCheck[0].roster_snapshotted !== 1) {
-              const today = new Date();
-              today.setHours(0, 0, 0, 0);
-              const sessionDate = new Date(date);
-              sessionDate.setHours(0, 0, 0, 0);
-              if (sessionDate <= today) {
+              if (canSnapshotRoster(date, timeZone)) {
                 const gathering = await conn.query(
                   'SELECT attendance_type FROM gathering_types WHERE id = ? AND church_id = ?',
                   [gatheringId, socket.churchId]
@@ -623,7 +626,7 @@ class WebSocketService {
           // If server record is newer than client's change, skip this update
           if (existingRecords.length > 0) {
             const existingRecord = existingRecords[0];
-            const serverTimestamp = new Date(existingRecord.updated_at);
+            const serverTimestamp = parseSqliteUtc(existingRecord.updated_at);
 
             if (serverTimestamp > clientTimestamp) {
               logger.debugLog('Skipping stale update via WebSocket', {
@@ -1006,13 +1009,11 @@ class WebSocketService {
           const relevantDates = v.peopleType === 'local_visitor' ? localServiceDates : travellerServiceDates;
           if (relevantDates.length === 0) return false;
 
-          const lastDate = new Date(v.lastAttendanceDate);
-          lastDate.setHours(0, 0, 0, 0);
-          const lastDateStr = lastDate.toISOString().split('T')[0];
+          const lastDateStr = String(v.lastAttendanceDate).slice(0, 10);
 
           const oldestDate = relevantDates[relevantDates.length - 1];
           if (!oldestDate) return false;
-          const oldestDateStr = new Date(oldestDate).toISOString().split('T')[0];
+          const oldestDateStr = String(oldestDate).slice(0, 10);
 
           return lastDateStr >= oldestDateStr;
         });
@@ -2266,5 +2267,8 @@ class WebSocketService {
 
 // Create singleton instance
 const webSocketService = new WebSocketService();
+
+webSocketService.canSnapshotRoster = canSnapshotRoster;
+webSocketService.loadChurchTimeZone = loadChurchTimeZone;
 
 module.exports = webSocketService;

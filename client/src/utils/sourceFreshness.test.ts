@@ -8,22 +8,22 @@ const nowMinusMs = (count: number) => new Date(now.getTime() - count).toISOStrin
 
 describe('sourceFreshness', () => {
   it('classifies the exact seven and thirty day boundaries with a fixed clock', () => {
-    expect(sourceFreshness(nowMinusDays(7), now).band).toBe('green');
-    expect(sourceFreshness(nowMinusMs(days(7) + 1), now).band).toBe('orange');
-    expect(sourceFreshness(nowMinusDays(30), now).band).toBe('orange');
-    expect(sourceFreshness(nowMinusMs(days(30) + 1), now).band).toBe('red');
+    expect(sourceFreshness(nowMinusDays(7), 'Australia/Hobart', now).band).toBe('green');
+    expect(sourceFreshness(nowMinusMs(days(7) + 1), 'Australia/Hobart', now).band).toBe('orange');
+    expect(sourceFreshness(nowMinusDays(30), 'Australia/Hobart', now).band).toBe('orange');
+    expect(sourceFreshness(nowMinusMs(days(30) + 1), 'Australia/Hobart', now).band).toBe('red');
   });
 
   it('marks absent and malformed refresh times as unknown', () => {
-    expect(sourceFreshness(null, now).band).toBe('unknown');
-    expect(sourceFreshness('not-a-date', now).band).toBe('unknown');
+    expect(sourceFreshness(null, 'Australia/Hobart', now).band).toBe('unknown');
+    expect(sourceFreshness('not-a-date', 'Australia/Hobart', now).band).toBe('unknown');
   });
 
   it('includes a relative age and localized timestamp for a valid refresh time', () => {
     const refreshedAt = nowMinusDays(2);
-    const result = sourceFreshness(refreshedAt, now);
+    const result = sourceFreshness(refreshedAt, 'Australia/Hobart', now);
 
     expect(result.text).toContain('2 days ago');
-    expect(result.title).toContain(new Date(refreshedAt).toLocaleString());
+    expect(result.title).toContain('Jul 27, 2026, 10:00 PM');
   });
 });

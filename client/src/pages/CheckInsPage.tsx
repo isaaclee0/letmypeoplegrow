@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { useCheckIns } from '../contexts/CheckInsContext';
+import { useChurchTime } from '../hooks/useChurchTime';
 import { gatheringsAPI, GatheringType, kioskAPI } from '../services/api';
 import { getNextGatheringDate } from '../components/checkins/GatheringDateSelector';
 import GatheringDateSelector from '../components/checkins/GatheringDateSelector';
@@ -17,12 +17,13 @@ import {
 
 const CheckInsPage: React.FC = () => {
   const { user } = useAuth();
+  const { today } = useChurchTime();
   const checkIns = useCheckIns();
   const isAttendanceTaker = user?.role === 'attendance_taker';
 
   // Gathering selection
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
-  const [gatheringDate, setGatheringDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [gatheringDate, setGatheringDate] = useState(() => today());
   const [daysAway, setDaysAway] = useState(0);
 
   // Mode selection — driven by context for persistence
@@ -86,7 +87,7 @@ const CheckInsPage: React.FC = () => {
           const hasLeader = !!g.leaderCheckinEnabled;
           if (hasLeader && !hasSelf) {
             // Leader-only: go straight to leader check-in
-            const { date, daysAway: da } = getNextGatheringDate(g);
+            const { date, daysAway: da } = getNextGatheringDate(g, today());
             setSelectedGathering(g);
             setGatheringDate(date);
             setDaysAway(da);
@@ -94,7 +95,7 @@ const CheckInsPage: React.FC = () => {
             setActiveMode('leader');
           } else if (hasSelf && !hasLeader) {
             // Self-only: auto-select gathering but show setup page (don't auto-start)
-            const { date, daysAway: da } = getNextGatheringDate(g);
+            const { date, daysAway: da } = getNextGatheringDate(g, today());
             setSelectedGathering(g);
             setGatheringDate(date);
             setDaysAway(da);
@@ -112,7 +113,7 @@ const CheckInsPage: React.FC = () => {
               setGatheringDate(checkIns.selectedDate);
               setDaysAway(0);
             } else {
-              const { date, daysAway: da } = getNextGatheringDate(g);
+              const { date, daysAway: da } = getNextGatheringDate(g, today());
               setGatheringDate(date);
               setDaysAway(da);
             }
@@ -262,6 +263,7 @@ const CheckInsPage: React.FC = () => {
           selectedGathering={selectedGathering}
           selectedDate={gatheringDate}
           daysAway={daysAway}
+          churchToday={today()}
         />
 
         {/* Mode selection buttons */}

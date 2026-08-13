@@ -23,6 +23,7 @@ import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types'
 import type { BatchOperationalState, PeopleSyncBatch } from '../peopleSync/types';
 import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
 import PlanningCenterMedicalNotesSettings from './PlanningCenterMedicalNotesSettings';
+import { useChurchTime } from '../../hooks/useChurchTime';
 
 const PCO_SYNC_RESULT_LABELS: Record<string, [string, string]> = {
   addPeople: ['person added', 'people added'],
@@ -70,6 +71,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
+  const { formatInstant } = useChurchTime();
   const navigate = useNavigate();
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
@@ -544,7 +546,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           </p>
                           {batch.lastSyncAt && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                              Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}.
+                              Last run {formatInstant(batch.lastSyncAt, { dateStyle: 'medium', timeStyle: 'short' })}{batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}.
                             </p>
                           )}
                           {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'planning_center_list' ? 'Planning Center List' : batch.source.kind}: {batch.source.name}</p>}
@@ -596,7 +598,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                                   : 'manual only'} · {batch.gatheringTypeId ? 'assigned to a gathering' : 'no gathering assignment'} · new people were added as {batch.defaultPeopleType.replace('_', ' ')}.
                               </p>
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                Last run {batch.lastSyncAt ? `${new Date(batch.lastSyncAt).toLocaleString()}${batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}` : 'Never run'}.
+                                Last run {batch.lastSyncAt ? `${formatInstant(batch.lastSyncAt, { dateStyle: 'medium', timeStyle: 'short' })}${batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}` : 'Never run'}.
                               </p>
                             </div>
                             <button type="button" onClick={() => { setLegacyBatchPendingDelete(batch); setLegacyBatchDeleteError(null); }} className="shrink-0 text-sm underline text-red-600 dark:text-red-400">Delete</button>

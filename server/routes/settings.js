@@ -1,6 +1,7 @@
 const express = require('express');
 const https = require('https');
 const Database = require('../config/database');
+const { timeZoneFromCoordinates } = require('../utils/churchTime');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { getAuthority } = require('../services/peopleSync/authority');
 const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
@@ -276,6 +277,7 @@ router.get('/location-search', requireRole(['admin']), async (req, res) => {
       countryCode: r.country_code || null,
       lat: r.latitude,
       lng: r.longitude,
+      timezone: r.timezone || null,
       displayName: [r.name, r.admin1, r.country].filter(Boolean).join(', ')
     }));
 
@@ -310,15 +312,16 @@ router.put('/location', requireRole(['admin']), async (req, res) => {
       return res.status(404).json({ error: 'Church settings not found.' });
     }
 
+    const timezone = timeZoneFromCoordinates(lat, lng);
     await Database.query(`
       UPDATE church_settings
-      SET location_name = ?, location_lat = ?, location_lng = ?, updated_at = datetime('now')
+      SET location_name = ?, location_lat = ?, location_lng = ?, timezone = ?, updated_at = datetime('now')
       WHERE church_id = ?
-    `, [name.trim(), lat, lng, req.user.church_id]);
+    `, [name.trim(), lat, lng, timezone, req.user.church_id]);
 
     res.json({
       message: 'Location updated successfully.',
-      location: { name: name.trim(), lat, lng }
+      location: { name: name.trim(), lat, lng, timezone }
     });
   } catch (error) {
     console.error('Update location error:', error);

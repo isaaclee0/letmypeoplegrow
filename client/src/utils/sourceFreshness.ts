@@ -22,7 +22,7 @@ function relativeAge(milliseconds: number): string {
   return `Updated ${wholeDays} day${wholeDays === 1 ? '' : 's'} ago`;
 }
 
-export function sourceFreshness(providerRefreshedAt: string | null, now = new Date()): SourceFreshness {
+export function sourceFreshness(providerRefreshedAt: string | null, timeZone: string, now = new Date()): SourceFreshness {
   const refreshedAt = providerRefreshedAt === null ? Number.NaN : new Date(providerRefreshedAt).getTime();
   if (!Number.isFinite(refreshedAt) || !Number.isFinite(now.getTime())) {
     return { band: 'unknown', className: CLASS_NAMES.unknown, text: 'Refresh time unavailable', title: 'Refresh time unavailable' };
@@ -30,7 +30,11 @@ export function sourceFreshness(providerRefreshedAt: string | null, now = new Da
 
   const age = Math.max(0, now.getTime() - refreshedAt);
   const band: SourceFreshnessBand = age <= DAY_MS * 7 ? 'green' : age <= DAY_MS * 30 ? 'orange' : 'red';
-  const localized = new Date(refreshedAt).toLocaleString();
+  const localized = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone,
+  }).format(new Date(refreshedAt));
   return {
     band,
     className: CLASS_NAMES[band],

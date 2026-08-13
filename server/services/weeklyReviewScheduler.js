@@ -5,63 +5,38 @@ const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewIn
 const { sendWeeklyReviewEmail } = require('../utils/email');
 const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
 const { shouldNudgeForGuidance } = require('./weeklyReviewGuidance');
+const { getChurchDate, getZonedParts, addDateOnly } = require('../utils/churchTime');
 
 let cronJob = null;
 
 /**
  * Get the current local hour for a given timezone.
  */
-function getLocalHour(timezone) {
-  try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      hour: 'numeric',
-      hour12: false,
-      timeZone: timezone
-    });
-    return parseInt(formatter.format(now), 10);
-  } catch {
-    return new Date().getUTCHours();
-  }
+function getLocalHour(timezone, now = new Date()) {
+  return getZonedParts(now, timezone).hour;
 }
 
 /**
  * Get the current local day name for a given timezone.
  */
-function getLocalDayName(timezone) {
-  try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      weekday: 'long',
-      timeZone: timezone
-    });
-    return formatter.format(now);
-  } catch {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return days[new Date().getDay()];
-  }
+function getLocalDayName(timezone, now = new Date()) {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return days[getZonedParts(now, timezone).weekday];
 }
 
 /**
  * Get the current local date string (YYYY-MM-DD) for a given timezone.
  */
-function getLocalDateString(timezone) {
-  try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }); // en-CA gives YYYY-MM-DD
-    return formatter.format(now);
-  } catch {
-    return new Date().toISOString().split('T')[0];
-  }
+function getLocalDateString(timezone, now = new Date()) {
+  return getChurchDate(now, timezone);
 }
 
 /**
  * Check if the last_sent date is within the current week (last 6 days).
  */
-function wasSentThisWeek(lastSent) {
+function wasSentThisWeek(lastSent, now = new Date()) {
   if (!lastSent) return false;
   const sent = new Date(lastSent);
-  const now = new Date();
   const diffMs = now - sent;
   const diffDays = diffMs / (1000 * 60 * 60 * 24);
   return diffDays < 6; // prevent duplicate within same week
@@ -112,7 +87,7 @@ async function hasMainGatheringData(churchId, startDate, endDate) {
 /**
  * Process a single church for weekly review email.
  */
-async function processChurch(church) {
+async function processChurch(church, options = {}) {
   const churchId = church.church_id;
 
   try {
@@ -133,12 +108,13 @@ async function processChurch(church) {
       if (!s.weekly_review_email_enabled) return;
 
       const timezone = s.timezone || 'UTC';
-      const localHour = getLocalHour(timezone);
+      const now = options.now || new Date();
+      const localHour = getLocalHour(timezone, now);
 
       // Only send between 7-8 AM local time
       if (localHour !== 7) return;
 
-      const localDay = getLocalDayName(timezone);
+      const localDay = getLocalDayName(timezone, now);
 
       // Determine send day
       let sendDay = s.weekly_review_email_day;
@@ -154,10 +130,10 @@ async function processChurch(church) {
       if (!isPrimaryDay && !isRetryDay) return;
 
       // Check for duplicate sends this week
-      if (wasSentThisWeek(s.weekly_review_email_last_sent)) return;
+      if (wasSentThisWeek(s.weekly_review_email_last_sent, now)) return;
 
       // Generate review data
-      const reviewData = await generateWeeklyReviewData(churchId);
+      const reviewData = await generateWeeklyReviewData(churchId, { now });
       if (!reviewData) {
         console.log(`Weekly review: No attendance data for church ${churchId}, skipping`);
         return;
@@ -166,13 +142,11 @@ async function processChurch(church) {
       // On the primary send day, check if the main gathering has data yet.
       // If not, defer to the retry day (gives people time to enter data).
       if (isPrimaryDay) {
-        const now = new Date();
-        const weekAgo = new Date(now);
-        weekAgo.setDate(weekAgo.getDate() - 7);
+        const today = getChurchDate(now, timezone);
         const hasData = await hasMainGatheringData(
           churchId,
-          weekAgo.toISOString().split('T')[0],
-          now.toISOString().split('T')[0]
+          addDateOnly(today, { days: -7 }),
+          today
         );
         if (!hasData) {
           console.log(`Weekly review: Main gathering data not yet entered for church ${churchId}, deferring to ${retryDay}`);
@@ -237,7 +211,7 @@ async function processChurch(church) {
       }
 
       // Update last sent date
-      const localDate = getLocalDateString(timezone);
+      const localDate = getLocalDateString(timezone, now);
       await Database.query(
         `UPDATE church_settings SET weekly_review_email_last_sent = ? WHERE church_id = ?`,
         [localDate, churchId]
@@ -305,4 +279,4 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, processChurch };
+module.exports = { start, stop, processChurch, getLocalHour, getLocalDayName, getLocalDateString };

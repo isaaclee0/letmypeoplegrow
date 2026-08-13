@@ -4,6 +4,7 @@ const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const archiver = require('archiver');
 const logger = require('../config/logger');
+const { getChurchDate, loadChurchTimeZone } = require('../utils/churchTime');
 
 router.use(verifyToken);
 router.use(requireRole('admin'));
@@ -79,14 +80,19 @@ function rowsToCsv(rows, redactColumns = REDACT_COLUMNS) {
   return header + '\n' + lines.join('\n') + '\n';
 }
 
+function exportFilename(timeZone, now = new Date()) {
+  return `church-data-export-${getChurchDate(now, timeZone)}.zip`;
+}
+
 // GET /api/takeout/export - Download ZIP of all church data as CSVs
 router.get('/export', async (req, res) => {
   const churchId = req.user.church_id;
   logger.info('Data export requested', { userId: req.user.id, churchId });
 
   try {
+    const timeZone = await loadChurchTimeZone(churchId);
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="church-data-export-${new Date().toISOString().split('T')[0]}.zip"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(timeZone)}"`);
 
     const archive = archiver('zip', { zlib: { level: 6 } });
     archive.on('error', (err) => {
@@ -186,3 +192,4 @@ router.post('/delete', async (req, res) => {
 
 module.exports = router;
 module.exports.rowsToCsv = rowsToCsv;
+module.exports.exportFilename = exportFilename;

@@ -1,4 +1,5 @@
 const Database = require('../config/database');
+const { getChurchDate, addDateOnly } = require('../utils/churchTime');
 
 /**
  * Generate weekly review data for a single church.
@@ -7,7 +8,12 @@ const Database = require('../config/database');
  * @param {string} churchId
  * @returns {object|null} Review data, or null if no attendance was recorded
  */
-async function generateWeeklyReviewData(churchId) {
+function getWeeklyReviewWindow(now, timeZone) {
+  const endDate = getChurchDate(now, timeZone);
+  return { startDate: addDateOnly(endDate, { days: -7 }), endDate };
+}
+
+async function generateWeeklyReviewData(churchId, options = {}) {
   // Get church settings
   const settings = await Database.query(
     `SELECT church_name, timezone FROM church_settings WHERE church_id = ? LIMIT 1`,
@@ -18,11 +24,8 @@ async function generateWeeklyReviewData(churchId) {
   const timezone = settings[0].timezone || 'UTC';
 
   // Determine the week window: last 7 days from now
-  const now = new Date();
-  const weekAgo = new Date(now);
-  weekAgo.setDate(weekAgo.getDate() - 7);
-  const endDate = now.toISOString().split('T')[0];
-  const startDate = weekAgo.toISOString().split('T')[0];
+  const now = options.now || new Date();
+  const { startDate, endDate } = getWeeklyReviewWindow(now, timezone);
 
   // Get all active gathering types
   const gatherings = await Database.query(
@@ -174,9 +177,7 @@ async function generateWeeklyReviewData(churchId) {
   );
 
   // Get last 8 weeks of weekly totals for AI insight context
-  const eightWeeksAgo = new Date(now);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
-  const weeklyTotals = await getWeeklyTotals(churchId, eightWeeksAgo.toISOString().split('T')[0], endDate);
+  const weeklyTotals = await getWeeklyTotals(churchId, addDateOnly(endDate, { days: -56 }), endDate);
 
   // Enriched data for AI insight
   const hasStandardGatherings = gatherings.some(g => g.attendance_type === 'standard');
@@ -261,11 +262,10 @@ async function getWeeklyTotals(churchId, startDate, endDate) {
   // Group by ISO week
   const weekMap = new Map();
   for (const s of sessions) {
-    const d = new Date(s.session_date);
+    const d = new Date(`${s.session_date}T12:00:00Z`);
     // Get Monday of the week
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    const weekStart = new Date(d.setDate(diff)).toISOString().split('T')[0];
+    const day = d.getUTCDay();
+    const weekStart = addDateOnly(s.session_date, { days: -day + (day === 0 ? -6 : 1) });
 
     if (!weekMap.has(weekStart)) weekMap.set(weekStart, []);
     weekMap.get(weekStart).push(s);
@@ -307,12 +307,8 @@ async function getWeeklyTotals(churchId, startDate, endDate) {
  * Returns top 5 most significant changes sorted by severity.
  */
 async function getRegularEngagementChanges(churchId, endDate) {
-  const eightWeeksAgo = new Date(endDate);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
-  const twelveWeeksAgo = new Date(endDate);
-  twelveWeeksAgo.setDate(twelveWeeksAgo.getDate() - 84);
-  const startDate8 = eightWeeksAgo.toISOString().split('T')[0];
-  const startDate12 = twelveWeeksAgo.toISOString().split('T')[0];
+  const startDate8 = addDateOnly(endDate, { days: -56 });
+  const startDate12 = addDateOnly(endDate, { days: -84 });
 
   // Get active regulars with at least one attendance record in last 12 weeks
   const regulars = await Database.query(
@@ -346,10 +342,9 @@ async function getRegularEngagementChanges(churchId, endDate) {
   // Group sessions by week
   const weekSessions = new Map();
   for (const s of sessions) {
-    const d = new Date(s.session_date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    const weekStart = new Date(new Date(s.session_date).setDate(diff)).toISOString().split('T')[0];
+    const d = new Date(`${s.session_date}T12:00:00Z`);
+    const day = d.getUTCDay();
+    const weekStart = addDateOnly(s.session_date, { days: -day + (day === 0 ? -6 : 1) });
     if (!weekSessions.has(weekStart)) weekSessions.set(weekStart, []);
     weekSessions.get(weekStart).push(s);
   }
@@ -507,12 +502,8 @@ async function getRegularEngagementChanges(churchId, endDate) {
  * Get local visitor retention stats for last 4 weeks, compared to prior 4 weeks.
  */
 async function getLocalVisitorRetention(churchId, endDate) {
-  const fourWeeksAgo = new Date(endDate);
-  fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
-  const eightWeeksAgo = new Date(endDate);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
-  const start4 = fourWeeksAgo.toISOString().split('T')[0];
-  const start8 = eightWeeksAgo.toISOString().split('T')[0];
+  const start4 = addDateOnly(endDate, { days: -28 });
+  const start8 = addDateOnly(endDate, { days: -56 });
 
   // Find local visitors whose first attendance record falls in each window
   const getWindowStats = async (windowStart, windowEnd, analysisEnd) => {
@@ -560,9 +551,7 @@ async function getLocalVisitorRetention(churchId, endDate) {
  * Get per-gathering trend direction over 8 weeks.
  */
 async function getCrossGatheringTrends(churchId, endDate) {
-  const eightWeeksAgo = new Date(endDate);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
-  const startDate = eightWeeksAgo.toISOString().split('T')[0];
+  const startDate = addDateOnly(endDate, { days: -56 });
 
   const gatherings = await Database.query(
     `SELECT id, name, attendance_type FROM gathering_types WHERE is_active = 1 AND church_id = ?`,
@@ -648,8 +637,7 @@ async function getCrossGatheringTrends(churchId, endDate) {
     );
 
     // Split into first/second half by date
-    const midDate = new Date((new Date(startDate).getTime() + new Date(endDate).getTime()) / 2)
-      .toISOString().split('T')[0];
+    const midDate = addDateOnly(startDate, { days: Math.floor((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 172800000) });
 
     // Per-person per-gathering: count first-half and second-half attendances
     const personGatheringCounts = new Map(); // `${personId}-${gatheringId}` → { first, second }
@@ -729,9 +717,7 @@ async function getCrossGatheringTrends(churchId, endDate) {
  * Returns top 5 most noteworthy patterns.
  */
 async function getFamilyAttendancePatterns(churchId, endDate) {
-  const eightWeeksAgo = new Date(endDate);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
-  const startDate = eightWeeksAgo.toISOString().split('T')[0];
+  const startDate = addDateOnly(endDate, { days: -56 });
 
   // Get families with active regular members
   const families = await Database.query(
@@ -762,10 +748,9 @@ async function getFamilyAttendancePatterns(churchId, endDate) {
   // Group sessions by week
   const weekSessions = new Map();
   for (const s of sessions) {
-    const d = new Date(s.session_date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    const weekStart = new Date(new Date(s.session_date).setDate(diff)).toISOString().split('T')[0];
+    const d = new Date(`${s.session_date}T12:00:00Z`);
+    const day = d.getUTCDay();
+    const weekStart = addDateOnly(s.session_date, { days: -day + (day === 0 ? -6 : 1) });
     if (!weekSessions.has(weekStart)) weekSessions.set(weekStart, []);
     weekSessions.get(weekStart).push(s);
   }
@@ -903,12 +888,8 @@ async function cleanupStaleDismissals(churchId) {
  * Returns up to 5 people with the gatherings they used to attend, plus total count.
  */
 async function getNewlyDisengaged(churchId, endDate) {
-  const threeWeeksAgo = new Date(endDate);
-  threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
-  const sixWeeksAgo = new Date(endDate);
-  sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42);
-  const recentStart = threeWeeksAgo.toISOString().split('T')[0];
-  const olderStart = sixWeeksAgo.toISOString().split('T')[0];
+  const recentStart = addDateOnly(endDate, { days: -21 });
+  const olderStart = addDateOnly(endDate, { days: -42 });
 
   // Find active regulars who were present in weeks 4-6 but NOT present in weeks 1-3
   const disengaged = await Database.query(
@@ -1054,4 +1035,4 @@ async function detectSendDay(churchId) {
   return days[(idx + 1) % 7];
 }
 
-module.exports = { generateWeeklyReviewData, detectSendDay };
+module.exports = { generateWeeklyReviewData, detectSendDay, getWeeklyReviewWindow };

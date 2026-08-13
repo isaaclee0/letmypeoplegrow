@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addMonths, subMonths, isSameMonth, isSameDay, isToday, addDays, startOfWeek } from 'date-fns';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { useChurchTime } from '../hooks/useChurchTime';
 
 interface AttendanceDatePickerProps {
   selectedDate: string;
@@ -15,8 +16,9 @@ const AttendanceDatePicker: React.FC<AttendanceDatePickerProps> = ({
   validDates,
   gatheringName
 }) => {
+  const { today, formatDateOnly } = useChurchTime();
   const [currentMonth, setCurrentMonth] = useState(() => {
-    return selectedDate ? new Date(selectedDate) : new Date();
+    return selectedDate ? new Date(`${selectedDate}T12:00:00`) : new Date(`${today()}T12:00:00`);
   });
 
   const validDateSet = useMemo(() => new Set(validDates), [validDates]);
@@ -27,7 +29,7 @@ const AttendanceDatePicker: React.FC<AttendanceDatePickerProps> = ({
   // Only show days that belong to the current month
   const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-  const selectedDateObj = selectedDate ? new Date(selectedDate) : null;
+  const selectedDateObj = selectedDate ? new Date(`${selectedDate}T12:00:00`) : null;
 
   const handleDateClick = (date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
@@ -41,17 +43,16 @@ const AttendanceDatePicker: React.FC<AttendanceDatePickerProps> = ({
   };
 
   const goToToday = () => {
-    const today = new Date();
-    const todayStr = format(today, 'yyyy-MM-dd');
+    const todayStr = today();
 
     if (validDateSet.has(todayStr)) {
-      setCurrentMonth(today);
+      setCurrentMonth(new Date(`${todayStr}T12:00:00`));
       onDateChange(todayStr);
     } else {
       // Find the most recent past gathering date (validDates is descending)
       const lastPast = validDates.find(date => date <= todayStr);
       if (lastPast) {
-        setCurrentMonth(new Date(lastPast));
+        setCurrentMonth(new Date(`${lastPast}T12:00:00`));
         onDateChange(lastPast);
       }
     }
@@ -178,7 +179,7 @@ const AttendanceDatePicker: React.FC<AttendanceDatePickerProps> = ({
         <div className="mt-3 pt-3 border-t border-gray-200 text-center">
           <p className="text-sm text-gray-600">Selected Date:</p>
           <p className="font-semibold text-gray-900">
-            {format(new Date(selectedDate), 'EEEE, MMMM d, yyyy')}
+            {formatDateOnly(selectedDate, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
           </p>
         </div>
       )}

@@ -258,7 +258,7 @@ async function sendWeeklyCaregiverDigests(churchId) {
   let sent = 0;
   try {
     const settings = await Database.query(
-      `SELECT church_name FROM church_settings WHERE church_id = ? LIMIT 1`,
+      `SELECT church_name, timezone FROM church_settings WHERE church_id = ? LIMIT 1`,
       [churchId]
     );
     if (settings.length === 0) return 0;
@@ -272,7 +272,8 @@ async function sendWeeklyCaregiverDigests(churchId) {
           digest.caregiver.email,
           digest.caregiver.first_name,
           churchName,
-          digest.entries
+          digest.entries,
+          { timeZone: settings[0].timezone || 'UTC' }
         );
         sent++;
       } catch (err) {

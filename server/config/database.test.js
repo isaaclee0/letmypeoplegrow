@@ -9,6 +9,50 @@ const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const { upsertConnection } = require('../services/peopleSync/connectionStore');
 const { INTEGRATION_CREDENTIALS_KEY_INVALID } = require('../services/peopleSync/credentialCipher');
 
+test('getChurchDb backfills a stale church timezone from saved coordinates once', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(`UPDATE church_settings
+      SET timezone = 'Australia/Sydney', location_lat = -42.8821, location_lng = 147.3272
+      WHERE church_id = ?`, [churchId]);
+    Database.closeChurchDb(churchId);
+
+    const db = Database.getChurchDb(churchId);
+    assert.equal(
+      db.prepare('SELECT timezone FROM church_settings WHERE church_id = ?').get(churchId).timezone,
+      'Australia/Hobart'
+    );
+    assert.equal(
+      db.prepare('SELECT status FROM migrations WHERE version = ?')
+        .get('v2.2.5_church_timezone_from_location').status,
+      'success'
+    );
+
+    db.prepare("UPDATE church_settings SET timezone = 'Pacific/Auckland' WHERE church_id = ?")
+      .run(churchId);
+    Database.closeChurchDb(churchId);
+    const reopened = Database.getChurchDb(churchId);
+    assert.equal(
+      reopened.prepare('SELECT timezone FROM church_settings WHERE church_id = ?').get(churchId).timezone,
+      'Pacific/Auckland'
+    );
+  });
+});
+
+test('timezone backfill leaves invalid legacy coordinates and timezone untouched', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(`UPDATE church_settings
+      SET timezone = 'Pacific/Auckland', location_lat = 999, location_lng = 999
+      WHERE church_id = ?`, [churchId]);
+    Database.closeChurchDb(churchId);
+
+    const db = Database.getChurchDb(churchId);
+    assert.equal(
+      db.prepare('SELECT timezone FROM church_settings WHERE church_id = ?').get(churchId).timezone,
+      'Pacific/Auckland'
+    );
+  });
+});
+
 test('resyncUserLookup: refreshes a stale registry row after mobile_number is updated directly', async () => {
   await withTestChurchDb(async (churchId) => {
     const insert = await Database.query(
