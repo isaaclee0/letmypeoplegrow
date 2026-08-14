@@ -35,7 +35,7 @@ import {
 } from '@heroicons/react/24/outline';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
-import MedicalNoteIndicator from '../components/icons/MedicalNoteIndicator';
+import PersonTileBadges from '../components/people/PersonTileBadges';
 import {
   filterAttendanceGroups,
   matchesAttendancePeopleFilters,
@@ -3380,26 +3380,12 @@ const AttendancePage: React.FC = () => {
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
                               )}
                             </span>
-                            {person.hasMedicalNotes && medicalNotesIndicator && (
-                              <MedicalNoteIndicator icon={medicalNotesIndicator.icon} color={medicalNotesIndicator.color} className="ml-2" />
-                            )}
-
-                            {/* Floating Badge at Top Right */}
-                            {badgeInfo && (
-                              <span
-                                className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
-                                  badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
-                                }`}
-                                style={badgeInfo.styles}
-                              >
-                                {badgeInfo.icon && (
-                                  <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 shrink-0" />
-                                )}
-                                {badgeInfo.text && (
-                                  <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
-                                )}
-                              </span>
-                            )}
+                            <PersonTileBadges
+                              displayName={displayName}
+                              badgeInfo={badgeInfo}
+                              hasMedicalNotes={person.hasMedicalNotes}
+                              medicalNotesIndicator={medicalNotesIndicator}
+                            />
                             {showBackgroundCheckStatus && !person.isChild && (
                               <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
                             )}
@@ -3530,12 +3516,7 @@ const AttendancePage: React.FC = () => {
                             )}
                           </div>
                           <div className="ml-3 flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
-                              {person.hasMedicalNotes && medicalNotesIndicator && (
-                                <MedicalNoteIndicator icon={medicalNotesIndicator.icon} color={medicalNotesIndicator.color} />
-                              )}
-                            </div>
+                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
                               <div className="flex items-center space-x-2 mt-1">
@@ -3566,22 +3547,12 @@ const AttendancePage: React.FC = () => {
                             )}
                           </div>
 
-                          {/* Floating Badge at Top Right */}
-                          {badgeInfo && (
-                            <span
-                              className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
-                                badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
-                              }`}
-                              style={badgeInfo.styles}
-                            >
-                              {badgeInfo.icon && (
-                                <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4" />
-                              )}
-                              {badgeInfo.text && (
-                                <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
-                              )}
-                            </span>
-                          )}
+                          <PersonTileBadges
+                            displayName={displayName}
+                            badgeInfo={badgeInfo}
+                            hasMedicalNotes={person.hasMedicalNotes}
+                            medicalNotesIndicator={medicalNotesIndicator}
+                          />
                           {showBackgroundCheckStatus && !person.isChild && (
                             <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
                           )}
@@ -3676,22 +3647,12 @@ const AttendancePage: React.FC = () => {
                                   <PlusIcon className={`h-4 w-4 shrink-0 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
                                 </div>
 
-                                {/* Floating Badge at Top Right */}
-                                {badgeInfo && (
-                                  <span
-                                    className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
-                                      badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
-                                    }`}
-                                    style={badgeInfo.styles}
-                                  >
-                                    {badgeInfo.icon && (
-                                      <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4" />
-                                    )}
-                                    {badgeInfo.text && (
-                                      <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
-                                    )}
-                                  </span>
-                                )}
+                                <PersonTileBadges
+                                  displayName={displayName}
+                                  badgeInfo={badgeInfo}
+                                  hasMedicalNotes={person.hasMedicalNotes}
+                                  medicalNotesIndicator={medicalNotesIndicator}
+                                />
                                 {showBackgroundCheckStatus && !person.isChild && (
                                   <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
                                 )}
