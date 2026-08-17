@@ -5,7 +5,18 @@ import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO 
 import { useAuth } from '../contexts/AuthContext';
 import { useChurchTime } from '../hooks/useChurchTime';
 import { addDateOnly, differenceInDateOnlyDays } from '../utils/churchTime';
-import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, individualsAPI, GatheringType, Individual, Visitor } from '../services/api';
+import {
+  gatheringsAPI,
+  attendanceAPI,
+  authAPI,
+  familiesAPI,
+  individualsAPI,
+  GatheringType,
+  Individual,
+  Visitor,
+  type AttendanceSessionState,
+  type AttendanceSessionStatus,
+} from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
 import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
@@ -64,6 +75,81 @@ interface VisitorFormState {
   familyName: string;
 }
 
+interface SessionStatusControlProps {
+  status: AttendanceSessionStatus;
+  canManage: boolean;
+  onChange: (status: AttendanceSessionStatus) => Promise<void>;
+}
+
+const SESSION_STATUS_STYLES: Record<AttendanceSessionStatus, string> = {
+  open: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-200',
+  held: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200',
+  cancelled: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-200',
+};
+
+export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
+  status,
+  canManage,
+  onChange,
+}) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState('');
+  const nextStatus: AttendanceSessionStatus = status === 'open'
+    ? 'held'
+    : status === 'held'
+      ? 'cancelled'
+      : 'open';
+  const actionLabel = status === 'open'
+    ? 'Confirm held'
+    : status === 'held'
+      ? 'Cancel gathering'
+      : 'Restore gathering';
+
+  const handleChange = async () => {
+    if (nextStatus === 'cancelled' && !window.confirm(
+      'Cancel this gathering? Cancellation means it did not happen and does not delete attendance data.',
+    )) return;
+
+    setIsSaving(true);
+    setError('');
+    try {
+      await onChange(nextStatus);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.error || 'Could not update the gathering status.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${SESSION_STATUS_STYLES[status]}`}>
+        {status === 'open' ? 'Open' : status === 'held' ? 'Held' : 'Cancelled'}
+      </span>
+      {canManage && (
+        <button
+          type="button"
+          onClick={handleChange}
+          disabled={isSaving}
+          className="text-xs font-medium text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-900 disabled:cursor-wait disabled:opacity-60 dark:text-gray-300 dark:hover:text-white"
+        >
+          {isSaving ? 'Saving…' : actionLabel}
+        </button>
+      )}
+      {canManage && (
+        <span className="basis-full text-xs leading-5 text-gray-500 dark:text-gray-400">
+          Cancellation means the gathering did not happen. Exclude from reports keeps a gathering but omits it from reporting.
+        </span>
+      )}
+      {error && (
+        <p role="alert" className="basis-full text-xs font-medium text-rose-700 dark:text-rose-300">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+};
+
 const AttendancePage: React.FC = () => {
   const { user, updateUser, refreshUserData } = useAuth();
   const { today, formatDateOnly } = useChurchTime();
@@ -88,6 +174,7 @@ const AttendancePage: React.FC = () => {
   const [headcountFullscreen, setHeadcountFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [excludedFromStats, setExcludedFromStats] = useState(false);
+  const [sessionState, setSessionState] = useState<AttendanceSessionState | null>(null);
   const [showBackgroundCheckStatus, setShowBackgroundCheckStatus] = useState(false);
   const [medicalNotesIndicator, setMedicalNotesIndicator] = useState<{ icon: BadgeIconType; color: string } | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
@@ -170,6 +257,7 @@ const AttendancePage: React.FC = () => {
       
       // Also clear visitor attendance for consistency
       setVisitorAttendance({});
+      setSessionState(null);
     }
     
     // Update refs for next comparison
@@ -1040,6 +1128,7 @@ const AttendancePage: React.FC = () => {
       if (!selectedGathering || !selectedDate) {
         setExcludedFromStats(false);
         setCurrentSessionId(null);
+        setSessionState(null);
         return;
       }
       
@@ -1065,6 +1154,7 @@ const AttendancePage: React.FC = () => {
           if (isRelevantCache && cacheAge < 7 * 24 * 60 * 60 * 1000) { // Cache valid for 7 days
             logger.log('⚡ Loading from cache immediately for instant UI');
             setAttendanceList(parsed.attendanceList || []);
+            setSessionState(parsed.sessionState || null);
             setMedicalNotesIndicator(parsed.medicalNotesIndicator || null);
             const cachedVisitors = (parsed.visitors || []).map((v: any) => ({
               ...v,
@@ -1129,6 +1219,7 @@ const AttendancePage: React.FC = () => {
         
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
+        setSessionState(response.sessionState || null);
         setMedicalNotesIndicator(response.medicalNotesIndicator || null);
 
         // Normalize visitors from any source (WebSocket or REST) to a consistent format
@@ -1196,6 +1287,7 @@ const AttendancePage: React.FC = () => {
           attendanceList: attendanceListForCache,
           visitors: response.visitors || [],
           medicalNotesIndicator: response.medicalNotesIndicator || null,
+          sessionState: response.sessionState || null,
           timestamp: Date.now(),
           hasPendingChanges: pendingChanges.some(change => 
             change.gatheringId === currentGatheringId && change.date === currentDate
@@ -1235,6 +1327,7 @@ const AttendancePage: React.FC = () => {
             if (parsed.gatheringId === currentGatheringId && parsed.date === currentDate) {
                 logger.log('📦 Loading attendance data from cache due to server error');
               setAttendanceList(parsed.attendanceList || []);
+              setSessionState(parsed.sessionState || null);
               setMedicalNotesIndicator(parsed.medicalNotesIndicator || null);
               setVisitors(parsed.visitors || []);
               
@@ -2629,6 +2722,22 @@ const AttendancePage: React.FC = () => {
     setError,
   });
 
+  const handleSessionStateChange = useCallback(async (status: AttendanceSessionStatus) => {
+    if (!selectedGathering || !selectedDate) return;
+    const response = await attendanceAPI.setSessionState({
+      gatheringTypeId: selectedGathering.id,
+      sessionDate: selectedDate,
+      status,
+    });
+    setSessionState(response.data.sessionState);
+    setCurrentSessionId(response.data.sessionState.id);
+    showSuccess(status === 'held'
+      ? 'Gathering confirmed as held'
+      : status === 'cancelled'
+        ? 'Gathering cancelled'
+        : 'Gathering restored');
+  }, [selectedGathering, selectedDate, showSuccess]);
+
   return (
     <div className="space-y-6 pb-32">
       <SampleDataBanner />
@@ -2829,6 +2938,13 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
               </div>
+              {selectedGathering && selectedDate && (
+                <SessionStatusControl
+                  status={sessionState?.status || 'open'}
+                  canManage={user?.role === 'admin' || user?.role === 'coordinator'}
+                  onChange={handleSessionStateChange}
+                />
+              )}
             </div>
 
             {/* Search/Filter Bar - Only show for standard gatherings with members */}

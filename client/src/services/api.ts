@@ -472,6 +472,18 @@ export const gatheringsAPI = {
     api.patch(`/gatherings/${gatheringId}/kiosk-settings`, data),
 };
 
+export type AttendanceSessionStatus = 'open' | 'held' | 'cancelled';
+
+export interface AttendanceSessionState {
+  id: number;
+  gatheringTypeId: number;
+  sessionDate: string;
+  status: AttendanceSessionStatus;
+  rosterProvenanceVersion: number;
+  cancelledAt: string | null;
+  cancelledBy: number | null;
+}
+
 // Attendance API
 export const attendanceAPI = {
   get: (gatheringTypeId: number, date: string) =>
@@ -544,6 +556,12 @@ export const attendanceAPI = {
 
   toggleExcludeFromStats: (sessionId: number) =>
     api.patch(`/attendance/sessions/${sessionId}/exclude`),
+
+  setSessionState: (data: {
+    gatheringTypeId: number;
+    sessionDate: string;
+    status: AttendanceSessionStatus;
+  }) => api.put<{ sessionState: AttendanceSessionState }>('/attendance/sessions/state', data),
 };
 
 // Kiosk API
