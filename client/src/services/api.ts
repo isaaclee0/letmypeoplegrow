@@ -241,6 +241,8 @@ export interface ChurchLocationResult {
   lng: number;
   timezone: string | null;
   displayName: string;
+  population?: number | null;
+  source?: 'open-meteo' | 'geoapify';
 }
 
 export interface GatheringType {

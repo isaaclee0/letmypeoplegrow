@@ -126,6 +126,40 @@ describe('SettingsPage location search', () => {
     expect(screen.getByText('Location search is temporarily unavailable.')).toBeInTheDocument();
   });
 
+  it('shows formatted population and Open-Meteo attribution when supplied', async () => {
+    vi.mocked(settingsAPI.searchLocation).mockResolvedValue({ data: { results: [{
+      name: 'Hobart', admin1: 'Tasmania', country: 'Australia', countryCode: 'AU',
+      lat: -42.87936, lng: 147.3294, timezone: 'Australia/Hobart', population: 252639,
+      source: 'open-meteo', displayName: 'Hobart, Tasmania, Australia',
+    }] } } as never);
+    render(<SettingsPage />);
+
+    fireEvent.change(screen.getByLabelText('Search for your city'), { target: { value: 'Hobart' } });
+    await act(async () => { vi.advanceTimersByTime(301); });
+
+    expect(screen.getByText('Population 252,639')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open-Meteo' })).toHaveAttribute('href', 'https://open-meteo.com/');
+  });
+
+  it('shows Geoapify and OpenStreetMap attribution without an empty population label', async () => {
+    vi.mocked(settingsAPI.searchLocation).mockResolvedValue({ data: { results: [{
+      name: 'Hobart', admin1: 'Tasmania', country: 'Australia', countryCode: 'AU',
+      lat: -42.8825088, lng: 147.3281233, timezone: null, population: null,
+      source: 'geoapify', displayName: 'Hobart, Tasmania, Australia',
+    }] } } as never);
+    render(<SettingsPage />);
+
+    fireEvent.change(screen.getByLabelText('Search for your city'), { target: { value: 'Hobart' } });
+    await act(async () => { vi.advanceTimersByTime(301); });
+
+    expect(screen.queryByText(/Population/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Powered by Geoapify' })).toHaveAttribute('href', 'https://www.geoapify.com/');
+    expect(screen.getByRole('link', { name: '© OpenStreetMap contributors' })).toHaveAttribute(
+      'href',
+      'https://www.openstreetmap.org/copyright',
+    );
+  });
+
   it('persists a selected location and updates the active church timezone', async () => {
     vi.mocked(settingsAPI.searchLocation).mockResolvedValue({
       data: { results: [{
