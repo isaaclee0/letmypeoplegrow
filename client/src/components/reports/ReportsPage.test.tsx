@@ -144,6 +144,8 @@ describe('ReportsPage selected period workspace', () => {
       },
     } as never);
     vi.mocked(familiesAPI.getCaregivers).mockResolvedValue([] as never);
+    vi.mocked(familiesAPI.assignCaregiver).mockResolvedValue(undefined as never);
+    vi.mocked(familiesAPI.removeCaregiver).mockResolvedValue(undefined as never);
   });
 
   it('keeps the current four-week report controls and follow-up workflow', async () => {
@@ -278,5 +280,94 @@ describe('ReportsPage selected period workspace', () => {
       expect(familiesAPI.removeCaregiver).toHaveBeenCalledWith(502, 902);
       expect(onChanged).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it.each([
+    { action: 'add' as const },
+    { action: 'remove' as const },
+  ])('does not run parent effects when an in-flight $action finishes after switching families', async ({ action }) => {
+    const familyACaregiver = {
+      id: 911,
+      caregiver_type: 'user' as const,
+      user_id: 73,
+      first_name: 'Family A',
+      last_name: 'Caregiver',
+      email: 'a@example.test',
+      mobile_number: null,
+    };
+    const familyBCaregiver = {
+      id: 912,
+      caregiver_type: 'user' as const,
+      user_id: 74,
+      first_name: 'Family B',
+      last_name: 'Caregiver',
+      email: 'b@example.test',
+      mobile_number: null,
+    };
+    vi.mocked(familiesAPI.getCaregivers).mockImplementation((familyId) => Promise.resolve(
+      familyId === 501
+        ? (action === 'remove' ? [familyACaregiver] : [])
+        : [familyBCaregiver],
+    ) as never);
+
+    let resolveAction!: () => void;
+    const actionRequest = new Promise<void>((resolve) => {
+      resolveAction = resolve;
+    });
+    if (action === 'add') {
+      vi.mocked(familiesAPI.assignCaregiver).mockReturnValue(actionRequest as never);
+    } else {
+      vi.mocked(familiesAPI.removeCaregiver).mockReturnValue(actionRequest as never);
+    }
+
+    let currentFamilyId = 501;
+    const refreshedFamilyIds: number[] = [];
+    let closed = false;
+    const onChanged = () => {
+      refreshedFamilyIds.push(currentFamilyId);
+    };
+    const onClose = () => {
+      closed = true;
+    };
+    const { rerender } = render(
+      <CaregiverPicker
+        familyId={currentFamilyId}
+        open
+        onClose={onClose}
+        onChanged={onChanged}
+      />,
+    );
+
+    if (action === 'add') {
+      const addButton = await screen.findByRole('button', { name: /Jamie Carer/ });
+      await waitFor(() => expect(addButton).toBeEnabled());
+      fireEvent.click(addButton);
+      await waitFor(() => expect(familiesAPI.assignCaregiver).toHaveBeenCalled());
+    } else {
+      expect(await screen.findByText('Family A Caregiver')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      await waitFor(() => expect(familiesAPI.removeCaregiver).toHaveBeenCalledWith(501, 911));
+    }
+
+    currentFamilyId = 502;
+    rerender(
+      <CaregiverPicker
+        familyId={currentFamilyId}
+        open
+        onClose={onClose}
+        onChanged={onChanged}
+      />,
+    );
+    expect(await screen.findByText('Family B Caregiver')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveAction();
+      await actionRequest;
+      await Promise.resolve();
+    });
+
+    expect(refreshedFamilyIds).toEqual([]);
+    expect(closed).toBe(false);
+    expect(screen.getByText('Family B Caregiver')).toBeInTheDocument();
   });
 });

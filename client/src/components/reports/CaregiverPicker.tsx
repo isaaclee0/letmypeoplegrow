@@ -125,13 +125,15 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
 
   const caregiverDataIsCurrent = caregiversFamilyId === familyId && !caregiversLoading;
   const displayedCaregivers = caregiverDataIsCurrent ? caregivers : [];
+  const isActionFamilyCurrent = (actionFamilyId: number) => (
+    currentFamilyIdRef.current === actionFamilyId && openRef.current
+  );
 
   const handleAddCaregiver = async (result: CaregiverSearchResult) => {
     const actionFamilyId = caregiversFamilyId;
     if (
       actionFamilyId === null
-      || actionFamilyId !== currentFamilyIdRef.current
-      || !openRef.current
+      || !isActionFamilyCurrent(actionFamilyId)
     ) return;
     try {
       await familiesAPI.assignCaregiver(actionFamilyId, {
@@ -139,11 +141,13 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
         user_id: result.type === 'user' ? result.id : undefined,
         contact_id: result.type === 'contact' ? result.id : undefined,
       });
-      if (currentFamilyIdRef.current === actionFamilyId && openRef.current) {
+      if (isActionFamilyCurrent(actionFamilyId)) {
         await loadFamilyCaregivers(actionFamilyId);
       }
-      await onChanged?.();
-      if (currentFamilyIdRef.current === actionFamilyId && openRef.current) {
+      if (isActionFamilyCurrent(actionFamilyId)) {
+        await onChanged?.();
+      }
+      if (isActionFamilyCurrent(actionFamilyId)) {
         onClose();
       }
     } catch (error) {
@@ -155,15 +159,16 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
     const actionFamilyId = caregiversFamilyId;
     if (
       actionFamilyId === null
-      || actionFamilyId !== currentFamilyIdRef.current
-      || !openRef.current
+      || !isActionFamilyCurrent(actionFamilyId)
     ) return;
     try {
       await familiesAPI.removeCaregiver(actionFamilyId, caregiverId);
-      if (currentFamilyIdRef.current === actionFamilyId && openRef.current) {
+      if (isActionFamilyCurrent(actionFamilyId)) {
         await loadFamilyCaregivers(actionFamilyId);
       }
-      await onChanged?.();
+      if (isActionFamilyCurrent(actionFamilyId)) {
+        await onChanged?.();
+      }
     } catch (error) {
       console.error('Failed to remove caregiver', error);
     }
