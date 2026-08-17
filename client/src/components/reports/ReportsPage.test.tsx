@@ -50,6 +50,8 @@ vi.mock('../../utils/logger', () => ({
 
 vi.mock('react-chartjs-2', () => ({
   Bar: () => <div aria-label="Report chart" />,
+  Doughnut: () => <div aria-label="Primary tier distribution chart" />,
+  Line: () => <div aria-label="Attendance trend chart" />,
 }));
 
 vi.mock('./AttendanceHistoryPopover', () => ({
@@ -84,6 +86,9 @@ vi.mock('../../services/api', () => ({
     getDismissals: vi.fn().mockResolvedValue({ data: { dismissals: [] } }),
     dismissAbsence: vi.fn(),
     exportData: vi.fn(),
+    getEngagementOverview: vi.fn().mockRejectedValue(new Error('offline')),
+    getEngagementPeople: vi.fn(),
+    getEngagementSessions: vi.fn(),
   },
   settingsAPI: {},
   usersAPI: {
@@ -200,9 +205,8 @@ describe('ReportsPage selected period workspace', () => {
     expect(longTermTab).toHaveAttribute('aria-selected', 'true');
     expect(selectedPeriodPanel).toHaveAttribute('hidden');
     expect(longTermPanel).not.toHaveAttribute('hidden');
-    expect(screen.getByRole('status', { name: 'Long-term health' })).toHaveTextContent(
-      'Coming in the next implementation slice.',
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load long-term health');
+    expect(screen.queryByText('Coming in the next implementation slice.')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Gathering Types')).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue('2026-07-20')).not.toBeInTheDocument();
 

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ChartBarIcon } from '@heroicons/react/24/outline';
 import ReportTabs, { type ReportTabKey } from '../components/reports/ReportTabs';
 import SelectedPeriodReport from '../components/reports/SelectedPeriodReport';
+import LongTermHealthReport from '../components/reports/LongTermHealthReport';
 import { useAuth } from '../contexts/AuthContext';
 
 const ComingSoonWorkspace: React.FC<{ name: string }> = ({ name }) => (
@@ -64,7 +65,9 @@ const ReportsPage: React.FC = () => {
         tabIndex={0}
         hidden={activeTab !== 'long-term-health'}
       >
-        {activeTab === 'long-term-health' && <ComingSoonWorkspace name="Long-term health" />}
+        {activeTab === 'long-term-health' && user?.church_id && (
+          <LongTermHealthReport churchId={user.church_id} canConfigure={user.role === 'admin'} />
+        )}
       </div>
       <div
         id="report-panel-pastoral-care"
