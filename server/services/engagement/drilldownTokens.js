@@ -12,6 +12,8 @@ const PURPOSE = 'let-my-people-grow/engagement-drilldown-token';
 const AAD = Buffer.from(`${PURPOSE}:${VERSION}`, 'utf8');
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
+const PLAINTEXT_BYTES = 1024;
+const LENGTH_BYTES = 4;
 
 class DrilldownTokenError extends Error {
   constructor() {
@@ -63,6 +65,28 @@ function validatePayload(payload) {
   }
 }
 
+function encodePayload(payload) {
+  const serialized = Buffer.from(JSON.stringify(payload), 'utf8');
+  if (serialized.length > PLAINTEXT_BYTES - LENGTH_BYTES) {
+    throw new TypeError('The drilldown token payload is too large.');
+  }
+  const framed = Buffer.alloc(PLAINTEXT_BYTES);
+  framed.writeUInt32BE(serialized.length, 0);
+  serialized.copy(framed, LENGTH_BYTES);
+  return framed;
+}
+
+function decodePayload(plaintext) {
+  if (plaintext.length !== PLAINTEXT_BYTES) throw new Error('invalid token frame');
+  const serializedLength = plaintext.readUInt32BE(0);
+  if (serializedLength === 0 || serializedLength > PLAINTEXT_BYTES - LENGTH_BYTES) {
+    throw new Error('invalid token frame');
+  }
+  return JSON.parse(
+    plaintext.subarray(LENGTH_BYTES, LENGTH_BYTES + serializedLength).toString('utf8'),
+  );
+}
+
 function createDrilldownToken(payload) {
   validatePayload(payload);
   const iv = randomBytes(IV_BYTES);
@@ -71,7 +95,7 @@ function createDrilldownToken(payload) {
   });
   cipher.setAAD(AAD);
   const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(payload), 'utf8'),
+    cipher.update(encodePayload(payload)),
     cipher.final(),
   ]);
   const tag = cipher.getAuthTag();
@@ -104,7 +128,7 @@ function readDrilldownToken(token, { churchId, kind, now = new Date() } = {}) {
     decipher.setAAD(AAD);
     decipher.setAuthTag(tag);
     const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    const payload = JSON.parse(plaintext.toString('utf8'));
+    const payload = decodePayload(plaintext);
     validatePayload(payload);
 
     const instant = now instanceof Date ? now : new Date(now);

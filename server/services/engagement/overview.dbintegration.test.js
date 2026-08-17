@@ -273,7 +273,7 @@ async function seedOverviewFixture(churchId) {
     '2026-08-08',
     { headcountMode: 'averaged', rosterSnapshotted: 0, rosterProvenanceVersion: 0 },
   );
-  for (const count of [20, 40]) {
+  for (const count of [20, 21]) {
     const counter = await Database.query(
       `INSERT INTO users (church_id, email, role, first_name, last_name)
        VALUES (?, ?, 'coordinator', 'Count', 'User')`,
@@ -310,8 +310,8 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
     assert.equal(standard.heldSessions, 3);
     assert.equal(standard.uniquePeople, 4);
     assert.equal(headcount.heldSessions, 1);
-    assert.equal(headcount.totalAttendance, 30);
-    assert.equal(headcount.averageAttendance, 30);
+    assert.equal(headcount.totalAttendance, 21);
+    assert.equal(headcount.averageAttendance, 21);
     assert.equal(headcount.uniquePeople, null);
     assert.equal(headcount.peopleToken, null);
 
@@ -361,6 +361,6 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
       limit: 1,
     });
     assert.deepEqual(sessionPage.rows.map((row) => row.sessionId), [fixture.headcountSession]);
-    assert.equal(sessionPage.rows[0].attendance, 30);
+    assert.equal(sessionPage.rows[0].attendance, 21);
   });
 });

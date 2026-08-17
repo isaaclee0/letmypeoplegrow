@@ -262,7 +262,7 @@ function sessionAttendanceFacts(source) {
     } else if (session.headcountMode === 'averaged') {
       attendance = values.length === 0
         ? 0
-        : values.reduce((sum, value) => sum + value, 0) / values.length;
+        : Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
     } else {
       attendance = values.length === 0 ? 0 : Math.max(...values);
     }

@@ -31,6 +31,45 @@ test('round trips an opaque authenticated drilldown selector', () => {
   }), payload);
 });
 
+test('uses one visible length for every selector, church ID, and cursor payload', () => {
+  const variants = [
+    ...['core', 'casual', 'irregular'].map((status) => ({
+      ...payload,
+      selector: { type: 'primary_status', status },
+    })),
+    { ...payload, churchId: 'c' },
+    { ...payload, churchId: `church_${'long'.repeat(40)}` },
+    {
+      ...payload,
+      kind: 'people_cursor',
+      selector: {
+        sourceSelector: { type: 'primary_status', status: 'core' },
+        after: { sortLast: 'a', sortFirst: 'b', individualId: 1 },
+      },
+    },
+    {
+      ...payload,
+      kind: 'sessions_cursor',
+      selector: {
+        sourceSelector: {
+          type: 'trend', bucketIndex: 12, role: 'unclassified', attendanceType: 'headcount',
+        },
+        after: { sessionDate: '2026-08-16', sessionId: 987654321 },
+      },
+    },
+  ];
+  const tokens = variants.map(createDrilldownToken);
+
+  assert.equal(new Set(tokens.map((token) => token.length)).size, 1);
+  for (let index = 0; index < tokens.length; index += 1) {
+    assert.deepEqual(readDrilldownToken(tokens[index], {
+      churchId: variants[index].churchId,
+      kind: variants[index].kind,
+      now: '2026-08-17T00:00:00.000Z',
+    }), variants[index]);
+  }
+});
+
 test('rejects tampering without disclosing which encrypted field failed', () => {
   const token = createDrilldownToken(payload);
   const index = Math.floor(token.length / 2);
