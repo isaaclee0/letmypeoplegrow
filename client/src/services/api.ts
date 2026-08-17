@@ -43,6 +43,34 @@ export interface PlanningCenterMedicalNotesSettingsDto {
 }
 export interface MedicalBadgeAppearance { icon: BadgeIconType; color: string; count: number }
 
+export type EngagementGatheringRole = 'primary' | 'community' | 'other' | null;
+export interface EngagementTierStyle {
+  label: string;
+  colour: string;
+}
+export interface EngagementGatheringRoleAssignment {
+  gatheringTypeId: number;
+  role: EngagementGatheringRole;
+}
+export interface EngagementSettingsInput {
+  coreMinimum: number;
+  casualMinimum: number;
+  tiers: {
+    core: EngagementTierStyle;
+    casual: EngagementTierStyle;
+    irregular: EngagementTierStyle;
+  };
+  gatheringRoles: EngagementGatheringRoleAssignment[];
+}
+export interface EngagementSettingsDto extends EngagementSettingsInput {
+  calculationRulesVersion: number;
+  assignmentPreview: {
+    primaryAssigned: number;
+    communityAssigned: number;
+    primaryNotAssigned: number;
+  };
+}
+
 // Shared by Planning Center and Elvanto reviewed applies. Keeping this
 // provider-neutral prevents either endpoint from adapting identity IDs or
 // quietly falling back to a provider-specific selection shape.
@@ -907,6 +935,10 @@ export const notificationRulesAPI = {
 export const settingsAPI = {
   getAll: () => api.get('/settings'),
   getBadgeDefaults: () => api.get('/settings/badge-defaults'),
+  getEngagementSettings: () =>
+    api.get<{ settings: EngagementSettingsDto }>('/settings/engagement'),
+  updateEngagementSettings: (data: EngagementSettingsInput) =>
+    api.put<{ settings: EngagementSettingsDto }>('/settings/engagement', data),
   // DISABLED: External data access feature is currently disabled
   // getDataAccess: () => api.get('/settings/data-access'),
   // updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),

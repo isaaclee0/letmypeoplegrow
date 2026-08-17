@@ -8,9 +8,37 @@ const backgroundCheckSync = require('../services/planningCenter/backgroundCheckS
 const medicalNotesPolicy = require('../services/planningCenter/medicalNotesPolicy');
 const medicalNotesSync = require('../services/planningCenter/medicalNotesSync');
 const pcoCredentialMigration = require('../services/peopleSync/pcoCredentialMigration');
+const engagementSettings = require('../services/engagement/settings');
 
 const router = express.Router();
 router.use(verifyToken);
+
+router.get('/engagement', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const settings = await engagementSettings.getEngagementSettings(req.user.church_id);
+    res.json({ settings });
+  } catch (error) {
+    console.error('Get engagement settings error:', error);
+    res.status(500).json({ error: 'Failed to retrieve engagement settings.' });
+  }
+});
+
+router.put('/engagement', requireRole(['admin']), async (req, res) => {
+  try {
+    const settings = await engagementSettings.updateEngagementSettings(
+      req.user.church_id,
+      req.user.id,
+      req.body,
+    );
+    res.json({ settings });
+  } catch (error) {
+    if (error instanceof engagementSettings.EngagementSettingsValidationError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    console.error('Update engagement settings error:', error);
+    res.status(500).json({ error: 'Failed to update engagement settings.' });
+  }
+});
 
 // Get church settings
 router.get('/', requireRole(['admin']), async (req, res) => {
