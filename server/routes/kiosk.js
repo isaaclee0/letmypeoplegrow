@@ -3,6 +3,7 @@ const Database = require('../config/database');
 const { verifyToken, requireGatheringAccess, auditLog } = require('../middleware/auth');
 const { columnExists } = require('../utils/databaseSchema');
 const logger = require('../config/logger');
+const { finalizeStandardSessionWithConnection } = require('../services/attendanceSessionState');
 
 const router = express.Router();
 
@@ -105,6 +106,12 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
           throw new Error('Failed to create or retrieve attendance session');
         }
         const sessionId = Number(sessionsLookup[0].id);
+
+        await finalizeStandardSessionWithConnection(conn, {
+          churchId,
+          sessionId,
+          gatheringTypeId: Number(gatheringTypeId),
+        });
 
         // Mark each individual as present
         for (const individualId of individualIds) {
