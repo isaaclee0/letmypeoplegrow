@@ -79,12 +79,26 @@ function normalizeGeoapify(body) {
   });
 }
 
-async function requestJson(fetchImpl, url) {
-  const response = await fetchImpl(url, {
-    headers: { 'User-Agent': 'LetMyPeopleGrow/1.0' },
-  });
-  if (!response.ok) throw new Error(`Location provider returned HTTP ${response.status}`);
-  return response.json();
+async function requestJson(fetchImpl, url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error('Location provider request timed out'));
+  }, timeoutMs);
+
+  try {
+    const response = await fetchImpl(url, {
+      headers: { 'User-Agent': 'LetMyPeopleGrow/1.0' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const error = new Error(`Location provider returned HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function openMeteoUrl(query) {
@@ -106,39 +120,102 @@ function geoapifyUrl(query, apiKey) {
   return url;
 }
 
+function normalizedSearchQuery(query) {
+  return typeof query === 'string' ? query.trim().replace(/\s+/g, ' ') : '';
+}
+
+function cacheKey(query) {
+  return query.toLocaleLowerCase('en');
+}
+
+function failureMetadata(error) {
+  const code = error?.code || error?.cause?.code || null;
+  return {
+    category: error?.status ? 'http' : error?.name === 'AbortError' || /timed out/i.test(error?.message) ? 'timeout' : 'network',
+    status: error?.status || null,
+    code,
+  };
+}
+
 function createLocationSearchService({
   fetchImpl = globalThis.fetch,
   getGeoapifyApiKey = () => process.env.GEOAPIFY_API_KEY,
   logger = defaultLogger,
+  now = Date.now,
+  primaryTimeoutMs = 3_000,
+  fallbackTimeoutMs = 3_000,
+  cooldownMs = 300_000,
+  cacheTtlMs = 600_000,
+  cacheMaxEntries = 250,
 } = {}) {
-  async function search(query) {
-    const normalizedQuery = typeof query === 'string' ? query.trim() : '';
-    if (!normalizedQuery) return [];
+  const cache = new Map();
+  const inFlight = new Map();
+  let primaryUnavailableUntil = 0;
 
-    try {
-      const body = await requestJson(fetchImpl, openMeteoUrl(normalizedQuery));
-      return normalizeOpenMeteo(body);
-    } catch (error) {
-      logger.warn('Location search provider failed', {
-        provider: 'open-meteo',
-        error: error.message,
-        fallbackAttempted: true,
-      });
+  function logFailure(provider, error, startedAt, fallbackAttempted) {
+    logger.warn('Location search provider failed', {
+      provider,
+      elapsedMs: Math.max(0, now() - startedAt),
+      ...failureMetadata(error),
+      fallbackAttempted,
+    });
+  }
+
+  async function performSearch(query) {
+    if (now() >= primaryUnavailableUntil) {
+      const startedAt = now();
+      try {
+        const body = await requestJson(fetchImpl, openMeteoUrl(query), primaryTimeoutMs);
+        const results = normalizeOpenMeteo(body);
+        primaryUnavailableUntil = 0;
+        return results;
+      } catch (error) {
+        primaryUnavailableUntil = now() + cooldownMs;
+        logFailure('open-meteo', error, startedAt, true);
+      }
     }
 
     const apiKey = getGeoapifyApiKey()?.trim();
     if (!apiKey) throw new Error('Geoapify fallback is not configured');
 
+    const startedAt = now();
     try {
-      const body = await requestJson(fetchImpl, geoapifyUrl(normalizedQuery, apiKey));
+      const body = await requestJson(fetchImpl, geoapifyUrl(query, apiKey), fallbackTimeoutMs);
       return normalizeGeoapify(body);
     } catch (error) {
-      logger.warn('Location search provider failed', {
-        provider: 'geoapify',
-        error: error.message,
-        fallbackAttempted: false,
-      });
+      logFailure('geoapify', error, startedAt, false);
       throw new Error('Location search providers are unavailable');
+    }
+  }
+
+  async function search(query) {
+    const normalizedQuery = normalizedSearchQuery(query);
+    if (!normalizedQuery) return [];
+
+    const key = cacheKey(normalizedQuery);
+    const cached = cache.get(key);
+    if (cached) {
+      if (cached.expiresAt > now()) return cached.results;
+      cache.delete(key);
+    }
+
+    if (inFlight.has(key)) return inFlight.get(key);
+
+    const operation = performSearch(normalizedQuery).then((results) => {
+      if (cacheTtlMs > 0 && cacheMaxEntries > 0) {
+        if (!cache.has(key) && cache.size >= cacheMaxEntries) {
+          cache.delete(cache.keys().next().value);
+        }
+        cache.set(key, { results, expiresAt: now() + cacheTtlMs });
+      }
+      return results;
+    });
+    inFlight.set(key, operation);
+
+    try {
+      return await operation;
+    } finally {
+      if (inFlight.get(key) === operation) inFlight.delete(key);
     }
   }
 
