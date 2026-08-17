@@ -294,3 +294,30 @@ test('rules version changes for thresholds or roles, but not labels or colours',
     assert.equal((await updateEngagementSettings(churchId, 1, roleChanged)).calculationRulesVersion, 3);
   });
 });
+
+test('updates use the explicit church when ambient context is mismatched or absent', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gatheringId = await seedGathering(churchId, 'Sunday');
+    const primaryInput = completeInput([
+      { gatheringTypeId: gatheringId, role: 'primary' },
+    ]);
+
+    const mismatchedResult = await Database.setChurchContext('wrong_church_context', () =>
+      updateEngagementSettings(churchId, 1, primaryInput));
+    assert.equal(mismatchedResult.gatheringRoles[0].role, 'primary');
+
+    const noContextInput = structuredClone(primaryInput);
+    noContextInput.gatheringRoles[0].role = 'community';
+    const noContextResult = await Database.setChurchContext(undefined, () =>
+      updateEngagementSettings(churchId, 1, noContextInput));
+    assert.equal(noContextResult.gatheringRoles[0].role, 'community');
+
+    const [stored] = await Database.queryForChurch(
+      churchId,
+      `SELECT engagement_role AS role FROM gathering_types
+       WHERE id = ? AND church_id = ?`,
+      [gatheringId, churchId],
+    );
+    assert.equal(stored.role, 'community');
+  });
+});

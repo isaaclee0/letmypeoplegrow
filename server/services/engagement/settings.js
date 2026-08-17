@@ -179,7 +179,7 @@ async function updateEngagementSettings(churchId, actorId, input) {
   void actorId;
   const normalized = validateInput(input);
 
-  await Database.transaction(async (connection) => {
+  await Database.transactionForChurch(churchId, async (connection) => {
     const query = (sql, params) => connection.query(sql, params);
     const [currentRow, currentRoles] = await Promise.all([
       loadSettingsRow(query, churchId),
