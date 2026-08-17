@@ -67,12 +67,11 @@ async function ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, sess
     sessionDate,
     actorId: req.user.id,
   });
-  await finalizeStandardSessionWithConnection(conn, {
+  return finalizeStandardSessionWithConnection(conn, {
     churchId: req.user.church_id,
     sessionId: session.id,
     gatheringTypeId: Number(gatheringTypeId),
   });
-  return session.id;
 }
 
 // Debug middleware to log all requests
@@ -2090,11 +2089,13 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 
     // Track skipped records for conflict detection
     const skippedRecords = [];
+    let sessionState;
 
     await Database.transaction(async (conn) => {
       const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
       const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
-      const sessionId = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      sessionState = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const sessionId = sessionState.id;
 
       logger.debugLog('Session ID', sessionId);
 
@@ -2269,6 +2270,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 
     res.json({
       message: 'Attendance recorded successfully',
+      sessionState,
       skippedRecords: skippedRecords.length > 0 ? skippedRecords : undefined,
       hasConflicts: skippedRecords.length > 0
     });
@@ -2379,7 +2381,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
     }
 
     await Database.transaction(async (conn) => {
-      const sessionId = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Prepare people to create
       let peopleToCreate = [];
@@ -2636,7 +2638,7 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
     }
 
     await Database.transaction(async (conn) => {
-      const sessionId = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Treat visitorId as individual_id; update or replace the individuals and gathering list
       // Remove the old individual's attendance and gathering list assignment for this session
@@ -2881,7 +2883,7 @@ router.delete('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAcc
       if (sessions.length === 0) {
         return res.status(404).json({ error: 'Attendance session not found' });
       }
-      const sessionId = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // New system: treat visitorId as individual_id and remove from this session and gathering list
       const individual = await conn.query(
@@ -2962,7 +2964,7 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         return res.status(404).json({ error: 'Visitor family not found' });
       }
 
-      const sessionId = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Get all individuals in the visitor family (use numeric id for FK consistency)
       const individuals = await conn.query(`
@@ -3106,7 +3108,7 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
 
       const individual = individualCheck[0];
 
-      const sessionId = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Add individual to gathering list if not already there
       const existingGatheringList = await conn.query(

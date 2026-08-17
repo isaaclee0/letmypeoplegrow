@@ -94,18 +94,13 @@ export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
 }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
-  const nextStatus: AttendanceSessionStatus = status === 'open'
-    ? 'held'
+  const availableActions: Array<{ status: AttendanceSessionStatus; label: string }> = status === 'open'
+    ? [{ status: 'held', label: 'Confirm held' }, { status: 'cancelled', label: 'Cancel gathering' }]
     : status === 'held'
-      ? 'cancelled'
-      : 'open';
-  const actionLabel = status === 'open'
-    ? 'Confirm held'
-    : status === 'held'
-      ? 'Cancel gathering'
-      : 'Restore gathering';
+      ? [{ status: 'cancelled', label: 'Cancel gathering' }]
+      : [{ status: 'open', label: 'Restore gathering' }];
 
-  const handleChange = async () => {
+  const handleChange = async (nextStatus: AttendanceSessionStatus) => {
     if (nextStatus === 'cancelled' && !window.confirm(
       'Cancel this gathering? Cancellation means it did not happen and does not delete attendance data.',
     )) return;
@@ -126,16 +121,17 @@ export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
       <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${SESSION_STATUS_STYLES[status]}`}>
         {status === 'open' ? 'Open' : status === 'held' ? 'Held' : 'Cancelled'}
       </span>
-      {canManage && (
+      {canManage && availableActions.map((action) => (
         <button
+          key={action.status}
           type="button"
-          onClick={handleChange}
+          onClick={() => handleChange(action.status)}
           disabled={isSaving}
           className="text-xs font-medium text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-900 disabled:cursor-wait disabled:opacity-60 dark:text-gray-300 dark:hover:text-white"
         >
-          {isSaving ? 'Saving…' : actionLabel}
+          {isSaving ? 'Saving…' : action.label}
         </button>
-      )}
+      ))}
       {canManage && (
         <span className="basis-full text-xs leading-5 text-gray-500 dark:text-gray-400">
           Cancellation means the gathering did not happen. Exclude from reports keeps a gathering but omits it from reporting.
@@ -149,6 +145,18 @@ export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
     </div>
   );
 };
+
+export async function recordAttendanceViaRest(
+  record: typeof attendanceAPI.record,
+  gatheringTypeId: number,
+  date: string,
+  data: Parameters<typeof attendanceAPI.record>[2],
+  onSessionState: (state: AttendanceSessionState) => void,
+) {
+  const response = await record(gatheringTypeId, date, data);
+  if (response.data.sessionState) onSessionState(response.data.sessionState);
+  return response.data;
+}
 
 const AttendancePage: React.FC = () => {
   const { user, updateUser, refreshUserData } = useAuth();
@@ -1439,6 +1447,11 @@ const AttendancePage: React.FC = () => {
   // Simple queue to serialize attendance writes per individual and reduce API thrash
   const pendingWritesRef = useRef<Map<number, Promise<void>>>(new Map());
 
+  const applyReturnedSessionState = useCallback((state: AttendanceSessionState) => {
+    setSessionState(state);
+    setCurrentSessionId(state.id);
+  }, []);
+
   // Helper function to send attendance updates based on configuration
   const sendAttendanceChange = async (
     gatheringId: number,
@@ -1452,26 +1465,22 @@ const AttendancePage: React.FC = () => {
       clientTimestamp: attendanceTimestamps[record.individualId] || (Date.now() + serverTimeOffset)
     }));
 
-    let response;
-
     if (!webSocketMode.enabled) {
       // WebSocket disabled - use API directly
-      response = await attendanceAPI.record(gatheringId, date, {
+      return recordAttendanceViaRest(attendanceAPI.record, gatheringId, date, {
         attendanceRecords: recordsWithTimestamps,
         visitors: []
-      });
-      return response.data;
+      }, applyReturnedSessionState);
     }
 
     // Check if WebSocket is available and connected
     const shouldUseWebSocket = isWebSocketConnected && connectionStatus === 'connected';
 
     if (!shouldUseWebSocket && webSocketMode.fallbackAllowed) {
-      response = await attendanceAPI.record(gatheringId, date, {
+      return recordAttendanceViaRest(attendanceAPI.record, gatheringId, date, {
         attendanceRecords: recordsWithTimestamps,
         visitors: []
-      });
-      return response.data;
+      }, applyReturnedSessionState);
     }
 
     // WebSocket enabled and connected - try WebSocket first
@@ -1481,12 +1490,12 @@ const AttendancePage: React.FC = () => {
     } catch (wsError) {
       if (webSocketMode.fallbackAllowed) {
         logger.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);
-        response = await attendanceAPI.record(gatheringId, date, {
+        const data = await recordAttendanceViaRest(attendanceAPI.record, gatheringId, date, {
           attendanceRecords: recordsWithTimestamps,
           visitors: []
-        });
+        }, applyReturnedSessionState);
         logger.log(`✅ Successfully saved attendance via API fallback`);
-        return response.data;
+        return data;
       } else {
         // Pure WebSocket mode - no fallback allowed
         console.error(`❌ WebSocket failed in pure mode:`, wsError);
@@ -3344,6 +3353,7 @@ const AttendancePage: React.FC = () => {
                   date={selectedDate}
                   gatheringName={selectedGathering.name}
                   onHeadcountChange={setHeadcountValue}
+                  onSessionStateChange={applyReturnedSessionState}
                   isFullscreen={headcountFullscreen}
                   onExitFullscreen={() => setHeadcountFullscreen(false)}
                   socket={socket}

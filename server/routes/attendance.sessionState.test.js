@@ -224,6 +224,7 @@ test('REST standard and headcount writes finalize the session in the write trans
         { attendanceRecords: [], visitors: [] },
       );
       assert.equal(standardWrite.response.status, 200);
+      assert.equal(standardWrite.body.sessionState.status, 'held');
       const standardSession = (await Database.query(
         `SELECT id, session_status, roster_provenance_version
          FROM attendance_sessions
