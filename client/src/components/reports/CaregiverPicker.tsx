@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { contactsAPI, familiesAPI, usersAPI } from '../../services/api';
 
 interface FamilyCaregiver {
@@ -29,21 +29,43 @@ interface CaregiverPickerProps {
 
 const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClose, onChanged }) => {
   const [caregivers, setCaregivers] = useState<FamilyCaregiver[]>([]);
+  const [caregiversFamilyId, setCaregiversFamilyId] = useState<number | null>(null);
   const [caregiverSearch, setCaregiverSearch] = useState('');
   const [allCaregiverOptions, setAllCaregiverOptions] = useState<CaregiverSearchResult[]>([]);
   const [caregiversLoading, setCaregiversLoading] = useState(false);
   const [caregiverOptionsLoading, setCaregiverOptionsLoading] = useState(false);
+  const caregiverRequestIdRef = useRef(0);
+  const currentFamilyIdRef = useRef(familyId);
+  const openRef = useRef(open);
+  currentFamilyIdRef.current = familyId;
+  openRef.current = open;
 
-  const loadFamilyCaregivers = useCallback(async () => {
+  const loadFamilyCaregivers = useCallback(async (requestedFamilyId: number) => {
+    const requestId = ++caregiverRequestIdRef.current;
+    const isCurrentRequest = () => (
+      requestId === caregiverRequestIdRef.current
+      && openRef.current
+      && currentFamilyIdRef.current === requestedFamilyId
+    );
     setCaregiversLoading(true);
     try {
-      setCaregivers(await familiesAPI.getCaregivers(familyId));
+      const nextCaregivers = await familiesAPI.getCaregivers(requestedFamilyId);
+      if (isCurrentRequest()) {
+        setCaregivers(nextCaregivers);
+        setCaregiversFamilyId(requestedFamilyId);
+      }
     } catch (error) {
-      console.error('Failed to load family caregivers', error);
+      if (isCurrentRequest()) {
+        setCaregivers([]);
+        setCaregiversFamilyId(requestedFamilyId);
+        console.error('Failed to load family caregivers', error);
+      }
     } finally {
-      setCaregiversLoading(false);
+      if (requestId === caregiverRequestIdRef.current) {
+        setCaregiversLoading(false);
+      }
     }
-  }, [familyId]);
+  }, []);
 
   const loadCaregiverOptions = useCallback(async () => {
     if (allCaregiverOptions.length > 0) return;
@@ -78,10 +100,16 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
   }, [allCaregiverOptions.length]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      caregiverRequestIdRef.current += 1;
+      return;
+    }
     setCaregiverSearch('');
-    loadFamilyCaregivers();
-  }, [loadFamilyCaregivers, open]);
+    loadFamilyCaregivers(familyId);
+    return () => {
+      caregiverRequestIdRef.current += 1;
+    };
+  }, [familyId, loadFamilyCaregivers, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -95,25 +123,46 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
     ));
   }, [allCaregiverOptions, caregiverSearch]);
 
+  const caregiverDataIsCurrent = caregiversFamilyId === familyId && !caregiversLoading;
+  const displayedCaregivers = caregiverDataIsCurrent ? caregivers : [];
+
   const handleAddCaregiver = async (result: CaregiverSearchResult) => {
+    const actionFamilyId = caregiversFamilyId;
+    if (
+      actionFamilyId === null
+      || actionFamilyId !== currentFamilyIdRef.current
+      || !openRef.current
+    ) return;
     try {
-      await familiesAPI.assignCaregiver(familyId, {
+      await familiesAPI.assignCaregiver(actionFamilyId, {
         caregiver_type: result.type,
         user_id: result.type === 'user' ? result.id : undefined,
         contact_id: result.type === 'contact' ? result.id : undefined,
       });
-      await loadFamilyCaregivers();
+      if (currentFamilyIdRef.current === actionFamilyId && openRef.current) {
+        await loadFamilyCaregivers(actionFamilyId);
+      }
       await onChanged?.();
-      onClose();
+      if (currentFamilyIdRef.current === actionFamilyId && openRef.current) {
+        onClose();
+      }
     } catch (error) {
       console.error('Failed to add caregiver', error);
     }
   };
 
   const handleRemoveCaregiver = async (caregiverId: number) => {
+    const actionFamilyId = caregiversFamilyId;
+    if (
+      actionFamilyId === null
+      || actionFamilyId !== currentFamilyIdRef.current
+      || !openRef.current
+    ) return;
     try {
-      await familiesAPI.removeCaregiver(familyId, caregiverId);
-      await loadFamilyCaregivers();
+      await familiesAPI.removeCaregiver(actionFamilyId, caregiverId);
+      if (currentFamilyIdRef.current === actionFamilyId && openRef.current) {
+        await loadFamilyCaregivers(actionFamilyId);
+      }
       await onChanged?.();
     } catch (error) {
       console.error('Failed to remove caregiver', error);
@@ -148,13 +197,13 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
           </button>
         </div>
 
-        {caregiversLoading ? (
+        {!caregiverDataIsCurrent ? (
           <p className="mb-3 text-sm text-gray-400">Loading...</p>
-        ) : caregivers.length === 0 ? (
+        ) : displayedCaregivers.length === 0 ? (
           <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">No caregivers assigned.</p>
         ) : (
           <ul className="mb-3 space-y-2">
-            {caregivers.map((caregiver) => (
+            {displayedCaregivers.map((caregiver) => (
               <li key={caregiver.id} className="flex items-center justify-between text-sm">
                 <span className="text-gray-800 dark:text-gray-200">
                   {caregiver.first_name} {caregiver.last_name}
@@ -193,7 +242,7 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
           ) : (
             <ul className="max-h-48 overflow-y-auto rounded-md border border-gray-200 divide-y divide-gray-100 dark:border-gray-600 dark:divide-gray-700">
               {filteredOptions.map((result) => {
-                const alreadyAssigned = caregivers.some((caregiver) => (
+                const alreadyAssigned = displayedCaregivers.some((caregiver) => (
                   (result.type === 'user' && caregiver.user_id === result.id)
                   || (result.type === 'contact' && caregiver.contact_id === result.id)
                 ));
@@ -201,10 +250,10 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
                   <li key={`${result.type}-${result.id}`}>
                     <button
                       type="button"
-                      onClick={() => !alreadyAssigned && handleAddCaregiver(result)}
-                      disabled={alreadyAssigned}
+                      onClick={() => caregiverDataIsCurrent && !alreadyAssigned && handleAddCaregiver(result)}
+                      disabled={!caregiverDataIsCurrent || alreadyAssigned}
                       className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm ${
-                        alreadyAssigned
+                        !caregiverDataIsCurrent || alreadyAssigned
                           ? 'cursor-default text-gray-400 dark:text-gray-500'
                           : 'text-gray-900 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-gray-600'
                       }`}

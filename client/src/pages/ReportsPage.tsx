@@ -49,13 +49,30 @@ const ReportsPage: React.FC = () => {
       </header>
 
       <div
-        id={`report-panel-${activeTab}`}
+        id="report-panel-selected-period"
         role="tabpanel"
-        aria-labelledby={`report-tab-${activeTab}`}
+        aria-labelledby="report-tab-selected-period"
         tabIndex={0}
+        hidden={activeTab !== 'selected-period'}
       >
         {activeTab === 'selected-period' && <SelectedPeriodReport />}
+      </div>
+      <div
+        id="report-panel-long-term-health"
+        role="tabpanel"
+        aria-labelledby="report-tab-long-term-health"
+        tabIndex={0}
+        hidden={activeTab !== 'long-term-health'}
+      >
         {activeTab === 'long-term-health' && <ComingSoonWorkspace name="Long-term health" />}
+      </div>
+      <div
+        id="report-panel-pastoral-care"
+        role="tabpanel"
+        aria-labelledby="report-tab-pastoral-care"
+        tabIndex={0}
+        hidden={activeTab !== 'pastoral-care'}
+      >
         {activeTab === 'pastoral-care' && <ComingSoonWorkspace name="Pastoral care" />}
       </div>
     </div>

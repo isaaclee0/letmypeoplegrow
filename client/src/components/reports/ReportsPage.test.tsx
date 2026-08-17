@@ -1,8 +1,9 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ReportsPage from '../../pages/ReportsPage';
 import { familiesAPI, gatheringsAPI, reportsAPI } from '../../services/api';
+import CaregiverPicker from './CaregiverPicker';
 
 const { refreshUserData } = vi.hoisted(() => ({
   refreshUserData: vi.fn().mockResolvedValue(undefined),
@@ -178,15 +179,25 @@ describe('ReportsPage selected period workspace', () => {
     render(<ReportsPage />);
 
     const selectedPeriodTab = screen.getByRole('tab', { name: 'Selected period' });
+    const longTermTab = screen.getByRole('tab', { name: 'Long-term health' });
+    const pastoralCareTab = screen.getByRole('tab', { name: 'Pastoral care' });
     expect(selectedPeriodTab).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tabpanel', { name: 'Selected period' })).toHaveAttribute(
-      'id',
-      selectedPeriodTab.getAttribute('aria-controls'),
-    );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Long-term health' }));
+    const selectedPeriodPanel = document.getElementById(selectedPeriodTab.getAttribute('aria-controls')!);
+    const longTermPanel = document.getElementById(longTermTab.getAttribute('aria-controls')!);
+    const pastoralCarePanel = document.getElementById(pastoralCareTab.getAttribute('aria-controls')!);
+    expect(selectedPeriodPanel).toHaveAttribute('role', 'tabpanel');
+    expect(selectedPeriodPanel).not.toHaveAttribute('hidden');
+    expect(longTermPanel).toHaveAttribute('role', 'tabpanel');
+    expect(longTermPanel).toHaveAttribute('hidden');
+    expect(pastoralCarePanel).toHaveAttribute('role', 'tabpanel');
+    expect(pastoralCarePanel).toHaveAttribute('hidden');
 
-    expect(screen.getByRole('tab', { name: 'Long-term health' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(longTermTab);
+
+    expect(longTermTab).toHaveAttribute('aria-selected', 'true');
+    expect(selectedPeriodPanel).toHaveAttribute('hidden');
+    expect(longTermPanel).not.toHaveAttribute('hidden');
     expect(screen.getByRole('status', { name: 'Long-term health' })).toHaveTextContent(
       'Coming in the next implementation slice.',
     );
@@ -198,5 +209,74 @@ describe('ReportsPage selected period workspace', () => {
     expect(screen.getByRole('status', { name: 'Pastoral care' })).toHaveTextContent(
       'Coming in the next implementation slice.',
     );
+  });
+
+  it('keeps caregiver results and actions bound to the displayed family after a family switch', async () => {
+    const familyACaregiver = {
+      id: 901,
+      caregiver_type: 'user' as const,
+      user_id: 71,
+      first_name: 'Family A',
+      last_name: 'Caregiver',
+      email: 'a@example.test',
+      mobile_number: null,
+    };
+    const familyBCaregiver = {
+      id: 902,
+      caregiver_type: 'user' as const,
+      user_id: 72,
+      first_name: 'Family B',
+      last_name: 'Caregiver',
+      email: 'b@example.test',
+      mobile_number: null,
+    };
+    let resolveFamilyA!: (caregivers: typeof familyACaregiver[]) => void;
+    let resolveFamilyB!: (caregivers: typeof familyBCaregiver[]) => void;
+    let familyBResolved = false;
+    const familyARequest = new Promise<typeof familyACaregiver[]>((resolve) => {
+      resolveFamilyA = resolve;
+    });
+    const familyBRequest = new Promise<typeof familyBCaregiver[]>((resolve) => {
+      resolveFamilyB = resolve;
+    });
+    vi.mocked(familiesAPI.getCaregivers).mockImplementation((familyId) => {
+      if (familyId === 501) return familyARequest as never;
+      if (!familyBResolved) return familyBRequest as never;
+      return Promise.resolve([familyBCaregiver]) as never;
+    });
+    const onClose = vi.fn();
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <CaregiverPicker
+        familyId={501}
+        open
+        onClose={onClose}
+        onChanged={onChanged}
+      />,
+    );
+    await waitFor(() => expect(familiesAPI.getCaregivers).toHaveBeenCalledWith(501));
+
+    rerender(
+      <CaregiverPicker
+        familyId={502}
+        open
+        onClose={onClose}
+        onChanged={onChanged}
+      />,
+    );
+    await waitFor(() => expect(familiesAPI.getCaregivers).toHaveBeenCalledWith(502));
+
+    familyBResolved = true;
+    await act(async () => resolveFamilyB([familyBCaregiver]));
+    expect(screen.getByText('Family B Caregiver')).toBeInTheDocument();
+
+    await act(async () => resolveFamilyA([familyACaregiver]));
+    expect(screen.queryByText('Family A Caregiver')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(familiesAPI.removeCaregiver).toHaveBeenCalledWith(502, 902);
+      expect(onChanged).toHaveBeenCalledTimes(1);
+    });
   });
 });
