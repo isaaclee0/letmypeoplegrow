@@ -130,8 +130,13 @@ function cacheKey(query) {
 
 function failureMetadata(error) {
   const code = error?.code || error?.cause?.code || null;
+  let category = 'network';
+  if (error?.status) category = 'http';
+  else if (error?.name === 'AbortError' || /timed out/i.test(error?.message)) category = 'timeout';
+  else if (error instanceof SyntaxError || /invalid response/i.test(error?.message)) category = 'invalid-response';
+
   return {
-    category: error?.status ? 'http' : error?.name === 'AbortError' || /timed out/i.test(error?.message) ? 'timeout' : 'network',
+    category,
     status: error?.status || null,
     code,
   };

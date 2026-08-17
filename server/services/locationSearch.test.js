@@ -313,3 +313,19 @@ test('never includes the Geoapify key in provider failure logs or errors', async
   });
   assert.doesNotMatch(JSON.stringify(logged), /fallback-secret/);
 });
+
+test('classifies malformed provider data separately from network failures', async () => {
+  const logged = [];
+  let calls = 0;
+  const service = createLocationSearchService({
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1 ? response(200, 'invalid') : response(200, geoapifyHobart());
+    },
+    getGeoapifyApiKey: () => 'fallback-secret',
+    logger: { info() {}, warn(message, metadata) { logged.push({ message, metadata }); }, error() {} },
+  });
+
+  await service.search('Hobart');
+  assert.equal(logged[0].metadata.category, 'invalid-response');
+});
