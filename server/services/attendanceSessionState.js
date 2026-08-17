@@ -146,7 +146,6 @@ async function finalizeStandardSessionWithConnection(conn, {
          ON i.id = gl.individual_id AND i.church_id = ?
        WHERE gl.gathering_type_id = ?
          AND gl.church_id = ?
-         AND i.is_active = 1
        ON CONFLICT(session_id, individual_id) DO NOTHING`,
       [churchId, sessionId, churchId, gatheringTypeId, churchId],
     );
@@ -167,7 +166,6 @@ async function finalizeStandardSessionWithConnection(conn, {
              ON i.id = gl.individual_id AND i.church_id = ?
            WHERE gl.gathering_type_id = ?
              AND gl.church_id = ?
-             AND i.is_active = 1
          )`,
       [churchId, sessionId, churchId, churchId, gatheringTypeId, churchId],
     );

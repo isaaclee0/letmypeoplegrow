@@ -131,6 +131,63 @@ test('standard finalisation captures version-1 eligibility without changing pres
   });
 });
 
+test('standard finalisation captures inactive people who remain on the persisted roster', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const actorId = await seedActor(churchId);
+    const gatheringTypeId = await seedGathering(churchId, actorId);
+    const existingPresentId = await seedIndividual(churchId, 'InactivePresent');
+    const missingRecordId = await seedIndividual(churchId, 'InactiveMissing');
+
+    for (const individualId of [existingPresentId, missingRecordId]) {
+      await Database.query(
+        `INSERT INTO gathering_lists
+           (church_id, gathering_type_id, individual_id, added_by)
+         VALUES (?, ?, ?, ?)`,
+        [churchId, gatheringTypeId, individualId, actorId],
+      );
+      await Database.query(
+        'UPDATE individuals SET is_active = 0 WHERE id = ? AND church_id = ?',
+        [individualId, churchId],
+      );
+    }
+
+    const sessionId = await Database.transaction(async (conn) => {
+      const session = await ensureSessionWithConnection(conn, {
+        churchId,
+        gatheringTypeId,
+        sessionDate: '2026-08-15',
+        actorId,
+      });
+      await conn.query(
+        `INSERT INTO attendance_records
+           (church_id, session_id, individual_id, present, eligible_at_snapshot, people_type_at_time)
+         VALUES (?, ?, ?, 1, 0, 'regular')`,
+        [churchId, session.id, existingPresentId],
+      );
+      await finalizeStandardSessionWithConnection(conn, {
+        churchId,
+        sessionId: session.id,
+        gatheringTypeId,
+      });
+      return session.id;
+    });
+
+    assert.deepEqual(
+      await Database.query(
+        `SELECT individual_id, present, eligible_at_snapshot
+         FROM attendance_records
+         WHERE session_id = ? AND church_id = ?
+         ORDER BY individual_id`,
+        [sessionId, churchId],
+      ),
+      [
+        { individual_id: existingPresentId, present: 1, eligible_at_snapshot: 1 },
+        { individual_id: missingRecordId, present: 0, eligible_at_snapshot: 1 },
+      ],
+    );
+  });
+});
+
 test('standard finalisation is idempotent and does not expand a completed roster snapshot', async () => {
   await withTestChurchDb(async (churchId) => {
     const actorId = await seedActor(churchId);
