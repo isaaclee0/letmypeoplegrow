@@ -2,13 +2,13 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { EventEmitter } = require('node:events');
 const express = require('express');
 const http = require('node:http');
 const https = require('node:https');
 const jwt = require('jsonwebtoken');
 const Database = require('../config/database');
 const logger = require('../config/logger');
+const locationSearchService = require('../services/locationSearch');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const settingsRouter = require('./settings');
 
@@ -62,94 +62,35 @@ async function startApp(churchId) {
   };
 }
 
-function mockHttpsResponse(t, statusCode, body) {
-  t.mock.method(https, 'get', (_options, callback) => {
-    const request = new EventEmitter();
-    request.setTimeout = () => request;
-    queueMicrotask(() => {
-      const response = new EventEmitter();
-      response.statusCode = statusCode;
-      response.resume = () => {};
-      callback(response);
-      response.emit('data', JSON.stringify(body));
-      response.emit('end');
-    });
-    return request;
-  });
-}
-
-test('location search reports upstream HTTP failures as a bad gateway', async (t) => {
+test('location search returns normalized service results', async (t) => {
   await withTestChurchDb(async (churchId) => {
-    mockHttpsResponse(t, 429, { error: true, reason: 'rate limited' });
+    t.mock.method(locationSearchService, 'search', async () => [{
+      name: 'Hobart', admin1: 'Tasmania', country: 'Australia', countryCode: 'AU',
+      lat: -42.87936, lng: 147.3294, timezone: 'Australia/Hobart', population: 252639,
+      source: 'open-meteo', displayName: 'Hobart, Tasmania, Australia',
+    }]);
+    t.mock.method(https, 'get', () => { throw new Error('route bypassed location search service'); });
     const app = await startApp(churchId);
     try {
       const response = await app.search('Hobart');
-      assert.equal(response.status, 502);
-      assert.deepEqual(response.body, { error: 'Location search is temporarily unavailable.' });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.results[0].population, 252639);
+      assert.equal(response.body.results[0].source, 'open-meteo');
     } finally {
       await app.close();
     }
   });
 });
 
-test('location search times out an unresponsive provider', async (t) => {
+test('location search preserves the unavailable response when all providers fail', async (t) => {
   await withTestChurchDb(async (churchId) => {
-    t.mock.method(https, 'get', (_options, callback) => {
-      const request = new EventEmitter();
-      let timeoutHandler;
-      request.setTimeout = (_milliseconds, handler) => {
-        timeoutHandler = handler;
-        return request;
-      };
-      request.destroy = (error) => queueMicrotask(() => request.emit('error', error));
-      queueMicrotask(() => {
-        if (timeoutHandler) {
-          timeoutHandler();
-          return;
-        }
-        const response = new EventEmitter();
-        response.statusCode = 200;
-        callback(response);
-        response.emit('data', JSON.stringify({ results: [] }));
-        response.emit('end');
-      });
-      return request;
-    });
+    t.mock.method(locationSearchService, 'search', async () => { throw new Error('providers unavailable'); });
+    t.mock.method(https, 'get', () => { throw new Error('legacy provider unavailable'); });
     const app = await startApp(churchId);
     try {
       const response = await app.search('Hobart');
       assert.equal(response.status, 502);
       assert.deepEqual(response.body, { error: 'Location search is temporarily unavailable.' });
-    } finally {
-      await app.close();
-    }
-  });
-});
-
-test('location search rejects malformed provider responses', async (t) => {
-  await withTestChurchDb(async (churchId) => {
-    mockHttpsResponse(t, 200, 'unexpected response');
-    const app = await startApp(churchId);
-    try {
-      const response = await app.search('Hobart');
-      assert.equal(response.status, 502);
-      assert.deepEqual(response.body, { error: 'Location search is temporarily unavailable.' });
-    } finally {
-      await app.close();
-    }
-  });
-});
-
-test('location search preserves the provider IANA timezone', async (t) => {
-  await withTestChurchDb(async (churchId) => {
-    mockHttpsResponse(t, 200, { results: [{
-      name: 'Hobart', admin1: 'Tasmania', country: 'Australia', country_code: 'AU',
-      latitude: -42.8821, longitude: 147.3272, timezone: 'Australia/Hobart',
-    }] });
-    const app = await startApp(churchId);
-    try {
-      const response = await app.search('Hobart');
-      assert.equal(response.body.results[0].timezone, 'Australia/Hobart');
     } finally {
       await app.close();
     }

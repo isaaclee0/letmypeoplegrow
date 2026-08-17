@@ -1,8 +1,8 @@
 const express = require('express');
-const https = require('https');
 const Database = require('../config/database');
 const { timeZoneFromCoordinates } = require('../utils/churchTime');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const locationSearchService = require('../services/locationSearch');
 const { getAuthority } = require('../services/peopleSync/authority');
 const backgroundCheckSync = require('../services/planningCenter/backgroundCheckSync');
 const medicalNotesPolicy = require('../services/planningCenter/medicalNotesPolicy');
@@ -226,35 +226,7 @@ router.put('/elvanto-config', requireRole(['admin']), async (req, res) => {
 
 // ===== Location endpoints =====
 
-// Helper: make HTTPS GET request
-function httpsGet(url) {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const request = https.get({
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      headers: { 'User-Agent': 'LetMyPeopleGrow/1.0' }
-    }, (res) => {
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        res.resume();
-        reject(new Error(`Location provider returned HTTP ${res.statusCode}`));
-        return;
-      }
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { resolve(data); }
-      });
-    });
-    request.on('error', reject);
-    request.setTimeout(5000, () => {
-      request.destroy(new Error('Location provider request timed out'));
-    });
-  });
-}
-
-// Search cities via Open-Meteo geocoding (free, no API key)
+// Search cities through the resilient provider service.
 router.get('/location-search', requireRole(['admin']), async (req, res) => {
   try {
     const { q } = req.query;
@@ -262,28 +234,9 @@ router.get('/location-search', requireRole(['admin']), async (req, res) => {
       return res.json({ results: [] });
     }
 
-    const data = await httpsGet(
-      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q.trim())}&count=8&language=en&format=json`
-    );
-    if (!data || typeof data !== 'object' || Array.isArray(data)
-      || (data.results !== undefined && !Array.isArray(data.results))) {
-      throw new Error('Location provider returned an invalid response');
-    }
-
-    const results = (data.results || []).map(r => ({
-      name: r.name,
-      admin1: r.admin1 || null,
-      country: r.country || null,
-      countryCode: r.country_code || null,
-      lat: r.latitude,
-      lng: r.longitude,
-      timezone: r.timezone || null,
-      displayName: [r.name, r.admin1, r.country].filter(Boolean).join(', ')
-    }));
-
+    const results = await locationSearchService.search(q.trim());
     res.json({ results });
   } catch (error) {
-    console.error('Location search error:', error);
     res.status(502).json({ error: 'Location search is temporarily unavailable.' });
   }
 });
