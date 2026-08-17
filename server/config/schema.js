@@ -1,3 +1,8 @@
+const {
+  ENGAGEMENT_SCHEMA_SQL,
+  ENGAGEMENT_LOOKUP_INDEX_SQL,
+} = require('./engagementSchema');
+
 const REGISTRY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS churches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -449,6 +454,7 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   group_by_family INTEGER DEFAULT 1,
   individual_mode INTEGER DEFAULT 0,
   requires_background_check INTEGER DEFAULT 0,
+  engagement_role TEXT CHECK (engagement_role IN ('primary','community','other')),
   is_active INTEGER DEFAULT 1,
   created_by INTEGER,
   church_id TEXT NOT NULL DEFAULT 'default',
@@ -587,6 +593,10 @@ CREATE TABLE IF NOT EXISTS attendance_sessions (
   headcount_mode TEXT DEFAULT 'separate',
   roster_snapshotted INTEGER DEFAULT 0,
   excluded_from_stats INTEGER DEFAULT 0,
+  session_status TEXT NOT NULL DEFAULT 'open' CHECK (session_status IN ('open','held','cancelled')),
+  roster_provenance_version INTEGER NOT NULL DEFAULT 0,
+  cancelled_at TEXT,
+  cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   church_id TEXT NOT NULL,
@@ -603,6 +613,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   session_id INTEGER NOT NULL,
   individual_id INTEGER NOT NULL,
   present INTEGER DEFAULT 0,
+  eligible_at_snapshot INTEGER NOT NULL DEFAULT 0 CHECK (eligible_at_snapshot IN (0,1)),
   people_type_at_time TEXT CHECK(people_type_at_time IN ('regular', 'local_visitor', 'traveller_visitor')),
   updated_at TEXT DEFAULT (datetime('now')),
   church_id TEXT NOT NULL,
@@ -833,6 +844,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fc_user ON family_caregivers(family_id, use
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fc_contact ON family_caregivers(family_id, contact_id) WHERE contact_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_fc_family ON family_caregivers(family_id);
 CREATE INDEX IF NOT EXISTS idx_fc_church ON family_caregivers(church_id);
+
+${ENGAGEMENT_SCHEMA_SQL}
+${ENGAGEMENT_LOOKUP_INDEX_SQL}
 
 CREATE TABLE IF NOT EXISTS contact_notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

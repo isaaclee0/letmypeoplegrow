@@ -13,6 +13,7 @@ const {
 const { randomUUID } = require('crypto');
 const logger = require('./logger');
 const { timeZoneFromCoordinates } = require('../utils/churchTime');
+const { ensureEngagementSchema } = require('./engagementSchema');
 
 const asyncLocalStorage = new AsyncLocalStorage();
 const churchDbs = new Map();
@@ -837,6 +838,8 @@ class Database {
       backfillProviderNeutralSync(db, churchId);
     }
 
+    ensureEngagementSchema(db, churchId);
+
     migrateChurchTimezoneFromLocation(db, churchId);
     migratePeopleImportRunTrigger(db);
 
@@ -853,6 +856,7 @@ class Database {
   static ensureChurchSchema(churchId) {
     const db = Database.getChurchDb(churchId);
     ensureProviderNeutralSyncSchema(db);
+    ensureEngagementSchema(db, churchId);
     migratePeopleImportRunTrigger(db);
     ensureCompatibleUpdatedAtTriggers(db);
     backfillProviderNeutralSync(db, churchId);
