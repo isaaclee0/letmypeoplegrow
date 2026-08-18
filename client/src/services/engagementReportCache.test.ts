@@ -116,4 +116,18 @@ describe('engagement report cache', () => {
       expect(localStorage.length).toBe(0);
     }
   });
+
+  it.each([
+    ['completed-week cache key', (candidate: EngagementOverviewDto) => { candidate.window.completedWeekEnd = '2026-02-30'; }],
+    ['rendered window date', (candidate: EngagementOverviewDto) => { candidate.window.currentStart = 'not-a-date'; }],
+    ['rendered trend date', (candidate: EngagementOverviewDto) => { candidate.trend.buckets[0].startDate = '2025-8-18'; }],
+  ])('rejects cached overviews with an invalid %s', (_name, corrupt) => {
+    const candidate = structuredClone(overview());
+    corrupt(candidate);
+    const key = `engagement-overview:v1:church-a:${candidate.window.completedWeekEnd}`;
+    localStorage.setItem(key, JSON.stringify(candidate));
+
+    expect(readEngagementOverviewCache('church-a')).toBeNull();
+    expect(localStorage.length).toBe(0);
+  });
 });

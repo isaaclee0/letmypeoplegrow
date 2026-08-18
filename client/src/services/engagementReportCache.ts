@@ -17,6 +17,12 @@ function isString(value: unknown): value is string {
   return typeof value === 'string';
 }
 
+function isCanonicalDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 function isNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -78,7 +84,7 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
       || !isRecord(value.visitorJourney) || !isRecord(value.coverage)) return false;
 
   const dateFields = ['completedWeekEnd', 'sourceStart', 'sourceEnd', 'currentStart', 'currentEnd', 'comparisonStart', 'comparisonEnd'];
-  if (!dateFields.every((field) => isString(value.window[field]))) return false;
+  if (!dateFields.every((field) => isCanonicalDate(value.window[field]))) return false;
   if (!isBoolean(value.setup.hasPrimaryRole)
       || !isBoolean(value.setup.hasStandardPrimaryRole)
       || !isBoolean(value.setup.hasPrimaryAssignments)
@@ -108,7 +114,7 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
         .every((field) => isNumber(matrix.outside[field]))) return false;
 
   if (!Array.isArray(value.trend.buckets) || !value.trend.buckets.every((bucket) => isRecord(bucket)
-      && isInteger(bucket.index) && isString(bucket.startDate) && isString(bucket.endDate)
+      && isInteger(bucket.index) && isCanonicalDate(bucket.startDate) && isCanonicalDate(bucket.endDate)
       && Array.isArray(bucket.series) && bucket.series.every((series) => isRecord(series)
         && isOneOf(series.role, ROLES) && isOneOf(series.attendanceType, ATTENDANCE_TYPES)
         && isNumber(series.heldSessions) && isNumber(series.totalAttendance)
