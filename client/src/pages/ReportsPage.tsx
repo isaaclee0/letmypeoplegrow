@@ -66,7 +66,7 @@ const ReportsPage: React.FC = () => {
         hidden={activeTab !== 'long-term-health'}
       >
         {activeTab === 'long-term-health' && user?.church_id && (
-          <LongTermHealthReport churchId={user.church_id} canConfigure={user.role === 'admin'} />
+          <LongTermHealthReport key={user.church_id} churchId={user.church_id} canConfigure={user.role === 'admin'} />
         )}
       </div>
       <div

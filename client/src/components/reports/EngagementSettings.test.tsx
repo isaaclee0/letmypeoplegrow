@@ -16,34 +16,31 @@ const settings = {
     irregular: { label: 'Irregular', colour: '#DC2626' },
   },
   gatheringRoles: [
-    { gatheringTypeId: 1, role: 'primary' as const },
-    { gatheringTypeId: 2, role: null },
-    { gatheringTypeId: 3, role: 'other' as const },
+    { gatheringTypeId: 1, name: 'Sunday', attendanceType: 'standard' as const, isActive: true, role: 'primary' as const },
+    { gatheringTypeId: 2, name: 'Youth', attendanceType: 'standard' as const, isActive: false, role: null },
+    { gatheringTypeId: 3, name: 'Conference', attendanceType: 'headcount' as const, isActive: true, role: 'other' as const },
   ],
   calculationRulesVersion: 1,
   assignmentPreview: { primaryAssigned: 7, communityAssigned: 3, primaryNotAssigned: 2 },
 };
 
-const gatherings = [
-  { id: 1, name: 'Sunday', attendanceType: 'standard' as const, isActive: true },
-  { id: 2, name: 'Youth', attendanceType: 'standard' as const, isActive: false },
-  { id: 3, name: 'Conference', attendanceType: 'headcount' as const, isActive: true },
-];
-
 describe('EngagementSettings', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows coordinators the complete active rules without editable controls', () => {
-    render(<EngagementSettings settings={settings} gatherings={gatherings} canEdit={false} onSaved={vi.fn()} />);
+    render(<EngagementSettings settings={settings} canEdit={false} onSaved={vi.fn()} />);
     expect(screen.getByText('Core: 60% or more')).toBeInTheDocument();
     expect(screen.getByText('Casual: 20% to 59%')).toBeInTheDocument();
     expect(screen.getByText(/^Sunday: Primary$/)).toBeInTheDocument();
+    expect(screen.getByText('Youth: Unclassified (Inactive)')).toBeInTheDocument();
+    expect(screen.getByText('Conference: Other (Headcount)')).toBeInTheDocument();
+    expect(screen.getByText(/Headcount gatherings do not create person-level tiers/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save engagement settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
   it('lets admins edit labels, colours, thresholds, and every gathering role with explanations', () => {
-    render(<EngagementSettings settings={settings} gatherings={gatherings} canEdit onSaved={vi.fn()} />);
+    render(<EngagementSettings settings={settings} canEdit onSaved={vi.fn()} />);
     expect(screen.getByText(/Primary combines alternative services into one opportunity per person each week/)).toBeInTheDocument();
     expect(screen.getByText(/Community treats each eligible session as a separate opportunity/)).toBeInTheDocument();
     expect(screen.getByText(/Other remains in attendance trends but not person tiers/)).toBeInTheDocument();
@@ -63,7 +60,7 @@ describe('EngagementSettings', () => {
   });
 
   it('blocks invalid thresholds before saving', async () => {
-    render(<EngagementSettings settings={settings} gatherings={gatherings} canEdit onSaved={vi.fn()} />);
+    render(<EngagementSettings settings={settings} canEdit onSaved={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Casual minimum'), { target: { value: '60' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save engagement settings' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Casual minimum must be less than Core minimum');
@@ -74,7 +71,7 @@ describe('EngagementSettings', () => {
     const saved = { ...settings, coreMinimum: 65, calculationRulesVersion: 2 };
     vi.mocked(settingsAPI.updateEngagementSettings).mockResolvedValue({ data: { settings: saved } } as never);
     const onSaved = vi.fn().mockResolvedValue(undefined);
-    render(<EngagementSettings settings={settings} gatherings={gatherings} canEdit onSaved={onSaved} />);
+    render(<EngagementSettings settings={settings} canEdit onSaved={onSaved} />);
     fireEvent.change(screen.getByLabelText('Core minimum'), { target: { value: '65' } });
     fireEvent.change(screen.getByLabelText('Core label'), { target: { value: 'Committed' } });
     fireEvent.change(screen.getByLabelText('Role for Youth'), { target: { value: 'community' } });

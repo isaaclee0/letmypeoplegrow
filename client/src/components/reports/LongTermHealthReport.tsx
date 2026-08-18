@@ -10,8 +10,8 @@ import {
   Tooltip,
 } from 'chart.js';
 import { Doughnut, Line } from 'react-chartjs-2';
-import type { EngagementOverviewDto, EngagementSettingsDto, GatheringType } from '../../services/api';
-import { gatheringsAPI, reportsAPI } from '../../services/api';
+import type { EngagementOverviewDto, EngagementSettingsDto } from '../../services/api';
+import { reportsAPI } from '../../services/api';
 import {
   clearEngagementOverviewCache,
   readEngagementOverviewCache,
@@ -21,6 +21,7 @@ import EngagementDrilldown from './EngagementDrilldown';
 import EngagementMatrix from './EngagementMatrix';
 import EngagementSettings from './EngagementSettings';
 import { percentage } from './EngagementEvidence';
+import AccessibleDialog from './AccessibleDialog';
 
 ChartJS.register(ArcElement, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
@@ -49,15 +50,16 @@ function seriesName(role: string, attendanceType: string): string {
 }
 
 const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, canConfigure }) => {
-  const [overview, setOverview] = useState<EngagementOverviewDto | null>(() => readEngagementOverviewCache(churchId));
-  const [gatherings, setGatherings] = useState<GatheringType[]>([]);
-  const [updating, setUpdating] = useState(!!overview);
+  const [overviewState, setOverview] = useState<EngagementOverviewDto | null>(() => readEngagementOverviewCache(churchId));
+  const [updating, setUpdating] = useState(true);
   const [error, setError] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [drilldown, setDrilldown] = useState<OpenDrilldown | null>(null);
   const overviewRequest = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const overview = overviewState?.churchId === churchId ? overviewState : null;
+
+  const refresh = useCallback(async (fallback: EngagementOverviewDto | null) => {
     const requestId = ++overviewRequest.current;
     setUpdating(true);
     setError('');
@@ -69,26 +71,21 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
       setOverview(response.data);
     } catch {
       if (requestId !== overviewRequest.current) return;
-      setError(overview ? 'Could not refresh long-term health. You are showing saved data.' : 'Could not load long-term health. Please try again.');
+      const hasCurrentFallback = fallback?.churchId === churchId;
+      setError(hasCurrentFallback ? 'Could not refresh long-term health. You are showing saved data.' : 'Could not load long-term health. Please try again.');
     } finally {
       if (requestId === overviewRequest.current) setUpdating(false);
     }
-  }, [churchId, overview]);
-
-  useEffect(() => {
-    setOverview(readEngagementOverviewCache(churchId));
   }, [churchId]);
 
-  useEffect(() => { void refresh(); }, [churchId]); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
-    let active = true;
-    gatheringsAPI.getAll().then((response) => {
-      if (!active) return;
-      setGatherings(response.data.gatherings || response.data.gatheringTypes || []);
-    }).catch(() => { if (active) setGatherings([]); });
-    return () => { active = false; };
-  }, [churchId]);
+    const cached = readEngagementOverviewCache(churchId);
+    setOverview(cached);
+    setShowSettings(false);
+    setDrilldown(null);
+    setError('');
+    void refresh(cached);
+  }, [churchId, refresh]);
 
   const openPeople = (token: string, title: string) => setDrilldown({ kind: 'people', token, title });
   const openSessions = (token: string, title: string) => setDrilldown({ kind: 'sessions', token, title });
@@ -120,15 +117,18 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
     };
   }, [overview]);
 
-  if (!overview && updating) return <div role="status" className="rounded-lg bg-white p-8 text-center shadow dark:bg-gray-800">Loading long-term health…</div>;
+  if (!overview && (updating || (overviewState !== null && overviewState.churchId !== churchId))) return <div role="status" className="rounded-lg bg-white p-8 text-center shadow dark:bg-gray-800">Loading long-term health…</div>;
   if (!overview) return <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-5 text-red-800">{error || 'Could not load long-term health.'}</div>;
 
   const { settings } = overview;
   const denominator = overview.primaryDistribution.classified.denominator;
   const onSettingsSaved = async (_saved: EngagementSettingsDto) => {
     clearEngagementOverviewCache(churchId);
+    setOverview(null);
+    setDrilldown(null);
+    setError('');
     setShowSettings(false);
-    await refresh();
+    await refresh(null);
   };
 
   return (
@@ -222,16 +222,16 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
         </>
       )}
 
-      {!canConfigure && <EngagementSettings settings={settings} gatherings={gatherings} canEdit={false} onSaved={() => undefined} />}
+      {!canConfigure && <EngagementSettings settings={settings} canEdit={false} onSaved={() => undefined} />}
       <p className="text-sm text-gray-600">Active rules: {settings.tiers.core.label} ≥ {settings.coreMinimum}%; {settings.tiers.casual.label} {settings.casualMinimum}–{settings.coreMinimum - 1}%; {settings.tiers.irregular.label} &lt; {settings.casualMinimum}%.</p>
 
       {showSettings && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Configure engagement">
+        <AccessibleDialog className="z-40" label="Configure engagement" onClose={() => setShowSettings(false)}>
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg bg-white p-6 dark:bg-gray-800">
             <div className="mb-4 text-right"><button type="button" aria-label="Close settings" onClick={() => setShowSettings(false)}>Close</button></div>
-            <EngagementSettings settings={settings} gatherings={gatherings} canEdit onSaved={onSettingsSaved} />
+            <EngagementSettings settings={settings} canEdit onSaved={onSettingsSaved} />
           </div>
-        </div>
+        </AccessibleDialog>
       )}
       {drilldown && <EngagementDrilldown {...drilldown} settings={settings} onClose={() => setDrilldown(null)} />}
     </div>

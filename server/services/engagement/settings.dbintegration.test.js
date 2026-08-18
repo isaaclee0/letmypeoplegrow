@@ -80,8 +80,8 @@ test('defaults leave every gathering unclassified without inferring from its nam
       { ...DEFAULT_ENGAGEMENT_SETTINGS, calculationRulesVersion: 1 },
     );
     assert.deepEqual(settings.gatheringRoles, [
-      { gatheringTypeId: sundayId, role: null },
-      { gatheringTypeId: communityId, role: null },
+      { gatheringTypeId: sundayId, name: 'Sunday Primary Worship', attendanceType: 'standard', isActive: true, role: null },
+      { gatheringTypeId: communityId, name: 'Community Group', attendanceType: 'standard', isActive: true, role: null },
     ]);
     assert.deepEqual(settings.assignmentPreview, {
       primaryAssigned: 0,
@@ -133,6 +133,12 @@ test('an atomic update persists complete roles and previews active standard-gath
       primaryNotAssigned: 2,
     });
     assert.equal(updated.tiers.core.label, 'Committed');
+    assert.deepEqual(updated.gatheringRoles, [
+      { gatheringTypeId: primaryId, name: 'Sunday', attendanceType: 'standard', isActive: true, role: 'primary' },
+      { gatheringTypeId: communityId, name: 'Small Group', attendanceType: 'standard', isActive: true, role: 'community' },
+      { gatheringTypeId: headcountId, name: 'Festival', attendanceType: 'headcount', isActive: true, role: 'primary' },
+      { gatheringTypeId: inactiveId, name: 'Old Service', attendanceType: 'standard', isActive: false, role: 'other' },
+    ]);
     const storedRoles = await Database.query(
       `SELECT id, engagement_role AS role FROM gathering_types
        WHERE church_id = ? ORDER BY id`,

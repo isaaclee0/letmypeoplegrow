@@ -4,13 +4,11 @@ import type {
   EngagementSettingsDto,
   EngagementSettingsInput,
   EngagementTierKey,
-  GatheringType,
 } from '../../services/api';
 import { settingsAPI } from '../../services/api';
 
 interface EngagementSettingsProps {
   settings: EngagementSettingsDto;
-  gatherings: GatheringType[];
   canEdit: boolean;
   onSaved: (settings: EngagementSettingsDto) => void | Promise<void>;
 }
@@ -24,24 +22,31 @@ function rulesSummary(settings: EngagementSettingsDto): string {
   return `${settings.tiers.core.label}: ${settings.coreMinimum}% or more`;
 }
 
-const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, gatherings, canEdit, onSaved }) => {
+function editableRoles(settings: EngagementSettingsDto) {
+  return settings.gatheringRoles.map(({ gatheringTypeId, role }) => ({ gatheringTypeId, role }));
+}
+
+const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEdit, onSaved }) => {
   const [form, setForm] = useState<EngagementSettingsInput>({
     coreMinimum: settings.coreMinimum,
     casualMinimum: settings.casualMinimum,
     tiers: structuredClone(settings.tiers),
-    gatheringRoles: settings.gatheringRoles.map((role) => ({ ...role })),
+    gatheringRoles: editableRoles(settings),
   });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const gatheringById = useMemo(() => new Map(gatherings.map((gathering) => [gathering.id, gathering])), [gatherings]);
+  const gatheringById = useMemo(
+    () => new Map(settings.gatheringRoles.map((gathering) => [gathering.gatheringTypeId, gathering])),
+    [settings.gatheringRoles],
+  );
 
   useEffect(() => {
     setForm({
       coreMinimum: settings.coreMinimum,
       casualMinimum: settings.casualMinimum,
       tiers: structuredClone(settings.tiers),
-      gatheringRoles: settings.gatheringRoles.map((role) => ({ ...role })),
+      gatheringRoles: editableRoles(settings),
     });
   }, [settings]);
 
@@ -55,10 +60,17 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, gathe
           <li>{settings.tiers.irregular.label}: below {settings.casualMinimum}%</li>
         </ul>
         <ul className="mt-3 space-y-1 text-sm">
-          {settings.gatheringRoles.map(({ gatheringTypeId, role }) => (
-            <li key={gatheringTypeId}>{gatheringById.get(gatheringTypeId)?.name || `Gathering ${gatheringTypeId}`}: {ROLE_LABELS[role || 'unclassified']}</li>
+          {settings.gatheringRoles.map(({ gatheringTypeId, name, attendanceType, isActive, role }) => (
+            <li key={gatheringTypeId}>
+              {name}: {ROLE_LABELS[role || 'unclassified']}
+              {!isActive && ' (Inactive)'}
+              {attendanceType === 'headcount' && ' (Headcount)'}
+            </li>
           ))}
         </ul>
+        {settings.gatheringRoles.some(({ attendanceType }) => attendanceType === 'headcount') && (
+          <p className="mt-2 text-xs text-amber-700">Headcount gatherings do not create person-level tiers; their role affects aggregate trends only.</p>
+        )}
       </section>
     );
   }

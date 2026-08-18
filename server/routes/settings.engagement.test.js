@@ -91,6 +91,37 @@ test('admins and coordinators can read engagement settings, but attendance taker
   }
 });
 
+test('engagement settings include display metadata for every active, inactive, and headcount gathering', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO gathering_types
+         (name, attendance_type, is_active, engagement_role, church_id)
+       VALUES
+         ('Sunday', 'standard', 1, 'primary', ?),
+         ('Old Youth', 'standard', 0, 'community', ?),
+         ('Conference', 'headcount', 1, 'other', ?)`,
+      [churchId, churchId, churchId],
+    );
+    const app = await startApp(churchId, 'coordinator');
+    try {
+      const response = await app.request('GET');
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body.settings.gatheringRoles.map((gathering) => ({
+        name: gathering.name,
+        attendanceType: gathering.attendanceType,
+        isActive: gathering.isActive,
+        role: gathering.role,
+      })), [
+        { name: 'Sunday', attendanceType: 'standard', isActive: true, role: 'primary' },
+        { name: 'Old Youth', attendanceType: 'standard', isActive: false, role: 'community' },
+        { name: 'Conference', attendanceType: 'headcount', isActive: true, role: 'other' },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 test('only admins can atomically write the complete engagement settings object', async () => {
   for (const [role, expectedStatus] of [
     ['admin', 200],

@@ -2,7 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngagementOverviewDto } from '../../services/api';
-import { gatheringsAPI, reportsAPI, settingsAPI } from '../../services/api';
+import { reportsAPI, settingsAPI } from '../../services/api';
 import { writeEngagementOverviewCache } from '../../services/engagementReportCache';
 import LongTermHealthReport from './LongTermHealthReport';
 
@@ -25,7 +25,6 @@ vi.mock('../../services/api', async (importOriginal) => {
       ...actual.settingsAPI,
       updateEngagementSettings: vi.fn(),
     },
-    gatheringsAPI: { ...actual.gatheringsAPI, getAll: vi.fn() },
   };
 });
 
@@ -38,9 +37,9 @@ const settings = {
     irregular: { label: 'Occasional', colour: '#b91c1c' },
   },
   gatheringRoles: [
-    { gatheringTypeId: 1, role: 'primary' as const },
-    { gatheringTypeId: 2, role: 'community' as const },
-    { gatheringTypeId: 3, role: 'other' as const },
+    { gatheringTypeId: 1, name: 'Sunday', attendanceType: 'standard' as const, isActive: true, role: 'primary' as const },
+    { gatheringTypeId: 2, name: 'Youth', attendanceType: 'standard' as const, isActive: false, role: 'community' as const },
+    { gatheringTypeId: 3, name: 'Conference', attendanceType: 'headcount' as const, isActive: true, role: 'other' as const },
   ],
   calculationRulesVersion: 2,
   assignmentPreview: { primaryAssigned: 8, communityAssigned: 6, primaryNotAssigned: 2 },
@@ -107,7 +106,6 @@ describe('LongTermHealthReport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: { gatherings: [] } } as never);
   });
 
   it('renders setup guidance instead of an empty chart when Primary is not configured', async () => {
@@ -159,6 +157,39 @@ describe('LongTermHealthReport', () => {
     await act(async () => { resolveChurchA({ data: overview({ churchId: 'church-a', population: { activeRegulars: 11 } }) }); });
     expect(screen.getByText('22 active regulars')).toBeInTheDocument();
     expect(screen.queryByText('11 active regulars')).not.toBeInTheDocument();
+  });
+
+  it('synchronously hides the previous church overview and settings modal when church changes', async () => {
+    writeEngagementOverviewCache(overview());
+    vi.mocked(reportsAPI.getEngagementOverview).mockReturnValue(new Promise(() => {}) as never);
+    const { rerender } = render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    const configure = screen.getByRole('button', { name: 'Configure engagement' });
+    configure.focus();
+    fireEvent.click(configure);
+    expect(screen.getByRole('dialog', { name: 'Configure engagement' })).toBeInTheDocument();
+
+    rerender(<LongTermHealthReport churchId="church-b" canConfigure />);
+
+    expect(screen.queryByText('10 active regulars')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Configure engagement' })).not.toBeInTheDocument();
+  });
+
+  it('synchronously closes a previous-church drilldown and hides its rows when church changes', async () => {
+    writeEngagementOverviewCache(overview());
+    vi.mocked(reportsAPI.getEngagementOverview).mockReturnValue(new Promise(() => {}) as never);
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [{
+      rowType: 'engagement_profile', individualId: 1, firstName: 'Alex', lastName: 'Able', familyId: null,
+      primary: { status: 'core', attended: 31, opportunities: 46, rate: 31 / 46 },
+      community: { status: 'establishing', attended: 3, opportunities: 5, rate: .6 },
+    }], nextCursor: null } } as never);
+    const { rerender } = render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    fireEvent.click(screen.getByRole('button', { name: /Committed: 4 of 7/ }));
+    expect(await screen.findByText('Alex Able')).toBeInTheDocument();
+
+    rerender(<LongTermHealthReport churchId="church-b" canConfigure />);
+
+    expect(screen.queryByRole('dialog', { name: 'Committed people' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Alex Able')).not.toBeInTheDocument();
   });
 
   it('keeps cached data with a refresh warning, but shows an error when no cache exists', async () => {
@@ -219,5 +250,58 @@ describe('LongTermHealthReport', () => {
     expect(reportsAPI.getEngagementPeople).toHaveBeenNthCalledWith(2, {
       segment: 'core-token', cursor: 'next-page', limit: 50,
     });
+  });
+
+  it('clears old rules and drilldown tokens after save before refreshing, and fails closed if refresh fails', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview)
+      .mockResolvedValueOnce({ data: overview() } as never)
+      .mockRejectedValueOnce(new Error('offline'));
+    vi.mocked(settingsAPI.updateEngagementSettings).mockResolvedValue({ data: { settings: {
+      ...settings, coreMinimum: 65, calculationRulesVersion: 3,
+    } } } as never);
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure engagement' }));
+    fireEvent.change(screen.getByLabelText('Core minimum'), { target: { value: '65' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save engagement settings' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load long-term health');
+    expect(screen.queryByText('10 active regulars')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Committed: 4 of 7/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/showing saved data/i)).not.toBeInTheDocument();
+  });
+
+  it('traps focus in settings, closes on Escape, and restores the Configure engagement trigger', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    const trigger = await screen.findByRole('button', { name: 'Configure engagement' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Configure engagement' });
+    const close = within(dialog).getByRole('button', { name: 'Close settings' });
+    await waitFor(() => expect(close).toHaveFocus());
+
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(within(dialog).getByRole('button', { name: 'Save engagement settings' })).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Configure engagement' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('traps focus in a drilldown, closes on Escape, and restores its segment trigger', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    const trigger = await screen.findByRole('button', { name: /Committed: 4 of 7/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Committed people' });
+    const close = within(dialog).getByRole('button', { name: 'Close details' });
+    await waitFor(() => expect(close).toHaveFocus());
+
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Committed people' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

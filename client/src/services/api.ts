@@ -52,6 +52,11 @@ export interface EngagementGatheringRoleAssignment {
   gatheringTypeId: number;
   role: EngagementGatheringRole;
 }
+export interface EngagementGatheringRoleDto extends EngagementGatheringRoleAssignment {
+  name: string;
+  attendanceType: 'standard' | 'headcount';
+  isActive: boolean;
+}
 export interface EngagementSettingsInput {
   coreMinimum: number;
   casualMinimum: number;
@@ -62,7 +67,8 @@ export interface EngagementSettingsInput {
   };
   gatheringRoles: EngagementGatheringRoleAssignment[];
 }
-export interface EngagementSettingsDto extends EngagementSettingsInput {
+export interface EngagementSettingsDto extends Omit<EngagementSettingsInput, 'gatheringRoles'> {
+  gatheringRoles: EngagementGatheringRoleDto[];
   calculationRulesVersion: number;
   assignmentPreview: {
     primaryAssigned: number;

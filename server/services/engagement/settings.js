@@ -124,13 +124,18 @@ async function loadSettingsRow(query, churchId) {
 }
 
 async function loadGatheringRoles(query, churchId) {
-  return query(
-    `SELECT id AS gatheringTypeId, engagement_role AS role
+  const rows = await query(
+    `SELECT id AS gatheringTypeId,
+            name,
+            attendance_type AS attendanceType,
+            is_active AS isActive,
+            engagement_role AS role
      FROM gathering_types
      WHERE church_id = ?
      ORDER BY id`,
     [churchId],
   );
+  return rows.map((row) => ({ ...row, isActive: Boolean(row.isActive) }));
 }
 
 async function loadAssignmentPreview(query, churchId) {

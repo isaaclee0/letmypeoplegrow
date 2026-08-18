@@ -8,6 +8,7 @@ import type {
 import { reportsAPI } from '../../services/api';
 import EngagementEvidence from './EngagementEvidence';
 import EngagementTierBadge from './EngagementTierBadge';
+import AccessibleDialog from './AccessibleDialog';
 
 type DrilldownRow = EngagementPersonDrilldownRow | EngagementSessionDrilldownRow;
 
@@ -45,7 +46,7 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
   useEffect(() => { void load(); }, [load]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={title}>
+    <AccessibleDialog className="z-50" label={title} onClose={onClose}>
       <div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-800">
         <div className="flex items-start justify-between gap-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
@@ -76,7 +77,7 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
         {!loading && rows.length === 0 && !error && <p className="mt-4 text-sm text-gray-500">No matching records.</p>}
         {cursor && !loading && <button type="button" className="mt-4 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white" onClick={() => void load(cursor)}>Load more</button>}
       </div>
-    </div>
+    </AccessibleDialog>
   );
 };
 
