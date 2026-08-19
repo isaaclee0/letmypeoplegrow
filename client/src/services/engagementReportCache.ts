@@ -1,7 +1,9 @@
-import type { EngagementOverviewDto } from './api';
+import type { EngagementOverviewDto, PastoralInsightsDto } from './api';
 
 const CACHE_PREFIX = 'engagement-overview';
+const PASTORAL_CACHE_PREFIX = 'pastoral-insights';
 const SCHEMA_VERSION = 1;
+const PASTORAL_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function prefixForChurch(churchId: string): string {
   return `${CACHE_PREFIX}:v${SCHEMA_VERSION}:${encodeURIComponent(churchId)}:`;
@@ -33,6 +35,10 @@ function isInteger(value: unknown): value is number {
 
 function isBoolean(value: unknown): value is boolean {
   return typeof value === 'boolean';
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || isString(value);
 }
 
 function isOneOf<T extends string>(value: unknown, options: readonly T[]): value is T {
@@ -142,6 +148,65 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
   return true;
 }
 
+function isAxisStatus(value: unknown): boolean {
+  if (!isRecord(value) || !isOneOf(value.status, ['core', 'casual', 'irregular', 'establishing', 'not_assigned'])) return false;
+  if (!isNumber(value.attended) || !isNumber(value.opportunities)) return false;
+  return value.rate === null || isNumber(value.rate);
+}
+
+function isPastoralInsight(value: unknown): boolean {
+  if (!isRecord(value)
+      || !isInteger(value.id)
+      || !isOneOf(value.type, ['primary_decline', 'community_primary_gap', 'visitor_next_step', 're_engagement'])
+      || !isString(value.episodeKey)
+      || !(value.declineEventId === null || isInteger(value.declineEventId))
+      || !isRecord(value.person)
+      || !isInteger(value.person.id)
+      || !isString(value.person.firstName)
+      || !isString(value.person.lastName)
+      || !isOneOf(value.person.peopleType, ['regular', 'local_visitor', 'traveller_visitor'])
+      || !isBoolean(value.person.isActive)
+      || !(value.family === null || (isRecord(value.family) && isInteger(value.family.id) && isString(value.family.name)))
+      || !(value.lastAttendance === null || (isRecord(value.lastAttendance)
+        && isInteger(value.lastAttendance.individualId)
+        && isCanonicalDate(value.lastAttendance.date)
+        && isInteger(value.lastAttendance.gatheringTypeId)
+        && isString(value.lastAttendance.gatheringName)
+        && isOneOf(value.lastAttendance.engagementRole, ROLES)))
+      || !isRecord(value.profiles)
+      || !isAxisStatus(value.profiles.primary)
+      || !isAxisStatus(value.profiles.community)
+      || !isRecord(value.evidence)
+      || !Array.isArray(value.caregivers)
+      || !value.caregivers.every((caregiver) => isRecord(caregiver)
+        && isInteger(caregiver.assignmentId)
+        && isOneOf(caregiver.type, ['user', 'contact'])
+        && isInteger(caregiver.id)
+        && isString(caregiver.firstName)
+        && isString(caregiver.lastName)
+        && isNullableString(caregiver.email)
+        && isBoolean(caregiver.isActive))
+      || !isRecord(value.deliverySummary)
+      || !['pending', 'delivered', 'cancelled'].every((field) => isNumber(value.deliverySummary[field]))
+      || !isRecord(value.workflow)
+      || !isOneOf(value.workflow.state, ['open', 'snoozed', 'dismissed', 'resolved'])
+      || !isNullableString(value.workflow.snoozedUntil)
+      || !(value.workflow.actedBy === null || isInteger(value.workflow.actedBy))
+      || !isNullableString(value.workflow.createdAt)
+      || !isNullableString(value.workflow.updatedAt)) return false;
+  return true;
+}
+
+function isPastoralInsights(value: unknown): value is PastoralInsightsDto {
+  return isRecord(value)
+    && value.schemaVersion === SCHEMA_VERSION
+    && isString(value.churchId)
+    && isRecord(value.window)
+    && isCanonicalDate(value.window.completedWeekEnd)
+    && Array.isArray(value.insights)
+    && value.insights.every(isPastoralInsight);
+}
+
 function churchKeys(churchId: string): string[] {
   const prefix = prefixForChurch(churchId);
   return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -178,4 +243,40 @@ export function writeEngagementOverviewCache(overview: EngagementOverviewDto): v
 
 export function clearEngagementOverviewCache(churchId: string): void {
   churchKeys(churchId).forEach((key) => localStorage.removeItem(key));
+}
+
+function pastoralCacheKey(churchId: string): string {
+  return `${PASTORAL_CACHE_PREFIX}:v${SCHEMA_VERSION}:${encodeURIComponent(churchId)}`;
+}
+
+export function readPastoralInsightsCache(churchId: string): PastoralInsightsDto | null {
+  const key = pastoralCacheKey(churchId);
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!isRecord(stored)
+        || !isNumber(stored.cachedAt)
+        || Date.now() - stored.cachedAt > PASTORAL_CACHE_TTL_MS
+        || Date.now() < stored.cachedAt
+        || !isPastoralInsights(stored.data)
+        || stored.data.churchId !== churchId) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return stored.data;
+  } catch {
+    localStorage.removeItem(key);
+    return null;
+  }
+}
+
+export function writePastoralInsightsCache(insights: PastoralInsightsDto): void {
+  if (!isPastoralInsights(insights)) return;
+  localStorage.setItem(pastoralCacheKey(insights.churchId), JSON.stringify({
+    cachedAt: Date.now(),
+    data: insights,
+  }));
+}
+
+export function clearPastoralInsightsCache(churchId: string): void {
+  localStorage.removeItem(pastoralCacheKey(churchId));
 }

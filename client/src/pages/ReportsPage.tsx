@@ -3,20 +3,8 @@ import { ChartBarIcon } from '@heroicons/react/24/outline';
 import ReportTabs, { type ReportTabKey } from '../components/reports/ReportTabs';
 import SelectedPeriodReport from '../components/reports/SelectedPeriodReport';
 import LongTermHealthReport from '../components/reports/LongTermHealthReport';
+import PastoralCareReport from '../components/reports/PastoralCareReport';
 import { useAuth } from '../contexts/AuthContext';
-
-const ComingSoonWorkspace: React.FC<{ name: string }> = ({ name }) => (
-  <div
-    role="status"
-    aria-label={name}
-    className="rounded-lg border border-dashed border-gray-300 bg-white px-6 py-12 text-center shadow-sm dark:border-gray-600 dark:bg-gray-800"
-  >
-    <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{name}</h2>
-    <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-      Coming in the next implementation slice.
-    </p>
-  </div>
-);
 
 const ReportsPage: React.FC = () => {
   const { user } = useAuth();
@@ -76,7 +64,9 @@ const ReportsPage: React.FC = () => {
         tabIndex={0}
         hidden={activeTab !== 'pastoral-care'}
       >
-        {activeTab === 'pastoral-care' && <ComingSoonWorkspace name="Pastoral care" />}
+        {activeTab === 'pastoral-care' && user?.church_id && (
+          <PastoralCareReport key={user.church_id} churchId={user.church_id} />
+        )}
       </div>
     </div>
   );

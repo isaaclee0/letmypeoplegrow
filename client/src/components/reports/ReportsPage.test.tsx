@@ -89,8 +89,34 @@ vi.mock('../../services/api', () => ({
     getEngagementOverview: vi.fn().mockRejectedValue(new Error('offline')),
     getEngagementPeople: vi.fn(),
     getEngagementSessions: vi.fn(),
+    getPastoralInsights: vi.fn().mockResolvedValue({
+      data: {
+        schemaVersion: 1,
+        churchId: 'test-church',
+        window: { completedWeekEnd: '2026-08-16' },
+        insights: [],
+      },
+    }),
+    applyPastoralInsightAction: vi.fn(),
   },
-  settingsAPI: {},
+  settingsAPI: {
+    getEngagementSettings: vi.fn().mockResolvedValue({
+      data: {
+        settings: {
+          coreMinimum: 60,
+          casualMinimum: 20,
+          tiers: {
+            core: { label: 'Core', colour: '#166534' },
+            casual: { label: 'Casual', colour: '#b45309' },
+            irregular: { label: 'Irregular', colour: '#b91c1c' },
+          },
+          gatheringRoles: [],
+          calculationRulesVersion: 1,
+          assignmentPreview: { primaryAssigned: 0, communityAssigned: 0, primaryNotAssigned: 0 },
+        },
+      },
+    }),
+  },
   usersAPI: {
     getAll: vi.fn().mockResolvedValue({
       data: {
@@ -212,9 +238,14 @@ describe('ReportsPage selected period workspace', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Pastoral care' }));
 
-    expect(screen.getByRole('status', { name: 'Pastoral care' })).toHaveTextContent(
-      'Coming in the next implementation slice.',
-    );
+    expect(pastoralCareTab).toHaveAttribute('aria-selected', 'true');
+    expect(selectedPeriodPanel).toHaveAttribute('hidden');
+    expect(longTermPanel).toHaveAttribute('hidden');
+    expect(pastoralCarePanel).not.toHaveAttribute('hidden');
+    expect(await screen.findByRole('heading', { name: 'Pastoral care' })).toBeInTheDocument();
+    expect(screen.getByText('No pastoral care follow-up is currently open.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Gathering Types')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('2026-07-20')).not.toBeInTheDocument();
   });
 
   it('keeps caregiver results and actions bound to the displayed family after a family switch', async () => {
