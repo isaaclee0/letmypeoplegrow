@@ -22,6 +22,8 @@ function schedulerHarness({
   day = 'Friday',
   evaluatorError = null,
   lastSent = null,
+  reviewData = undefined,
+  mainGatheringData = true,
 } = {}) {
   const calls = { evaluations: [], reviews: [], digests: [] };
   const database = {
@@ -46,7 +48,7 @@ function schedulerHarness({
       if (evaluatorError) throw evaluatorError;
       return { completedWeekEnd: '2026-08-09' };
     },
-    generateWeeklyReviewData: async (churchId) => ({
+    generateWeeklyReviewData: async (churchId) => reviewData === undefined ? ({
       churchName: 'Test Church',
       weekStartDate: '2026-08-03',
       weekEndDate: '2026-08-09',
@@ -54,14 +56,14 @@ function schedulerHarness({
       weeklyTotals: [],
       recipients: [{ id: 7, email: 'admin@example.test', first_name: 'Admin' }],
       churchId,
-    }),
+    }) : reviewData,
     sendWeeklyReviewEmail: async (email) => calls.reviews.push(email),
     sendWeeklyCaregiverDigests: async (churchId, options) => calls.digests.push({
       churchId,
       now: options.now.toISOString(),
       includeAbsences: options.includeAbsences,
     }),
-    hasMainGatheringData: async () => true,
+    hasMainGatheringData: async () => mainGatheringData,
     generateInsight: async () => null,
     saveInsightAsConversation: async () => {},
   });
@@ -111,6 +113,39 @@ test('an already-sent week retries only pending decline deliveries without dupli
   assert.deepEqual(calls.digests, [{
     churchId: 'church-a',
     now: '2026-08-14T21:15:00.000Z',
+    includeAbsences: false,
+  }]);
+});
+
+test('missing weekly review data still attempts pending decline delivery without absence content', async () => {
+  const { calls, processChurch } = schedulerHarness({ enabled: 1, reviewData: null });
+  const now = new Date('2026-08-13T21:15:00.000Z');
+
+  await processChurch({ church_id: 'church-a' }, { now });
+
+  assert.equal(calls.evaluations.length, 1);
+  assert.deepEqual(calls.reviews, []);
+  assert.deepEqual(calls.digests, [{
+    churchId: 'church-a',
+    now: '2026-08-13T21:15:00.000Z',
+    includeAbsences: false,
+  }]);
+});
+
+test('primary-day attendance deferral still attempts pending decline delivery without absence content', async () => {
+  const { calls, processChurch } = schedulerHarness({
+    enabled: 1,
+    mainGatheringData: false,
+  });
+  const now = new Date('2026-08-13T21:15:00.000Z');
+
+  await processChurch({ church_id: 'church-a' }, { now });
+
+  assert.equal(calls.evaluations.length, 1);
+  assert.deepEqual(calls.reviews, []);
+  assert.deepEqual(calls.digests, [{
+    churchId: 'church-a',
+    now: '2026-08-13T21:15:00.000Z',
     includeAbsences: false,
   }]);
 });

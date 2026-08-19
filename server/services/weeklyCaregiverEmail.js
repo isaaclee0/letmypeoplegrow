@@ -90,7 +90,10 @@ async function loadAbsenceCards(churchId, threshold) {
        FROM attendance_sessions s JOIN gathering_types gt ON gt.id = s.gathering_type_id
        WHERE s.church_id = ? AND gt.church_id = ?
          AND gt.attendance_type = 'standard' AND gt.is_active = 1
-         AND s.excluded_from_stats = 0)
+         AND s.session_status = 'held'
+         AND s.excluded_from_stats = 0
+         AND (s.roster_provenance_version >= 1
+              OR (s.roster_provenance_version = 0 AND s.roster_snapshotted = 1)))
      SELECT id, session_date, gathering_type_id, gathering_name, frequency
      FROM ranked_sessions WHERE gathering_rank <= 12 ORDER BY session_date DESC, id DESC`,
     [churchId, churchId],
@@ -114,7 +117,10 @@ async function loadAbsenceCards(churchId, threshold) {
      JOIN attendance_sessions s ON s.id = ar.session_id AND s.church_id = ?
      JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.church_id = ?
      WHERE ar.individual_id IN (${ids.map(() => '?').join(',')}) AND ar.church_id = ?
-       AND ar.present = 1 AND gt.attendance_type = 'standard' AND s.excluded_from_stats = 0
+       AND ar.present = 1 AND gt.attendance_type = 'standard'
+       AND s.session_status = 'held' AND s.excluded_from_stats = 0
+       AND (s.roster_provenance_version >= 1
+            OR (s.roster_provenance_version = 0 AND s.roster_snapshotted = 1))
      ORDER BY s.session_date DESC, s.id DESC`,
     [churchId, churchId, ...ids, churchId],
   );

@@ -154,6 +154,7 @@ async function processChurch(church, options = {}) {
       const reviewData = await loadReview(churchId, { now });
       if (!reviewData) {
         console.log(`Weekly review: No attendance data for church ${churchId}, skipping`);
+        await sendCaregiverDigests(churchId, { now, includeAbsences: false });
         return;
       }
 
@@ -168,6 +169,7 @@ async function processChurch(church, options = {}) {
         );
         if (!hasData) {
           console.log(`Weekly review: Main gathering data not yet entered for church ${churchId}, deferring to ${retryDay}`);
+          await sendCaregiverDigests(churchId, { now, includeAbsences: false });
           return;
         }
       }

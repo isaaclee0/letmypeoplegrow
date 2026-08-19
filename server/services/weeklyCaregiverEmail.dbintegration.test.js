@@ -139,8 +139,10 @@ test('generateCaregiverDigests counts two missed weekly gatherings as one absenc
     for (const date of ['2026-07-12', '2026-07-19', '2026-07-26']) {
       for (const gatheringId of [amGathering.insertId, pmGathering.insertId]) {
         const session = await Database.query(
-          `INSERT INTO attendance_sessions (church_id, gathering_type_id, session_date, created_by)
-           VALUES (?, ?, ?, ?)`, [churchId, gatheringId, date, admin.insertId]
+          `INSERT INTO attendance_sessions
+             (church_id, gathering_type_id, session_date, created_by,
+              session_status, roster_provenance_version)
+           VALUES (?, ?, ?, ?, 'held', 1)`, [churchId, gatheringId, date, admin.insertId]
         );
         await Database.query(
           `INSERT INTO attendance_records (church_id, session_id, individual_id, present)
@@ -270,8 +272,9 @@ test('generateCaregiverDigests combines absence and decline reasons for the same
     );
     const session = await Database.query(
       `INSERT INTO attendance_sessions
-         (church_id, gathering_type_id, session_date, created_by)
-       VALUES (?, ?, '2026-08-09', ?)`,
+         (church_id, gathering_type_id, session_date, created_by,
+          session_status, roster_provenance_version)
+       VALUES (?, ?, '2026-08-09', ?, 'held', 1)`,
       [churchId, gathering.insertId, fixture.adminId],
     );
     await Database.query(
@@ -468,5 +471,136 @@ test('recovered snoozed and dismissed declines are excluded and a test send cons
       dismissed.deliveryId,
       open.deliveryId,
     ]);
+  });
+});
+
+async function seedAbsenceOnlyFixture(churchId, threshold) {
+  const admin = await Database.query(
+    `INSERT INTO users (church_id, email, role, first_name, last_name, is_active)
+     VALUES (?, 'absence-admin@example.test', 'admin', 'Admin', 'Example', 1)`,
+    [churchId],
+  );
+  const caregiver = await Database.query(
+    `INSERT INTO users
+       (church_id, email, role, first_name, last_name, is_active, email_notifications)
+     VALUES (?, 'absence-caregiver@example.test', 'coordinator', 'Care', 'Giver', 1, 1)`,
+    [churchId],
+  );
+  const family = await Database.query(
+    `INSERT INTO families (church_id, family_name, created_by)
+     VALUES (?, 'ABSENCE, A', ?)`,
+    [churchId, admin.insertId],
+  );
+  const person = await Database.query(
+    `INSERT INTO individuals
+       (church_id, first_name, last_name, family_id, people_type, is_active, created_by)
+     VALUES (?, 'Absent', 'Example', ?, 'regular', 1, ?)`,
+    [churchId, family.insertId, admin.insertId],
+  );
+  await Database.query(
+    `INSERT INTO family_caregivers (church_id, family_id, caregiver_type, user_id)
+     VALUES (?, ?, 'user', ?)`,
+    [churchId, family.insertId, caregiver.insertId],
+  );
+  await Database.query(
+    `UPDATE church_settings SET caregiver_absence_threshold = ? WHERE church_id = ?`,
+    [threshold, churchId],
+  );
+  const gathering = await Database.query(
+    `INSERT INTO gathering_types
+       (church_id, name, frequency, attendance_type, is_active, created_by)
+     VALUES (?, 'Sunday', 'weekly', 'standard', 1, ?)`,
+    [churchId, admin.insertId],
+  );
+  return {
+    adminId: admin.insertId,
+    personId: person.insertId,
+    gatheringId: gathering.insertId,
+  };
+}
+
+async function seedAbsenceSession(churchId, fixture, date, {
+  status = 'held',
+  provenanceVersion = 1,
+  rosterSnapshotted = 0,
+  present = 0,
+} = {}) {
+  const session = await Database.query(
+    `INSERT INTO attendance_sessions
+       (church_id, gathering_type_id, session_date, created_by, session_status,
+        roster_provenance_version, roster_snapshotted)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      churchId,
+      fixture.gatheringId,
+      date,
+      fixture.adminId,
+      status,
+      provenanceVersion,
+      rosterSnapshotted,
+    ],
+  );
+  await Database.query(
+    `INSERT INTO attendance_records
+       (church_id, session_id, individual_id, present, eligible_at_snapshot)
+     VALUES (?, ?, ?, ?, 1)`,
+    [churchId, session.insertId, fixture.personId, present],
+  );
+}
+
+test('absence reasons ignore cancelled open and unreliable sessions', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedAbsenceOnlyFixture(churchId, 2);
+    await seedAbsenceSession(churchId, fixture, '2026-07-19');
+    await seedAbsenceSession(churchId, fixture, '2026-07-26', { status: 'cancelled' });
+    await seedAbsenceSession(churchId, fixture, '2026-08-02', { status: 'open' });
+    await seedAbsenceSession(churchId, fixture, '2026-08-09', {
+      provenanceVersion: 0,
+      rosterSnapshotted: 0,
+    });
+
+    const digests = await generateCaregiverDigests(churchId, {
+      now: NOW,
+      includePendingDeclines: false,
+    });
+
+    assert.deepEqual(digests, []);
+  });
+});
+
+test('last-present evidence excludes ineligible sessions but retains disclosed version-zero snapshots', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedAbsenceOnlyFixture(churchId, 1);
+    await seedAbsenceSession(churchId, fixture, '2026-07-05', {
+      provenanceVersion: 0,
+      rosterSnapshotted: 1,
+      present: 1,
+    });
+    await seedAbsenceSession(churchId, fixture, '2026-07-12', {
+      provenanceVersion: 0,
+      rosterSnapshotted: 0,
+      present: 1,
+    });
+    await seedAbsenceSession(churchId, fixture, '2026-07-19', {
+      status: 'cancelled',
+      present: 1,
+    });
+    await seedAbsenceSession(churchId, fixture, '2026-07-26', {
+      status: 'open',
+      present: 1,
+    });
+    await seedAbsenceSession(churchId, fixture, '2026-08-02', { present: 0 });
+
+    const [digest] = await generateCaregiverDigests(churchId, {
+      now: NOW,
+      includePendingDeclines: false,
+    });
+
+    assert.deepEqual(digest.entries[0].reasons[0], {
+      type: 'consecutive_absence',
+      streak: 1,
+      gatheringName: 'Sunday',
+      lastPresentDates: ['2026-07-05'],
+    });
   });
 });
