@@ -10,13 +10,13 @@ const {
 const router = express.Router();
 const ACTION_KEYS = new Set(['action', 'snoozeUntil']);
 
-function pastoralError(res, error) {
+function pastoralError(res, error, operation = 'update') {
   if (error instanceof PastoralInsightError || error?.code?.startsWith('PASTORAL_')
       || error?.code === 'INVALID_PASTORAL_ACTION') {
     return res.status(error.status || 400).json({ error: error.message, code: error.code });
   }
   console.error('Pastoral report error:', error);
-  return res.status(500).json({ error: 'Failed to update the pastoral-care report.' });
+  return res.status(500).json({ error: `Failed to ${operation} the pastoral-care report.` });
 }
 
 function invalidBody(body) {
@@ -37,7 +37,7 @@ router.get('/', async (req, res) => {
       includeSnoozed: req.query.includeSnoozed === 'true',
     }));
   } catch (error) {
-    return pastoralError(res, error);
+    return pastoralError(res, error, 'load');
   }
 });
 

@@ -5,6 +5,7 @@ const {
   addDateOnly,
   getChurchDate,
   loadChurchTimeZone,
+  parseSqliteUtc,
 } = require('../../utils/churchTime');
 const { calculateEngagementProfiles } = require('./opportunities');
 
@@ -66,13 +67,8 @@ function candidateKey(type, source) {
   return `${type}:${source.completedWeekEnd}`;
 }
 
-function sqliteDate(value) {
-  return typeof value === 'string' ? value.slice(0, 10) : null;
-}
-
 async function loadPastoralSource(churchId, window) {
   const query = (sql, params) => Database.queryForChurch(churchId, sql, params);
-  const recoveryCutoff = addDateOnly(window.completedWeekEnd, { days: -27 });
   const [people, families, caregivers, lastAttendance, declineEvents, visitorAttendance] = await Promise.all([
     query(
       `SELECT id, first_name AS firstName, last_name AS lastName,
@@ -140,9 +136,8 @@ async function loadPastoralSource(churchId, window) {
               recovered_at AS recoveredAt
        FROM engagement_decline_events
        WHERE church_id = ?
-         AND (recovered_at IS NULL OR date(recovered_at) >= ?)
        ORDER BY id`,
-      [churchId, recoveryCutoff],
+      [churchId],
     ),
     query(
       `SELECT ar.individual_id AS individualId,
@@ -170,7 +165,7 @@ async function loadPastoralSource(churchId, window) {
   return { people, families, caregivers, lastAttendance, declineEvents, visitorAttendance };
 }
 
-function buildCandidates(source, profiles, window) {
+function buildCandidates(source, profiles, window, timeZone) {
   const peopleById = new Map(source.people.map((person) => [person.id, person]));
   const candidates = [];
   const activeRegular = (individualId) => {
@@ -197,9 +192,10 @@ function buildCandidates(source, profiles, window) {
       });
       continue;
     }
-    const recoveryDate = sqliteDate(event.recoveredAt);
+    const recoveryInstant = parseSqliteUtc(event.recoveredAt);
+    const recoveryDate = recoveryInstant ? getChurchDate(recoveryInstant, timeZone) : null;
     const recoveryCutoff = addDateOnly(window.completedWeekEnd, { days: -27 });
-    if (recoveryDate >= recoveryCutoff) {
+    if (recoveryDate !== null && recoveryDate >= recoveryCutoff) {
       candidates.push({
         type: INSIGHT_TYPES.RE_ENGAGEMENT,
         subjectId: event.individualId,
@@ -268,88 +264,88 @@ function uniqueEpisodeKey(candidate, states) {
   return `${candidate.episodeKey}:${recurrence}`;
 }
 
-async function reconcileStates(churchId, candidates, today) {
-  return Database.transactionForChurch(churchId, async (conn) => {
-    const activeIds = new Set();
-    const states = await conn.query(
-      `SELECT id, insight_type AS type, subject_id AS subjectId,
-              episode_key AS episodeKey, decline_event_id AS declineEventId,
-              workflow_state AS workflowState, snoozed_until AS snoozedUntil,
-              acted_by AS actedBy, resolved_at AS resolvedAt,
-              created_at AS createdAt, updated_at AS updatedAt
-       FROM pastoral_insight_states
-       WHERE church_id = ?
-       ORDER BY id`,
-      [churchId],
-    );
-    for (const candidate of candidates) {
-      let state = states.find((row) => row.type === candidate.type
-        && row.subjectId === candidate.subjectId
-        && row.episodeKey === candidate.episodeKey);
-      if (!state && candidate.recurringCondition) state = activeStateForCondition(states, candidate);
-      if (!state) {
-        const episodeKey = uniqueEpisodeKey(candidate, states);
-        const inserted = await conn.query(
-          `INSERT INTO pastoral_insight_states
-             (church_id, insight_type, subject_id, episode_key, decline_event_id,
-              workflow_state, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'open', datetime('now'), datetime('now'))`,
-          [churchId, candidate.type, candidate.subjectId, episodeKey, candidate.declineEventId],
-        );
-        state = {
-          id: inserted.insertId,
-          type: candidate.type,
-          subjectId: candidate.subjectId,
-          episodeKey,
-          declineEventId: candidate.declineEventId,
-          workflowState: 'open',
-          snoozedUntil: null,
-          actedBy: null,
-          resolvedAt: null,
-          createdAt: null,
-          updatedAt: null,
-        };
-        states.push(state);
-      }
-      activeIds.add(state.id);
-      candidate.stateId = state.id;
-      candidate.episodeKey = state.episodeKey;
-      if (state.workflowState === 'snoozed' && state.snoozedUntil <= today) {
-        await conn.query(
-          `UPDATE pastoral_insight_states
-           SET workflow_state = 'open', snoozed_until = NULL, updated_at = datetime('now')
-           WHERE church_id = ? AND id = ? AND workflow_state = 'snoozed'`,
-          [churchId, state.id],
-        );
-        state.workflowState = 'open';
-        state.snoozedUntil = null;
-      }
-    }
+function loadStates(conn, churchId) {
+  return conn.query(
+    `SELECT id, insight_type AS type, subject_id AS subjectId,
+            episode_key AS episodeKey, decline_event_id AS declineEventId,
+            workflow_state AS workflowState, snoozed_until AS snoozedUntil,
+            acted_by AS actedBy, resolved_at AS resolvedAt,
+            created_at AS createdAt, updated_at AS updatedAt
+     FROM pastoral_insight_states
+     WHERE church_id = ?
+     ORDER BY id`,
+    [churchId],
+  );
+}
 
-    for (const state of states) {
-      if (activeIds.has(state.id) || state.workflowState === 'resolved') continue;
+async function reconcileStatesWithConnection(conn, churchId, candidates, today) {
+  const activeIds = new Set();
+  const states = await loadStates(conn, churchId);
+  for (const candidate of candidates) {
+    let state = states.find((row) => row.type === candidate.type
+      && row.subjectId === candidate.subjectId
+      && row.episodeKey === candidate.episodeKey
+      && row.workflowState !== 'resolved');
+    if (!state && candidate.recurringCondition) state = activeStateForCondition(states, candidate);
+    if (!state) {
+      const episodeKey = uniqueEpisodeKey(candidate, states);
+      const inserted = await conn.query(
+        `INSERT INTO pastoral_insight_states
+           (church_id, insight_type, subject_id, episode_key, decline_event_id,
+            workflow_state, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'open', datetime('now'), datetime('now'))`,
+        [churchId, candidate.type, candidate.subjectId, episodeKey, candidate.declineEventId],
+      );
+      state = {
+        id: inserted.insertId,
+        type: candidate.type,
+        subjectId: candidate.subjectId,
+        episodeKey,
+        declineEventId: candidate.declineEventId,
+        workflowState: 'open',
+        snoozedUntil: null,
+        actedBy: null,
+        resolvedAt: null,
+        createdAt: null,
+        updatedAt: null,
+      };
+      states.push(state);
+    }
+    activeIds.add(state.id);
+    candidate.stateId = state.id;
+    candidate.episodeKey = state.episodeKey;
+    if (state.workflowState === 'snoozed' && state.snoozedUntil <= today) {
       await conn.query(
         `UPDATE pastoral_insight_states
-         SET workflow_state = 'resolved', snoozed_until = NULL,
-             resolved_at = datetime('now'), updated_at = datetime('now')
-         WHERE church_id = ? AND id = ?`,
+         SET workflow_state = 'open', snoozed_until = NULL, updated_at = datetime('now')
+         WHERE church_id = ? AND id = ? AND workflow_state = 'snoozed'`,
         [churchId, state.id],
       );
-      state.workflowState = 'resolved';
+      state.workflowState = 'open';
       state.snoozedUntil = null;
     }
-    return conn.query(
-      `SELECT id, insight_type AS type, subject_id AS subjectId,
-              episode_key AS episodeKey, decline_event_id AS declineEventId,
-              workflow_state AS workflowState, snoozed_until AS snoozedUntil,
-              acted_by AS actedBy, resolved_at AS resolvedAt,
-              created_at AS createdAt, updated_at AS updatedAt
-       FROM pastoral_insight_states
-       WHERE church_id = ?
-       ORDER BY id`,
-      [churchId],
+  }
+
+  for (const state of states) {
+    if (activeIds.has(state.id) || state.workflowState === 'resolved') continue;
+    await conn.query(
+      `UPDATE pastoral_insight_states
+       SET workflow_state = 'resolved', snoozed_until = NULL,
+           resolved_at = datetime('now'), updated_at = datetime('now')
+       WHERE church_id = ? AND id = ?`,
+      [churchId, state.id],
     );
-  });
+    state.workflowState = 'resolved';
+    state.snoozedUntil = null;
+  }
+  return loadStates(conn, churchId);
+}
+
+async function reconcileStates(churchId, candidates, today) {
+  return Database.transactionForChurch(
+    churchId,
+    (conn) => reconcileStatesWithConnection(conn, churchId, candidates, today),
+  );
 }
 
 function groupBy(rows, key) {
@@ -456,70 +452,76 @@ function insightRows(candidates, states, source, profiles, deliveries, options =
 async function buildPastoralInsights(churchId, options = {}) {
   if (!churchId) throw new Error('A church ID is required to load pastoral insights.');
   const asOf = options.asOf ?? new Date();
-  const [timeZone, profiles] = await Promise.all([
-    loadChurchTimeZone(churchId),
-    calculateEngagementProfiles(churchId, { asOf }),
-  ]);
-  const today = getChurchDate(asOf, timeZone);
-  const source = await loadPastoralSource(churchId, profiles.window);
-  const candidates = buildCandidates(source, profiles, profiles.window);
-  const states = await reconcileStates(churchId, candidates, today);
-  const eventIds = [...new Set(candidates
+  const facts = await loadPastoralFacts(churchId, asOf);
+  const states = await reconcileStates(churchId, facts.candidates, facts.today);
+  const eventIds = [...new Set(facts.candidates
     .map((candidate) => candidate.declineEventId)
     .filter((id) => id != null))];
   const deliveries = await deliverySummaries(churchId, eventIds);
   return {
     schemaVersion: 1,
     churchId,
-    window: { completedWeekEnd: profiles.window.completedWeekEnd },
-    insights: insightRows(candidates, states, source, profiles, deliveries, options),
+    window: { completedWeekEnd: facts.profiles.window.completedWeekEnd },
+    insights: insightRows(
+      facts.candidates,
+      states,
+      facts.source,
+      facts.profiles,
+      deliveries,
+      options,
+    ),
   };
+}
+
+async function loadPastoralFacts(churchId, asOf, knownTimeZone) {
+  const [timeZone, profiles] = await Promise.all([
+    knownTimeZone ? Promise.resolve(knownTimeZone) : loadChurchTimeZone(churchId),
+    calculateEngagementProfiles(churchId, { asOf }),
+  ]);
+  const today = getChurchDate(asOf, timeZone);
+  const source = await loadPastoralSource(churchId, profiles.window);
+  const candidates = buildCandidates(source, profiles, profiles.window, timeZone);
+  return { timeZone, today, profiles, source, candidates };
 }
 
 async function getPastoralInsights(churchId, options = {}) {
   return buildPastoralInsights(churchId, options);
 }
 
-async function applyPastoralInsightAction(churchId, actorId, insightId, input) {
+async function applyPastoralInsightAction(churchId, actorId, insightId, input, options = {}) {
   if (!churchId) throw new Error('A church ID is required to change a pastoral insight.');
   const numericInsightId = Number(insightId);
   if (!Number.isInteger(numericInsightId) || numericInsightId <= 0) notFound();
+  const actionNow = options.now ?? new Date();
   const timeZone = await loadChurchTimeZone(churchId);
-  const today = getChurchDate(new Date(), timeZone);
+  const today = getChurchDate(actionNow, timeZone);
   validateAction(input, today);
 
-  const [stateRows, actorRows] = await Promise.all([
-    Database.queryForChurch(
+  const outcome = await Database.transactionForChurch(churchId, async (conn) => {
+    const facts = await loadPastoralFacts(churchId, actionNow, timeZone);
+    const states = await reconcileStatesWithConnection(
+      conn,
       churchId,
-      `SELECT id, insight_type AS type, decline_event_id AS declineEventId,
-              workflow_state AS workflowState
-       FROM pastoral_insight_states
-       WHERE church_id = ? AND id = ?`,
-      [churchId, numericInsightId],
-    ),
-    Database.queryForChurch(
-      churchId,
+      facts.candidates,
+      facts.today,
+    );
+    const candidate = facts.candidates.find((row) => row.stateId === numericInsightId);
+    const state = states.find((row) => row.id === numericInsightId);
+    if (!candidate || !state || state.workflowState === 'resolved') {
+      return { notFound: true };
+    }
+    const actorRows = await conn.query(
       `SELECT id FROM users WHERE church_id = ? AND id = ? AND is_active = 1`,
       [churchId, actorId],
-    ),
-  ]);
-  const [state] = stateRows;
-  if (!state || state.workflowState === 'resolved') notFound();
-  if (actorRows.length === 0) {
-    throw new PastoralInsightError(
-      'Pastoral workflow actor not found.',
-      'PASTORAL_ACTOR_NOT_FOUND',
-      403,
     );
-  }
+    if (actorRows.length === 0) return { actorNotFound: true };
 
-  await Database.transactionForChurch(churchId, async (conn) => {
     if (input.action === 'snooze') {
       await conn.query(
         `UPDATE pastoral_insight_states
          SET workflow_state = 'snoozed', snoozed_until = ?, acted_by = ?,
              resolved_at = NULL, updated_at = datetime('now')
-         WHERE church_id = ? AND id = ?`,
+         WHERE church_id = ? AND id = ? AND workflow_state <> 'resolved'`,
         [input.snoozeUntil, actorId, churchId, numericInsightId],
       );
     } else if (input.action === 'dismiss') {
@@ -527,7 +529,7 @@ async function applyPastoralInsightAction(churchId, actorId, insightId, input) {
         `UPDATE pastoral_insight_states
          SET workflow_state = 'dismissed', snoozed_until = NULL, acted_by = ?,
              resolved_at = NULL, updated_at = datetime('now')
-         WHERE church_id = ? AND id = ?`,
+         WHERE church_id = ? AND id = ? AND workflow_state <> 'resolved'`,
         [actorId, churchId, numericInsightId],
       );
       if (state.type === INSIGHT_TYPES.DECLINE && state.declineEventId != null) {
@@ -544,14 +546,34 @@ async function applyPastoralInsightAction(churchId, actorId, insightId, input) {
         `UPDATE pastoral_insight_states
          SET workflow_state = 'open', snoozed_until = NULL, acted_by = ?,
              resolved_at = NULL, updated_at = datetime('now')
-         WHERE church_id = ? AND id = ?`,
+         WHERE church_id = ? AND id = ? AND workflow_state <> 'resolved'`,
         [actorId, churchId, numericInsightId],
       );
     }
+    return { facts, states: await loadStates(conn, churchId) };
   });
 
-  const response = await buildPastoralInsights(churchId, { includeSnoozed: true, includeAll: true });
-  const insight = response.insights.find((row) => row.id === numericInsightId);
+  if (outcome.notFound) notFound();
+  if (outcome.actorNotFound) {
+    throw new PastoralInsightError(
+      'Pastoral workflow actor not found.',
+      'PASTORAL_ACTOR_NOT_FOUND',
+      403,
+    );
+  }
+
+  const eventIds = [...new Set(outcome.facts.candidates
+    .map((candidate) => candidate.declineEventId)
+    .filter((id) => id != null))];
+  const deliveries = await deliverySummaries(churchId, eventIds);
+  const insight = insightRows(
+    outcome.facts.candidates,
+    outcome.states,
+    outcome.facts.source,
+    outcome.facts.profiles,
+    deliveries,
+    { includeSnoozed: true, includeAll: true },
+  ).find((row) => row.id === numericInsightId);
   if (!insight) notFound();
   return insight;
 }

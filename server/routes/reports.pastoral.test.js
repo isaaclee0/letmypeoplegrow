@@ -143,3 +143,20 @@ test('PATCH derives factual fields on the server and denies cross-church insight
     }
   });
 });
+
+test('GET reports a load failure instead of an update failure', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const app = await startApp(churchId, 'admin');
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      Database.getChurchDb(churchId).exec('DROP TABLE church_settings');
+      const response = await app.request('/pastoral');
+      assert.equal(response.status, 500);
+      assert.equal(response.body.error, 'Failed to load the pastoral-care report.');
+    } finally {
+      console.error = originalConsoleError;
+      await app.close();
+    }
+  });
+});

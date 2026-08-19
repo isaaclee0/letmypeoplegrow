@@ -109,13 +109,14 @@ async function seedDecline(churchId, subject, {
   fromTier = 'core',
   toTier = 'irregular',
   effectiveWeekEnd = '2026-08-09',
+  detectedAt = '2026-08-10 08:00:00',
   recoveredAt = null,
 } = {}) {
   const event = await Database.query(
     `INSERT INTO engagement_decline_events
        (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
         effective_week_end, rules_version, detected_at, recovered_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, '2026-08-10 08:00:00', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     [
       churchId,
       subject.personId,
@@ -123,6 +124,7 @@ async function seedDecline(churchId, subject, {
       fromTier,
       toTier,
       effectiveWeekEnd,
+      detectedAt,
       recoveredAt,
     ],
   );
@@ -206,7 +208,7 @@ test('reconciles decline and re-engagement episodes from factual events without 
   });
 });
 
-test('community-connected primary-irregular episodes resolve on assignment removal and recur with a new key', async () => {
+test('community-connected primary-irregular episodes can resolve and recur within one completed week', async () => {
   await withTestChurchDb(async (churchId) => {
     const actorId = await seedActor(churchId);
     const subject = await seedFamilyPerson(churchId, actorId, { firstName: 'Morgan' });
@@ -240,16 +242,16 @@ test('community-connected primary-irregular episodes resolve on assignment remov
       [churchId, communityId, subject.personId],
     );
     assert.equal(byType(
-      await getPastoralInsights(churchId, { asOf: new Date('2026-08-26T02:00:00.000Z') }),
+      await getPastoralInsights(churchId, { asOf: AS_OF }),
       'community_primary_gap',
     ), undefined);
 
     await assign(churchId, actorId, communityId, subject.personId);
     const recurrence = byType(
-      await getPastoralInsights(churchId, { asOf: new Date('2026-09-02T02:00:00.000Z') }),
+      await getPastoralInsights(churchId, { asOf: AS_OF }),
       'community_primary_gap',
     );
-    assert.equal(recurrence.episodeKey, 'community_primary_gap:2026-08-30');
+    assert.equal(recurrence.episodeKey, 'community_primary_gap:2026-08-16:2');
     assert.notEqual(recurrence.id, first.id);
 
     await Database.query(
@@ -260,6 +262,30 @@ test('community-connected primary-irregular episodes resolve on assignment remov
       await getPastoralInsights(churchId, { asOf: new Date('2026-09-09T02:00:00.000Z') }),
       'community_primary_gap',
     ), undefined);
+  });
+});
+
+test('re-engagement uses the church-local recovery date at the four-week boundary', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `UPDATE church_settings SET timezone = 'Pacific/Kiritimati' WHERE church_id = ?`,
+      [churchId],
+    );
+    const actorId = await seedActor(churchId);
+    const subject = await seedFamilyPerson(churchId, actorId, { firstName: 'Kira' });
+    const eventId = await seedDecline(churchId, subject, {
+      effectiveWeekEnd: '2026-08-02',
+      detectedAt: '2026-08-03 08:00:00',
+      // 2026-08-10 01:30 in Kiritimati: exactly the local-date cutoff for Sep 6.
+      recoveredAt: '2026-08-09 11:30:00',
+    });
+
+    const response = await getPastoralInsights(churchId, {
+      asOf: new Date('2026-09-09T02:00:00.000Z'),
+    });
+    const insight = byType(response, 're_engagement');
+    assert.equal(insight.declineEventId, eventId);
+    assert.equal(insight.evidence.recoveredAt, '2026-08-09 11:30:00');
   });
 });
 
@@ -346,7 +372,11 @@ test('snooze, dismiss, and reopen affect only pending delivery and workspace wor
     const actorId = await seedActor(churchId);
     const subject = await seedFamilyPerson(churchId, actorId, { firstName: 'Sam' });
     const caregiver = await seedCaregiver(churchId, subject.familyId);
-    const eventId = await seedDecline(churchId, subject);
+    const workflowNow = new Date('2025-08-19T02:00:00.000Z');
+    const eventId = await seedDecline(churchId, subject, {
+      effectiveWeekEnd: '2025-08-10',
+      detectedAt: '2025-08-11 08:00:00',
+    });
     await Database.query(
       `INSERT INTO engagement_decline_deliveries
          (church_id, event_id, recipient_type, recipient_id, family_caregiver_id, state)
@@ -356,11 +386,11 @@ test('snooze, dismiss, and reopen affect only pending delivery and workspace wor
     const initial = byType(await getPastoralInsights(churchId, { asOf: AS_OF }), 'primary_decline');
 
     await applyPastoralInsightAction(churchId, actorId, initial.id, {
-      action: 'snooze', snoozeUntil: '2026-08-25',
-    });
-    assert.equal(byType(await getPastoralInsights(churchId, { asOf: AS_OF }), 'primary_decline'), undefined);
+      action: 'snooze', snoozeUntil: '2025-08-25',
+    }, { now: workflowNow });
+    assert.equal(byType(await getPastoralInsights(churchId, { asOf: workflowNow }), 'primary_decline'), undefined);
     const snoozed = byType(await getPastoralInsights(churchId, {
-      asOf: AS_OF, includeSnoozed: true,
+      asOf: workflowNow, includeSnoozed: true,
     }), 'primary_decline');
     assert.equal(snoozed.workflow.state, 'snoozed');
     assert.equal((await Database.query(
@@ -368,7 +398,7 @@ test('snooze, dismiss, and reopen affect only pending delivery and workspace wor
       [churchId, eventId],
     ))[0].state, 'pending');
     const awakened = byType(await getPastoralInsights(churchId, {
-      asOf: new Date('2026-08-25T02:00:00.000Z'),
+      asOf: new Date('2025-08-25T02:00:00.000Z'),
     }), 'primary_decline');
     assert.equal(awakened.workflow.state, 'open');
 
@@ -420,6 +450,51 @@ test('snooze, dismiss, and reopen affect only pending delivery and workspace wor
       asOf: new Date('2026-08-26T02:00:00.000Z'),
     });
     assert.ok(later.insights.some((row) => row.declineEventId === thirdEvent));
+  });
+});
+
+test('a stale action reconciles factual recovery before mutating workflow or delivery', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const actorId = await seedActor(churchId);
+    const subject = await seedFamilyPerson(churchId, actorId, { firstName: 'Stale' });
+    const caregiver = await seedCaregiver(churchId, subject.familyId);
+    const eventId = await seedDecline(churchId, subject);
+    await Database.query(
+      `INSERT INTO engagement_decline_deliveries
+         (church_id, event_id, recipient_type, recipient_id, family_caregiver_id, state)
+       VALUES (?, ?, 'user', ?, ?, 'pending')`,
+      [churchId, eventId, caregiver.userId, caregiver.assignmentId],
+    );
+    const insight = byType(
+      await getPastoralInsights(churchId, { asOf: AS_OF }),
+      'primary_decline',
+    );
+    await Database.query(
+      `UPDATE engagement_decline_events SET recovered_at = '2026-08-18 01:00:00'
+       WHERE church_id = ? AND id = ?`,
+      [churchId, eventId],
+    );
+
+    await assert.rejects(
+      applyPastoralInsightAction(
+        churchId,
+        actorId,
+        insight.id,
+        { action: 'dismiss' },
+        { now: AS_OF },
+      ),
+      (error) => error.code === 'PASTORAL_INSIGHT_NOT_FOUND',
+    );
+    assert.deepEqual((await Database.query(
+      `SELECT workflow_state AS workflowState
+       FROM pastoral_insight_states WHERE church_id = ? AND id = ?`,
+      [churchId, insight.id],
+    ))[0], { workflowState: 'resolved' });
+    assert.deepEqual((await Database.query(
+      `SELECT state, cancellation_reason AS cancellationReason
+       FROM engagement_decline_deliveries WHERE church_id = ? AND event_id = ?`,
+      [churchId, eventId],
+    ))[0], { state: 'pending', cancellationReason: null });
   });
 });
 
