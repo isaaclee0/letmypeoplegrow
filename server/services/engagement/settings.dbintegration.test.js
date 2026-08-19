@@ -55,6 +55,20 @@ function completeInput(gatheringRoles, overrides = {}) {
   };
 }
 
+async function measureDatabaseQueries(operation) {
+  const originalExecuteQuery = Database._executeQuery;
+  let queryCount = 0;
+  Database._executeQuery = (...args) => {
+    queryCount += 1;
+    return originalExecuteQuery.call(Database, ...args);
+  };
+  try {
+    return { result: await operation(), queryCount };
+  } finally {
+    Database._executeQuery = originalExecuteQuery;
+  }
+}
+
 test('defaults leave every gathering unclassified without inferring from its name', async () => {
   await withTestChurchDb(async (churchId) => {
     const sundayId = await seedGathering(churchId, 'Sunday Primary Worship');
@@ -150,6 +164,39 @@ test('an atomic update persists complete roles and previews active standard-gath
       { id: headcountId, role: 'primary' },
       { id: inactiveId, role: 'other' },
     ]);
+  });
+});
+
+test('updates a large gathering-role set with bounded database queries', async (t) => {
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    const gatheringIds = db.transaction(() => {
+      const insert = db.prepare(
+        `INSERT INTO gathering_types
+           (name, attendance_type, is_active, engagement_role, church_id)
+         VALUES (?, 'standard', 1, NULL, ?)`,
+      );
+      return Array.from({ length: 100 }, (_, index) => Number(
+        insert.run(`Gathering ${index + 1}`, churchId).lastInsertRowid,
+      ));
+    })();
+    const gatheringRoles = gatheringIds.map((gatheringTypeId, index) => ({
+      gatheringTypeId,
+      role: index % 2 === 0 ? 'primary' : 'community',
+    }));
+
+    const measured = await measureDatabaseQueries(() => updateEngagementSettings(
+      churchId,
+      41,
+      completeInput(gatheringRoles),
+    ));
+
+    assert.equal(measured.result.gatheringRoles.length, 100);
+    assert.ok(
+      measured.queryCount <= 7,
+      `expected bounded settings queries, received ${measured.queryCount}`,
+    );
+    t.diagnostic(`measured ${measured.queryCount} settings queries for 100 gatherings`);
   });
 });
 

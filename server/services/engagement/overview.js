@@ -5,7 +5,6 @@ const { addDateOnly, loadChurchTimeZone } = require('../../utils/churchTime');
 const { getEngagementSettings } = require('./settings');
 const {
   getEngagementWindow,
-  loadOpportunitySource,
   buildOpportunityProfiles,
 } = require('./opportunities');
 const {
@@ -402,7 +401,7 @@ function buildVisitorJourney({ churchId, cohorts, window, expiresAt }) {
 
 async function loadOverviewSource(churchId, window) {
   const query = (sql, params) => Database.queryForChurch(churchId, sql, params);
-  const [gatherings, people, sessions, records, headcounts, visitorRows] = await Promise.all([
+  const [gatherings, people, assignments, sessions, records, headcounts, visitorRows] = await Promise.all([
     query(
       `SELECT id, attendance_type AS attendanceType, engagement_role AS engagementRole,
               is_active AS isActive
@@ -412,13 +411,35 @@ async function loadOverviewSource(churchId, window) {
       [churchId],
     ),
     query(
-      `SELECT id AS individualId, first_name AS firstName, last_name AS lastName,
-              family_id AS familyId, people_type AS currentPeopleType,
+      `SELECT id, id AS individualId, first_name AS firstName, last_name AS lastName,
+              family_id AS familyId, people_type AS peopleType,
+              people_type AS currentPeopleType,
               is_active AS isActive
        FROM individuals
        WHERE church_id = ?
        ORDER BY id`,
       [churchId],
+    ),
+    query(
+      `SELECT DISTINCT
+              gl.individual_id AS individualId,
+              gl.gathering_type_id AS gatheringTypeId,
+              gt.engagement_role AS role
+       FROM gathering_lists gl
+       JOIN individuals i
+         ON i.id = gl.individual_id
+        AND i.church_id = ?
+        AND i.is_active = 1
+        AND i.people_type = 'regular'
+       JOIN gathering_types gt
+         ON gt.id = gl.gathering_type_id
+        AND gt.church_id = ?
+        AND gt.is_active = 1
+        AND gt.attendance_type = 'standard'
+        AND gt.engagement_role IN ('primary', 'community')
+       WHERE gl.church_id = ?
+       ORDER BY gl.individual_id, gl.gathering_type_id`,
+      [churchId, churchId, churchId],
     ),
     query(
       `SELECT s.id, s.gathering_type_id AS gatheringTypeId,
@@ -429,22 +450,25 @@ async function loadOverviewSource(churchId, window) {
               s.roster_provenance_version AS rosterProvenanceVersion,
               s.headcount_mode AS headcountMode,
               gt.attendance_type AS attendanceType,
-              gt.engagement_role AS engagementRole
+              gt.engagement_role AS engagementRole,
+              gt.is_active AS gatheringIsActive
        FROM attendance_sessions s
        JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.church_id = ?
        WHERE s.church_id = ?
          AND s.session_date >= ? AND s.session_date <= ?
        ORDER BY s.session_date, s.id`,
-      [churchId, churchId, window.currentStart, window.currentEnd],
+      [churchId, churchId, window.sourceStart, window.sourceEnd],
     ),
     query(
-      `SELECT ar.session_id AS sessionId, ar.individual_id AS individualId, ar.present
+      `SELECT ar.session_id AS sessionId, ar.individual_id AS individualId, ar.present,
+              ar.eligible_at_snapshot AS eligibleAtSnapshot,
+              ar.people_type_at_time AS peopleTypeAtTime
        FROM attendance_records ar
        JOIN attendance_sessions s ON s.id = ar.session_id AND s.church_id = ?
        WHERE ar.church_id = ?
          AND s.session_date >= ? AND s.session_date <= ?
        ORDER BY ar.session_id, ar.individual_id`,
-      [churchId, churchId, window.currentStart, window.currentEnd],
+      [churchId, churchId, window.sourceStart, window.sourceEnd],
     ),
     query(
       `SELECT hr.session_id AS sessionId, hr.headcount
@@ -453,7 +477,7 @@ async function loadOverviewSource(churchId, window) {
        WHERE hr.church_id = ?
          AND s.session_date >= ? AND s.session_date <= ?
        ORDER BY hr.session_id, hr.id`,
-      [churchId, churchId, window.currentStart, window.currentEnd],
+      [churchId, churchId, window.sourceStart, window.sourceEnd],
     ),
     query(
       `SELECT ar.individual_id AS individualId, ar.session_id AS sessionId,
@@ -478,7 +502,7 @@ async function loadOverviewSource(churchId, window) {
       [churchId, churchId, churchId, churchId, window.currentEnd],
     ),
   ]);
-  return { gatherings, people, sessions, records, headcounts, visitorRows };
+  return { gatherings, people, assignments, sessions, records, headcounts, visitorRows };
 }
 
 async function buildState(churchId, options = {}) {
@@ -495,10 +519,14 @@ async function buildState(churchId, options = {}) {
   if (options.completedWeekEnd && window.completedWeekEnd !== options.completedWeekEnd) {
     throw new DrilldownTokenError();
   }
-  const [opportunitySource, overviewSource] = await Promise.all([
-    loadOpportunitySource(churchId, window),
-    loadOverviewSource(churchId, window),
-  ]);
+  const overviewSource = await loadOverviewSource(churchId, window);
+  const opportunitySource = {
+    people: overviewSource.people,
+    assignments: overviewSource.assignments,
+    sessions: overviewSource.sessions,
+    records: overviewSource.records,
+    headcounts: overviewSource.headcounts,
+  };
   const profiles = buildOpportunityProfiles(opportunitySource, settings, window);
   const cohorts = visitorCohorts(overviewSource.visitorRows, window);
   return { window, settings, profiles, overviewSource, cohorts };

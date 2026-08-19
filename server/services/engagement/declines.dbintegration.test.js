@@ -27,6 +27,20 @@ function asOfAfter(completedWeekEnd) {
   return `${addDays(completedWeekEnd, 1)}T12:00:00.000Z`;
 }
 
+async function measureDatabaseQueries(operation) {
+  const originalExecuteQuery = Database._executeQuery;
+  let queryCount = 0;
+  Database._executeQuery = (...args) => {
+    queryCount += 1;
+    return originalExecuteQuery.call(Database, ...args);
+  };
+  try {
+    return { result: await operation(), queryCount };
+  } finally {
+    Database._executeQuery = originalExecuteQuery;
+  }
+}
+
 async function seedChurch(churchId) {
   await Database.query(
     `UPDATE church_settings SET timezone = 'UTC' WHERE church_id = ?`,
@@ -231,6 +245,33 @@ test('activation and rules-version changes baseline existing declines without al
     assert.equal(versionBaseline.baselined, 1);
     assert.equal(versionBaseline.eventsCreated, 0);
     assert.equal((await events(churchId)).length, 0);
+  });
+});
+
+test('baselines a large regular roster with bounded database queries', async (t) => {
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.transaction(() => {
+      const insert = db.prepare(
+        `INSERT INTO individuals
+           (first_name, last_name, people_type, is_active, church_id)
+         VALUES (?, 'Bulk', 'regular', 1, ?)`,
+      );
+      for (let index = 1; index <= 100; index += 1) {
+        insert.run(`Person ${index}`, churchId);
+      }
+    })();
+
+    const measured = await measureDatabaseQueries(() => evaluateEngagementDeclines(churchId, {
+      asOf: AS_OF,
+    }));
+
+    assert.equal(measured.result.baselined, 100);
+    assert.ok(
+      measured.queryCount <= 12,
+      `expected bounded decline evaluation queries, received ${measured.queryCount}`,
+    );
+    t.diagnostic(`measured ${measured.queryCount} decline evaluation queries for 100 regulars`);
   });
 });
 
@@ -628,6 +669,46 @@ test('snapshots every email-eligible stable caregiver ID and deduplicates crash-
       )));
     assert.equal(noFamily.eventCreated, 1);
     assert.equal(noFamily.deliveriesCreated, 0);
+  });
+});
+
+test('snapshots a large caregiver set with bounded database queries', async (t) => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const familyId = await seedFamily(churchId, 'Bulk caregivers');
+    const individualId = await seedPerson(churchId, fixture, { familyId });
+    const db = Database.getChurchDb(churchId);
+    db.transaction(() => {
+      const insertUser = db.prepare(
+        `INSERT INTO users
+           (church_id, email, role, first_name, last_name, is_active, email_notifications)
+         VALUES (?, ?, 'coordinator', 'Bulk', 'Caregiver', 1, 1)`,
+      );
+      const assign = db.prepare(
+        `INSERT INTO family_caregivers
+           (church_id, family_id, caregiver_type, user_id)
+         VALUES (?, ?, 'user', ?)`,
+      );
+      for (let index = 1; index <= 100; index += 1) {
+        const user = insertUser.run(churchId, `bulk-${index}-${churchId}@example.test`);
+        assign.run(churchId, familyId, user.lastInsertRowid);
+      }
+    })();
+
+    const measured = await measureDatabaseQueries(() => Database.transactionForChurch(
+      churchId,
+      (conn) => createEligibleDeliveryRowsWithConnection(
+        conn,
+        detectionInput(churchId, individualId, familyId),
+      ),
+    ));
+
+    assert.equal(measured.result.deliveriesCreated, 100);
+    assert.ok(
+      measured.queryCount <= 2,
+      `expected bounded caregiver snapshot queries, received ${measured.queryCount}`,
+    );
+    t.diagnostic(`measured ${measured.queryCount} caregiver snapshot queries for 100 recipients`);
   });
 });
 

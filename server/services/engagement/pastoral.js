@@ -281,6 +281,8 @@ function loadStates(conn, churchId) {
 async function reconcileStatesWithConnection(conn, churchId, candidates, today) {
   const activeIds = new Set();
   const states = await loadStates(conn, churchId);
+  const statesToInsert = [];
+  const expiredSnoozeIds = [];
   for (const candidate of candidates) {
     let state = states.find((row) => row.type === candidate.type
       && row.subjectId === candidate.subjectId
@@ -289,15 +291,8 @@ async function reconcileStatesWithConnection(conn, churchId, candidates, today) 
     if (!state && candidate.recurringCondition) state = activeStateForCondition(states, candidate);
     if (!state) {
       const episodeKey = uniqueEpisodeKey(candidate, states);
-      const inserted = await conn.query(
-        `INSERT INTO pastoral_insight_states
-           (church_id, insight_type, subject_id, episode_key, decline_event_id,
-            workflow_state, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'open', datetime('now'), datetime('now'))`,
-        [churchId, candidate.type, candidate.subjectId, episodeKey, candidate.declineEventId],
-      );
       state = {
-        id: inserted.insertId,
+        id: null,
         type: candidate.type,
         subjectId: candidate.subjectId,
         episodeKey,
@@ -309,36 +304,77 @@ async function reconcileStatesWithConnection(conn, churchId, candidates, today) 
         createdAt: null,
         updatedAt: null,
       };
+      statesToInsert.push(state);
       states.push(state);
     }
-    activeIds.add(state.id);
-    candidate.stateId = state.id;
+    if (state.id != null) activeIds.add(state.id);
     candidate.episodeKey = state.episodeKey;
     if (state.workflowState === 'snoozed' && state.snoozedUntil <= today) {
-      await conn.query(
-        `UPDATE pastoral_insight_states
-         SET workflow_state = 'open', snoozed_until = NULL, updated_at = datetime('now')
-         WHERE church_id = ? AND id = ? AND workflow_state = 'snoozed'`,
-        [churchId, state.id],
-      );
+      expiredSnoozeIds.push(state.id);
       state.workflowState = 'open';
       state.snoozedUntil = null;
     }
   }
 
-  for (const state of states) {
-    if (activeIds.has(state.id) || state.workflowState === 'resolved') continue;
+  const resolvedIds = states
+    .filter((state) => state.id != null
+      && !activeIds.has(state.id)
+      && state.workflowState !== 'resolved')
+    .map((state) => state.id);
+
+  if (statesToInsert.length > 0) {
+    await conn.query(
+      `INSERT INTO pastoral_insight_states
+         (church_id, insight_type, subject_id, episode_key, decline_event_id,
+          workflow_state, created_at, updated_at)
+       SELECT ?,
+              json_extract(candidate.value, '$.type'),
+              CAST(json_extract(candidate.value, '$.subjectId') AS INTEGER),
+              json_extract(candidate.value, '$.episodeKey'),
+              CAST(json_extract(candidate.value, '$.declineEventId') AS INTEGER),
+              'open', datetime('now'), datetime('now')
+       FROM json_each(?) candidate
+       WHERE 1
+       ON CONFLICT(church_id, insight_type, subject_id, episode_key) DO NOTHING`,
+      [churchId, JSON.stringify(statesToInsert)],
+    );
+  }
+
+  const lifecycleIds = [...new Set([...expiredSnoozeIds, ...resolvedIds])];
+  if (lifecycleIds.length > 0) {
     await conn.query(
       `UPDATE pastoral_insight_states
-       SET workflow_state = 'resolved', snoozed_until = NULL,
-           resolved_at = datetime('now'), updated_at = datetime('now')
-       WHERE church_id = ? AND id = ?`,
-      [churchId, state.id],
+       SET workflow_state = CASE
+             WHEN id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) THEN 'open'
+             ELSE 'resolved'
+           END,
+           snoozed_until = NULL,
+           resolved_at = CASE
+             WHEN id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+               THEN datetime('now')
+             ELSE resolved_at
+           END,
+           updated_at = datetime('now')
+       WHERE church_id = ?
+         AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`,
+      [
+        JSON.stringify(expiredSnoozeIds),
+        JSON.stringify(resolvedIds),
+        churchId,
+        JSON.stringify(lifecycleIds),
+      ],
     );
-    state.workflowState = 'resolved';
-    state.snoozedUntil = null;
   }
-  return loadStates(conn, churchId);
+
+  const reconciled = await loadStates(conn, churchId);
+  for (const candidate of candidates) {
+    const state = reconciled.find((row) => row.type === candidate.type
+      && row.subjectId === candidate.subjectId
+      && row.episodeKey === candidate.episodeKey
+      && row.workflowState !== 'resolved');
+    if (state) candidate.stateId = state.id;
+  }
+  return reconciled;
 }
 
 async function reconcileStates(churchId, candidates, today) {

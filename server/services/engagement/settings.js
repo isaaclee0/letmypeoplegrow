@@ -240,16 +240,25 @@ async function updateEngagementSettings(churchId, actorId, input) {
       ],
     );
 
-    for (const assignment of normalized.gatheringRoles) {
-      const result = await query(
-        `UPDATE gathering_types
-         SET engagement_role = ?, updated_at = datetime('now')
-         WHERE id = ? AND church_id = ?`,
-        [assignment.role, assignment.gatheringTypeId, churchId],
-      );
-      if (result.affectedRows !== 1) {
-        invalid('A gathering role no longer belongs to this church.');
-      }
+    const gatheringRolesJson = JSON.stringify(normalized.gatheringRoles);
+    const rolesResult = await query(
+      `UPDATE gathering_types
+       SET engagement_role = (
+             SELECT json_extract(role.value, '$.role')
+             FROM json_each(?) role
+             WHERE CAST(json_extract(role.value, '$.gatheringTypeId') AS INTEGER)
+               = gathering_types.id
+           ),
+           updated_at = datetime('now')
+       WHERE church_id = ?
+         AND id IN (
+           SELECT CAST(json_extract(role.value, '$.gatheringTypeId') AS INTEGER)
+           FROM json_each(?) role
+         )`,
+      [gatheringRolesJson, churchId, gatheringRolesJson],
+    );
+    if (rolesResult.affectedRows !== normalized.gatheringRoles.length) {
+      invalid('A gathering role no longer belongs to this church.');
     }
   });
 

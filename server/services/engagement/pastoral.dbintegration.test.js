@@ -15,6 +15,20 @@ const {
 
 const AS_OF = new Date('2026-08-19T02:00:00.000Z');
 
+async function measureDatabaseQueries(operation) {
+  const originalExecuteQuery = Database._executeQuery;
+  let queryCount = 0;
+  Database._executeQuery = (...args) => {
+    queryCount += 1;
+    return originalExecuteQuery.call(Database, ...args);
+  };
+  try {
+    return { result: await operation(), queryCount };
+  } finally {
+    Database._executeQuery = originalExecuteQuery;
+  }
+}
+
 async function seedActor(churchId, role = 'admin') {
   const result = await Database.query(
     `INSERT INTO users
@@ -205,6 +219,67 @@ test('reconciles decline and re-engagement episodes from factual events without 
        WHERE church_id = ? AND insight_type = 're_engagement'`,
       [churchId],
     ))[0].state, 'resolved');
+  });
+});
+
+test('reconciles a large pastoral workspace with bounded database queries', async (t) => {
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.transaction(() => {
+      const insertPerson = db.prepare(
+        `INSERT INTO individuals
+           (first_name, last_name, people_type, is_active, church_id)
+         VALUES (?, 'Bulk', 'regular', 1, ?)`,
+      );
+      const insertEvent = db.prepare(
+        `INSERT INTO engagement_decline_events
+           (church_id, individual_id, from_tier, to_tier,
+            effective_week_end, rules_version, detected_at)
+         VALUES (?, ?, 'core', 'irregular', '2026-08-09', 1, '2026-08-10 08:00:00')`,
+      );
+      const insertState = db.prepare(
+        `INSERT INTO pastoral_insight_states
+           (church_id, insight_type, subject_id, episode_key,
+            decline_event_id, workflow_state, snoozed_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (let index = 1; index <= 100; index += 1) {
+        const person = insertPerson.run(`Person ${index}`, churchId);
+        const event = insertEvent.run(churchId, person.lastInsertRowid);
+        if (index <= 50) {
+          insertState.run(
+            churchId,
+            'primary_decline',
+            person.lastInsertRowid,
+            `primary_decline:event:${event.lastInsertRowid}`,
+            event.lastInsertRowid,
+            'snoozed',
+            '2026-08-18',
+          );
+        }
+        insertState.run(
+          churchId,
+          'visitor_next_step',
+          person.lastInsertRowid,
+          `stale:${index}`,
+          null,
+          'open',
+          null,
+        );
+      }
+    })();
+
+    const measured = await measureDatabaseQueries(() => getPastoralInsights(churchId, {
+      asOf: AS_OF,
+    }));
+
+    assert.equal(measured.result.insights.length, 100);
+    assert.equal(measured.result.insights.every((row) => row.workflow.state === 'open'), true);
+    assert.ok(
+      measured.queryCount <= 22,
+      `expected bounded pastoral queries, received ${measured.queryCount}`,
+    );
+    t.diagnostic(`measured ${measured.queryCount} pastoral queries for 100 active and 100 stale states`);
   });
 });
 

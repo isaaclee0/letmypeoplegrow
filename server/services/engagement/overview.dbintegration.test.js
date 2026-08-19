@@ -289,6 +289,92 @@ async function seedOverviewFixture(churchId) {
   return { regulars, localReturn, converted, headcountSession };
 }
 
+async function seedRepresentativeOverviewFixture(churchId) {
+  await Database.query(
+    `UPDATE church_settings SET timezone = 'Australia/Hobart' WHERE church_id = ?`,
+    [churchId],
+  );
+  const user = await Database.query(
+    `INSERT INTO users (church_id, email, role, first_name, last_name)
+     VALUES (?, ?, 'admin', 'Bulk', 'Admin')`,
+    [churchId, `${churchId}-bulk@example.com`],
+  );
+  const primary = await Database.query(
+    `INSERT INTO gathering_types
+       (name, attendance_type, engagement_role, is_active, church_id)
+     VALUES ('Sunday', 'standard', 'primary', 1, ?)`,
+    [churchId],
+  );
+
+  const db = Database.getChurchDb(churchId);
+  db.transaction(() => {
+    const insertPersonRow = db.prepare(
+      `INSERT INTO individuals
+         (first_name, last_name, people_type, is_active, church_id)
+       VALUES (?, 'Bulk', 'regular', 1, ?)`,
+    );
+    const insertAssignment = db.prepare(
+      `INSERT INTO gathering_lists (gathering_type_id, individual_id, church_id)
+       VALUES (?, ?, ?)`,
+    );
+    const personIds = [];
+    for (let sequence = 1; sequence <= 1000; sequence += 1) {
+      const person = insertPersonRow.run(`Person ${String(sequence).padStart(4, '0')}`, churchId);
+      personIds.push(Number(person.lastInsertRowid));
+      insertAssignment.run(primary.insertId, person.lastInsertRowid, churchId);
+    }
+
+    const insertSessionRow = db.prepare(
+      `INSERT INTO attendance_sessions
+         (gathering_type_id, session_date, created_by, roster_snapshotted,
+          excluded_from_stats, session_status, roster_provenance_version, church_id)
+       VALUES (?, date('2025-07-21', '+' || ? || ' days'), ?, 1, 0, 'held', 1, ?)`,
+    );
+    const insertAttendanceRow = db.prepare(
+      `INSERT INTO attendance_records
+         (session_id, individual_id, present, eligible_at_snapshot,
+          people_type_at_time, church_id)
+       VALUES (?, ?, ?, 1, 'regular', ?)`,
+    );
+    for (let week = 0; week < 56; week += 1) {
+      const session = insertSessionRow.run(
+        primary.insertId, week * 7, user.insertId, churchId,
+      );
+      for (const individualId of personIds) {
+        insertAttendanceRow.run(
+          session.lastInsertRowid,
+          individualId,
+          individualId % 4 === 0 ? 0 : 1,
+          churchId,
+        );
+      }
+    }
+  })();
+}
+
+async function measureOverviewQueries(churchId) {
+  const originalQuery = Database.query;
+  const originalQueryForChurch = Database.queryForChurch;
+  let queryCount = 0;
+  Database.query = async (...args) => {
+    queryCount += 1;
+    return originalQuery.call(Database, ...args);
+  };
+  Database.queryForChurch = async (...args) => {
+    queryCount += 1;
+    return originalQueryForChurch.call(Database, ...args);
+  };
+  try {
+    const overview = await buildEngagementOverview(churchId, {
+      asOf: '2026-08-16T14:00:00.000Z',
+    });
+    return { overview, queryCount };
+  } finally {
+    Database.query = originalQuery;
+    Database.queryForChurch = originalQueryForChurch;
+  }
+}
+
 test('builds 13 fixed buckets, standard reach, headcount averages, visitors, coverage, and stable drilldowns', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedOverviewFixture(churchId);
@@ -362,5 +448,24 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
     });
     assert.deepEqual(sessionPage.rows.map((row) => row.sessionId), [fixture.headcountSession]);
     assert.equal(sessionPage.rows[0].attendance, 21);
+  });
+});
+
+test('keeps overview queries constant for 1,000 regulars across 56 weeks', async (t) => {
+  await withTestChurchDb(async (churchId) => {
+    const baseline = await measureOverviewQueries(churchId);
+    await seedRepresentativeOverviewFixture(churchId);
+    const representative = await measureOverviewQueries(churchId);
+
+    assert.equal(representative.overview.population.activeRegulars, 1000);
+    assert.equal(representative.overview.coverage.personLevelSessions.denominator, 52);
+    assert.equal(representative.queryCount, baseline.queryCount);
+    assert.ok(
+      representative.queryCount <= 12,
+      `expected bounded overview queries, received ${representative.queryCount}`,
+    );
+    t.diagnostic(
+      `measured ${representative.queryCount} overview queries for 1,000 regulars and 56 weekly sessions`,
+    );
   });
 });
