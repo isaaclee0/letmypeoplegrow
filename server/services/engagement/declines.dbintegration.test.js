@@ -363,6 +363,105 @@ test('creates deeper episodes, recovers only surpassed tiers, and re-arms a late
   });
 });
 
+test('does not turn a direct Core-to-Irregular partial recovery into a later Core-to-Casual event', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const individualId = await seedPerson(churchId, fixture);
+    const weeks = Array.from({ length: 6 }, (_, index) => addDays(SUNDAY, index * 7));
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[0], [
+      { individualId, primary: 'core_core' },
+    ]);
+    await evaluateEngagementDeclines(churchId, { asOf: asOfAfter(weeks[0]) });
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[1], [
+      { individualId, primary: 'core_irregular' },
+    ]);
+    assert.equal((await evaluateEngagementDeclines(churchId, {
+      asOf: asOfAfter(weeks[1]),
+    })).eventsCreated, 1);
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[2], [
+      { individualId, primary: 'irregular_casual' },
+    ]);
+    assert.equal((await evaluateEngagementDeclines(churchId, {
+      asOf: asOfAfter(weeks[2]),
+    })).eventsRecovered, 1);
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[3], [
+      { individualId, primary: 'core_casual' },
+    ]);
+    const stableCasual = await evaluateEngagementDeclines(churchId, {
+      asOf: asOfAfter(weeks[3]),
+    });
+    assert.equal(stableCasual.eventsCreated, 0);
+    assert.deepEqual((await events(churchId)).map((event) => ({
+      fromTier: event.fromTier,
+      toTier: event.toTier,
+      recovered: event.recoveredAt !== null,
+    })), [{ fromTier: 'core', toTier: 'irregular', recovered: true }]);
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[4], [
+      { individualId, primary: 'casual_core' },
+    ]);
+    await evaluateEngagementDeclines(churchId, { asOf: asOfAfter(weeks[4]) });
+    await replaceProfileSnapshot(churchId, fixture, weeks[5], [
+      { individualId, primary: 'core_casual' },
+    ]);
+    assert.equal((await evaluateEngagementDeclines(churchId, {
+      asOf: asOfAfter(weeks[5]),
+    })).eventsCreated, 1);
+    assert.deepEqual((await events(churchId)).map((event) => event.toTier), [
+      'irregular',
+      'casual',
+    ]);
+  });
+});
+
+test('keeps a partially recovered activation baseline suppressed until a new lower tier', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const individualId = await seedPerson(churchId, fixture);
+    const weeks = Array.from({ length: 4 }, (_, index) => addDays(SUNDAY, index * 7));
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[0], [
+      { individualId, primary: 'core_irregular' },
+    ]);
+    await evaluateEngagementDeclines(churchId, { asOf: asOfAfter(weeks[0]) });
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[1], [
+      { individualId, primary: 'irregular_casual' },
+    ]);
+    await evaluateEngagementDeclines(churchId, { asOf: asOfAfter(weeks[1]) });
+    assert.deepEqual(await Database.query(
+      `SELECT current_tier AS currentTier,
+              active_lowest_decline_tier AS activeTier,
+              baseline_suppressed AS baselineSuppressed
+       FROM engagement_evaluation_state
+       WHERE church_id = ? AND individual_id = ?`,
+      [churchId, individualId],
+    ), [{ currentTier: 'casual', activeTier: 'casual', baselineSuppressed: 1 }]);
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[2], [
+      { individualId, primary: 'core_casual' },
+    ]);
+    assert.equal((await evaluateEngagementDeclines(churchId, {
+      asOf: asOfAfter(weeks[2]),
+    })).eventsCreated, 0);
+
+    await replaceProfileSnapshot(churchId, fixture, weeks[3], [
+      { individualId, primary: 'casual_irregular' },
+    ]);
+    assert.equal((await evaluateEngagementDeclines(churchId, {
+      asOf: asOfAfter(weeks[3]),
+    })).eventsCreated, 1);
+    assert.deepEqual((await events(churchId)).map((event) => ({
+      fromTier: event.fromTier,
+      toTier: event.toTier,
+    })), [{ fromTier: 'casual', toTier: 'irregular' }]);
+  });
+});
+
 test('suppresses non-established, unassigned, visitor, inactive, and Community-only movement', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedChurch(churchId);
@@ -402,15 +501,16 @@ test('suppresses non-established, unassigned, visitor, inactive, and Community-o
   });
 });
 
-async function insertEvent(churchId, individualId, familyId, week = SUNDAY) {
-  const result = await Database.query(
-    `INSERT INTO engagement_decline_events
-       (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
-        effective_week_end, rules_version)
-     VALUES (?, ?, ?, 'core', 'casual', ?, 1)`,
-    [churchId, individualId, familyId, week],
-  );
-  return result.insertId;
+function detectionInput(churchId, individualId, familyId, week = SUNDAY) {
+  return {
+    churchId,
+    individualId,
+    familyId,
+    fromTier: 'core',
+    toTier: 'casual',
+    effectiveWeekEnd: week,
+    rulesVersion: 1,
+  };
 }
 
 async function assignUser(churchId, familyId, options = {}) {
@@ -479,24 +579,30 @@ test('snapshots every email-eligible stable caregiver ID and deduplicates crash-
     await assignContact(churchId, familyId, fixture.actorId, { primaryContactMethod: 'sms' });
     await assignContact(churchId, familyId, fixture.actorId, { isActive: 0 });
     await assignContact(churchId, familyId, fixture.actorId, { email: null });
-    const eventId = await insertEvent(churchId, individualId, familyId);
-
+    const detection = detectionInput(churchId, individualId, familyId);
     const created = await Database.transactionForChurch(churchId, (conn) =>
-      createEligibleDeliveryRowsWithConnection(conn, {
-        churchId, eventId, individualId, familyId,
-      }));
-    assert.equal(created, 2);
-    assert.equal(await Database.transactionForChurch(churchId, (conn) =>
-      createEligibleDeliveryRowsWithConnection(conn, {
-        churchId, eventId, individualId, familyId,
-      })), 0);
+      createEligibleDeliveryRowsWithConnection(conn, detection));
+    assert.deepEqual({
+      eventCreated: created.eventCreated,
+      deliveriesCreated: created.deliveriesCreated,
+    }, {
+      eventCreated: 1,
+      deliveriesCreated: 2,
+    });
+    assert.equal(Number.isInteger(created.eventId), true);
+    assert.deepEqual(await Database.transactionForChurch(churchId, (conn) =>
+      createEligibleDeliveryRowsWithConnection(conn, detection)), {
+      eventId: null,
+      eventCreated: 0,
+      deliveriesCreated: 0,
+    });
     assert.deepEqual(await Database.query(
       `SELECT recipient_type AS recipientType, recipient_id AS recipientId,
               family_caregiver_id AS familyCaregiverId, state
        FROM engagement_decline_deliveries
        WHERE church_id = ? AND event_id = ?
        ORDER BY recipient_type DESC`,
-      [churchId, eventId],
+      [churchId, created.eventId],
     ), [
       {
         recipientType: 'user',
@@ -513,14 +619,15 @@ test('snapshots every email-eligible stable caregiver ID and deduplicates crash-
     ]);
 
     const noFamilyPerson = await seedPerson(churchId, fixture, { familyId: null });
-    const noFamilyEvent = await insertEvent(churchId, noFamilyPerson, null, addDays(SUNDAY, 7));
-    assert.equal(await Database.transactionForChurch(churchId, (conn) =>
-      createEligibleDeliveryRowsWithConnection(conn, {
+    const noFamily = await Database.transactionForChurch(churchId, (conn) =>
+      createEligibleDeliveryRowsWithConnection(conn, detectionInput(
         churchId,
-        eventId: noFamilyEvent,
-        individualId: noFamilyPerson,
-        familyId: null,
-      })), 0);
+        noFamilyPerson,
+        null,
+        addDays(SUNDAY, 7),
+      )));
+    assert.equal(noFamily.eventCreated, 1);
+    assert.equal(noFamily.deliveriesCreated, 0);
   });
 });
 
@@ -561,5 +668,32 @@ test('freezes family and recipients at detection without retroactive delivery af
       [churchId],
     ))[0].count, 0);
     assert.equal((await events(churchId))[0].familyAtDetectionId, originalFamilyId);
+  });
+});
+
+test('does not add a caregiver assigned to the detection family after its recipient snapshot', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const familyId = await seedFamily(churchId, 'Unchanged family');
+    const individualId = await seedPerson(churchId, fixture, { familyId });
+    const detection = detectionInput(churchId, individualId, familyId);
+    const initial = await Database.transactionForChurch(churchId, (conn) =>
+      createEligibleDeliveryRowsWithConnection(conn, detection));
+    assert.equal(initial.eventCreated, 1);
+    assert.equal(initial.deliveriesCreated, 0);
+
+    await assignUser(churchId, familyId);
+    assert.deepEqual(await Database.transactionForChurch(churchId, (conn) =>
+      createEligibleDeliveryRowsWithConnection(conn, detection)), {
+      eventId: null,
+      eventCreated: 0,
+      deliveriesCreated: 0,
+    });
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count
+       FROM engagement_decline_deliveries
+       WHERE church_id = ? AND event_id = ?`,
+      [churchId, initial.eventId],
+    ))[0].count, 0);
   });
 });

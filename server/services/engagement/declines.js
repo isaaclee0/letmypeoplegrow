@@ -18,28 +18,54 @@ function isDecline(currentTier, comparisonTier) {
 
 async function createEligibleDeliveryRowsWithConnection(conn, {
   churchId,
-  eventId,
   individualId,
   familyId,
+  fromTier,
+  toTier,
+  effectiveWeekEnd,
+  rulesVersion,
 }) {
-  if (!churchId || !eventId || !individualId || familyId == null) return 0;
+  const noCreation = { eventId: null, eventCreated: 0, deliveriesCreated: 0 };
+  if (!churchId || !individualId || !fromTier || !toTier
+      || !effectiveWeekEnd || !rulesVersion) return noCreation;
+
+  const inserted = await conn.query(
+    `INSERT INTO engagement_decline_events
+       (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+        effective_week_end, rules_version, detected_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(church_id, individual_id, to_tier, effective_week_end, rules_version)
+     DO NOTHING`,
+    [
+      churchId,
+      individualId,
+      familyId,
+      fromTier,
+      toTier,
+      effectiveWeekEnd,
+      rulesVersion,
+    ],
+  );
+  if (inserted.affectedRows !== 1) return noCreation;
+
+  const creation = {
+    eventId: inserted.insertId,
+    eventCreated: 1,
+    deliveriesCreated: 0,
+  };
+  if (familyId == null) return creation;
 
   const [subject] = await conn.query(
     `SELECT i.id
      FROM individuals i
-     JOIN engagement_decline_events event
-       ON event.id = ?
-      AND event.church_id = ?
-      AND event.individual_id = i.id
-      AND event.family_at_detection_id = ?
      WHERE i.id = ?
        AND i.church_id = ?
        AND i.family_id = ?
        AND i.is_active = 1
        AND i.people_type = 'regular'`,
-    [eventId, churchId, familyId, individualId, churchId, familyId],
+    [individualId, churchId, familyId],
   );
-  if (!subject) return 0;
+  if (!subject) return creation;
 
   const recipients = await conn.query(
     `SELECT fc.id AS familyCaregiverId,
@@ -86,7 +112,7 @@ async function createEligibleDeliveryRowsWithConnection(conn, {
        ON CONFLICT(church_id, event_id, recipient_type, recipient_id) DO NOTHING`,
       [
         churchId,
-        eventId,
+        inserted.insertId,
         recipient.recipientType,
         recipient.recipientId,
         recipient.familyCaregiverId,
@@ -94,7 +120,8 @@ async function createEligibleDeliveryRowsWithConnection(conn, {
     );
     created += result.affectedRows;
   }
-  return created;
+  creation.deliveriesCreated = created;
+  return creation;
 }
 
 async function upsertBaselineState(conn, {
@@ -176,9 +203,7 @@ async function recoverSurpassedEvents(conn, {
     };
   }
 
-  const returnsToSuppressedTier = baselineSuppressed === 1
-    && before.length > 0
-    && currentTier !== 'core';
+  const returnsToSuppressedTier = baselineSuppressed === 1 && currentTier !== 'core';
   return {
     activeTier: returnsToSuppressedTier ? currentTier : null,
     baselineSuppressed: returnsToSuppressedTier ? 1 : 0,
@@ -282,33 +307,19 @@ async function evaluateEngagementDeclines(churchId, options = {}) {
         baselineSuppressed = recovery.baselineSuppressed;
         summary.eventsRecovered += recovery.recovered;
       } else if (isDecline(currentTier, comparisonTier)
+          && isDecline(currentTier, state.currentTier)
           && (activeTier === null || TIER_RANK[currentTier] < TIER_RANK[activeTier])) {
-        const inserted = await conn.query(
-          `INSERT INTO engagement_decline_events
-             (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
-              effective_week_end, rules_version, detected_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(church_id, individual_id, to_tier, effective_week_end, rules_version)
-           DO NOTHING`,
-          [
-            churchId,
-            individualId,
-            profile.familyId,
-            comparisonTier,
-            currentTier,
-            completedWeekEnd,
-            rulesVersion,
-          ],
-        );
-        if (inserted.affectedRows === 1) {
-          summary.eventsCreated += 1;
-          summary.deliveriesCreated += await createEligibleDeliveryRowsWithConnection(conn, {
-            churchId,
-            eventId: inserted.insertId,
-            individualId,
-            familyId: profile.familyId,
-          });
-        }
+        const creation = await createEligibleDeliveryRowsWithConnection(conn, {
+          churchId,
+          individualId,
+          familyId: profile.familyId,
+          fromTier: comparisonTier,
+          toTier: currentTier,
+          effectiveWeekEnd: completedWeekEnd,
+          rulesVersion,
+        });
+        summary.eventsCreated += creation.eventCreated;
+        summary.deliveriesCreated += creation.deliveriesCreated;
         activeTier = currentTier;
       }
 
