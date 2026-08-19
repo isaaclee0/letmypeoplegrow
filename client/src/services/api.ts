@@ -258,6 +258,62 @@ export interface EngagementDrilldownPage<Row> {
   nextCursor: string | null;
 }
 
+export type PastoralInsightType =
+  | 'primary_decline'
+  | 'community_primary_gap'
+  | 'visitor_next_step'
+  | 're_engagement';
+export type PastoralWorkflowState = 'open' | 'snoozed' | 'dismissed' | 'resolved';
+export interface PastoralInsightDto {
+  id: number;
+  type: PastoralInsightType;
+  episodeKey: string;
+  declineEventId: number | null;
+  person: {
+    id: number;
+    firstName: string;
+    lastName: string;
+    peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
+    isActive: boolean;
+  };
+  family: { id: number; name: string } | null;
+  lastAttendance: {
+    individualId: number;
+    date: string;
+    gatheringTypeId: number;
+    gatheringName: string;
+    engagementRole: EngagementGatheringRole;
+  } | null;
+  profiles: { primary: EngagementAxisStatus; community: EngagementAxisStatus };
+  evidence: Record<string, string | number | null>;
+  caregivers: Array<{
+    assignmentId: number;
+    type: 'user' | 'contact';
+    id: number;
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    isActive: boolean;
+  }>;
+  deliverySummary: { pending: number; delivered: number; cancelled: number };
+  workflow: {
+    state: PastoralWorkflowState;
+    snoozedUntil: string | null;
+    actedBy: number | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+  };
+}
+export interface PastoralInsightsDto {
+  schemaVersion: 1;
+  churchId: string;
+  window: { completedWeekEnd: string };
+  insights: PastoralInsightDto[];
+}
+export type PastoralInsightAction =
+  | { action: 'snooze'; snoozeUntil: string }
+  | { action: 'dismiss' | 'reopen' };
+
 // Shared by Planning Center and Elvanto reviewed applies. Keeping this
 // provider-neutral prevents either endpoint from adapting identity IDs or
 // quietly falling back to a provider-specific selection shape.
@@ -1019,6 +1075,12 @@ export const reportsAPI = {
       '/reports/engagement/sessions',
       { params },
     ),
+
+  getPastoralInsights: (params?: { includeSnoozed?: true }) =>
+    api.get<PastoralInsightsDto>('/reports/pastoral', { params }),
+
+  applyPastoralInsightAction: (insightId: number, action: PastoralInsightAction) =>
+    api.patch<{ insight: PastoralInsightDto }>(`/reports/pastoral/${insightId}`, action),
 };
 
 // Notifications API
