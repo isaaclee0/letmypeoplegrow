@@ -3,7 +3,10 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngagementSettingsDto, PastoralInsightDto, PastoralInsightsDto } from '../../services/api';
 import { contactsAPI, familiesAPI, reportsAPI, settingsAPI, usersAPI } from '../../services/api';
-import { writePastoralInsightsCache } from '../../services/engagementReportCache';
+import {
+  readPastoralInsightsCache,
+  writePastoralInsightsCache,
+} from '../../services/engagementReportCache';
 import PastoralCareReport from './PastoralCareReport';
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -133,7 +136,8 @@ function keepPending(): Promise<never> {
 
 describe('PastoralCareReport', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.resetAllMocks();
     vi.useRealTimers();
     localStorage.clear();
     vi.mocked(settingsAPI.getEngagementSettings).mockResolvedValue({ data: { settings } } as never);
@@ -168,6 +172,36 @@ describe('PastoralCareReport', () => {
     expect(within(reEngagement).getByText('Primary is now above the Irregular decline tier')).toBeInTheDocument();
     expect(within(reEngagement).queryByText(/caregiver email/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/risk score|motivation|wellbeing/i)).not.toBeInTheDocument();
+  });
+
+  it('does not invent a later-attendance count when visitor evidence is incomplete', async () => {
+    vi.mocked(reportsAPI.getPastoralInsights).mockResolvedValue({ data: queue([
+      insight(3, 'visitor_next_step', {
+        evidence: { firstPrimaryAttendanceDate: '2026-08-02' },
+      }),
+    ]) } as never);
+
+    render(<PastoralCareReport churchId="church-a" />);
+
+    const card = await screen.findByRole('article', { name: 'Casey Example' });
+    expect(within(card).getByText('Visitor attendance evidence is unavailable.')).toBeInTheDocument();
+    expect(within(card).queryByText(/0 later Primary attendances/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['visitor count', insight(3, 'visitor_next_step', { evidence: { firstPrimaryAttendanceDate: '2026-08-02' } })],
+    ['visitor date', insight(3, 'visitor_next_step', { evidence: { firstPrimaryAttendanceDate: '2026-02-30', laterPrimaryAttendances: 0 } })],
+    ['decline tier', insight(1, 'primary_decline', { evidence: { eventId: 81, fromTier: 'unknown', toTier: 'casual', effectiveWeekEnd: '2026-08-09', detectedAt: '2026-08-10 08:00:00', recoveredAt: null } })],
+    ['community completed week', insight(2, 'community_primary_gap', { evidence: { primaryTier: 'irregular', communityTier: 'core' } })],
+    ['re-engagement event ID', insight(4, 're_engagement', { evidence: { eventId: '84', fromTier: 'core', toTier: 'irregular', effectiveWeekEnd: '2026-07-26', recoveredAt: '2026-08-10 09:00:00' } })],
+  ])('rejects cached pastoral data with invalid discriminated %s evidence', (_field, malformed) => {
+    localStorage.setItem('pastoral-insights:v1:church-a', JSON.stringify({
+      cachedAt: Date.now(),
+      data: queue([malformed]),
+    }));
+
+    expect(readPastoralInsightsCache('church-a')).toBeNull();
+    expect(localStorage.length).toBe(0);
   });
 
   it('shows an Unassigned person without offering family caregiver management', async () => {
@@ -283,6 +317,87 @@ describe('PastoralCareReport', () => {
       action: 'snooze', snoozeUntil: '2026-08-30',
     });
     expect(reportsAPI.getPastoralInsights).toHaveBeenLastCalledWith({ includeSnoozed: true });
+  });
+
+  it('keeps successful concurrent actions for different insights and applies only the latest refresh', async () => {
+    const first = insight(1, 'primary_decline', {
+      workflow: { ...insight(1, 'primary_decline').workflow, state: 'snoozed', snoozedUntil: '2026-08-30' },
+    });
+    const second = insight(2, 'community_primary_gap', {
+      workflow: { ...insight(2, 'community_primary_gap').workflow, state: 'snoozed', snoozedUntil: '2026-08-31' },
+    });
+    const reopenedFirst = insight(1, 'primary_decline');
+    const reopenedSecond = insight(2, 'community_primary_gap');
+    let resolveFirstAction!: (value: unknown) => void;
+    let resolveSecondAction!: (value: unknown) => void;
+    let resolveFirstRefresh!: (value: unknown) => void;
+    let resolveSecondRefresh!: (value: unknown) => void;
+    vi.mocked(reportsAPI.getPastoralInsights)
+      .mockResolvedValueOnce({ data: queue([first, second]) } as never)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirstRefresh = resolve; }) as never)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecondRefresh = resolve; }) as never);
+    vi.mocked(reportsAPI.applyPastoralInsightAction).mockImplementation((id) => new Promise((resolve) => {
+      if (id === first.id) resolveFirstAction = resolve;
+      else resolveSecondAction = resolve;
+    }) as never);
+    render(<PastoralCareReport churchId="church-a" />);
+    const firstCard = await screen.findByRole('article', { name: 'Alex Example' });
+    const secondCard = screen.getByRole('article', { name: 'Blair Example' });
+
+    fireEvent.click(within(firstCard).getByRole('button', { name: 'Reopen' }));
+    fireEvent.click(within(secondCard).getByRole('button', { name: 'Reopen' }));
+    await act(async () => resolveSecondAction({ data: { insight: reopenedSecond } }));
+    expect(within(secondCard).getByText('New')).toBeInTheDocument();
+    await act(async () => resolveFirstAction({ data: { insight: reopenedFirst } }));
+    expect(within(firstCard).getByText('New')).toBeInTheDocument();
+
+    await act(async () => resolveFirstRefresh({ data: queue([first, second]) }));
+    expect(within(firstCard).getByText('New')).toBeInTheDocument();
+    expect(within(secondCard).getByText('New')).toBeInTheDocument();
+    await act(async () => resolveSecondRefresh({ data: queue([]) }));
+    expect(await screen.findByText('No pastoral care follow-up is currently open.')).toBeInTheDocument();
+  });
+
+  it('persists an action result before a failed refresh so remount does not restore stale workflow', async () => {
+    const snoozed = insight(1, 'primary_decline', {
+      workflow: { ...insight(1, 'primary_decline').workflow, state: 'snoozed', snoozedUntil: '2026-08-30' },
+    });
+    const reopened = insight(1, 'primary_decline');
+    vi.mocked(reportsAPI.getPastoralInsights)
+      .mockResolvedValueOnce({ data: queue([snoozed]) } as never)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(keepPending() as never);
+    vi.mocked(reportsAPI.applyPastoralInsightAction).mockResolvedValue({ data: { insight: reopened } } as never);
+    vi.mocked(settingsAPI.getEngagementSettings).mockReturnValue(keepPending() as never);
+    const mounted = render(<PastoralCareReport churchId="church-a" />);
+    const card = await screen.findByRole('article', { name: 'Alex Example' });
+    fireEvent.click(within(card).getByRole('button', { name: 'Reopen' }));
+    expect(await within(card).findByText('New')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh pastoral care');
+    mounted.unmount();
+
+    render(<PastoralCareReport churchId="church-a" />);
+
+    const restored = screen.getByRole('article', { name: 'Alex Example' });
+    expect(within(restored).getByText('New')).toBeInTheDocument();
+    expect(within(restored).queryByText(/Snoozed until/)).not.toBeInTheDocument();
+  });
+
+  it('renders fresh server data when pastoral cache persistence is unavailable', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage quota exceeded', 'QuotaExceededError');
+    });
+    vi.mocked(reportsAPI.getPastoralInsights).mockResolvedValue({ data: queue([
+      insight(1, 'primary_decline'),
+    ]) } as never);
+    try {
+      render(<PastoralCareReport churchId="church-a" />);
+
+      expect(await screen.findByRole('article', { name: 'Alex Example' })).toBeInTheDocument();
+      expect(screen.queryByText('Could not load pastoral care. Please try again.')).not.toBeInTheDocument();
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it('requires accessible dismissal confirmation, restores focus on Escape, and replaces dismissed and reopened rows', async () => {

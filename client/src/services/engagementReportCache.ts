@@ -33,6 +33,10 @@ function isInteger(value: unknown): value is number {
   return Number.isInteger(value);
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return isInteger(value) && value >= 0;
+}
+
 function isBoolean(value: unknown): value is boolean {
   return typeof value === 'boolean';
 }
@@ -154,6 +158,39 @@ function isAxisStatus(value: unknown): boolean {
   return value.rate === null || isNumber(value.rate);
 }
 
+function isTierKey(value: unknown): boolean {
+  return isOneOf(value, TIERS);
+}
+
+function isPastoralEvidence(type: unknown, evidence: unknown): boolean {
+  if (!isRecord(evidence)) return false;
+  if (type === 'primary_decline') {
+    return isNonNegativeInteger(evidence.eventId)
+      && isTierKey(evidence.fromTier)
+      && isTierKey(evidence.toTier)
+      && isCanonicalDate(evidence.effectiveWeekEnd)
+      && isString(evidence.detectedAt)
+      && isNullableString(evidence.recoveredAt);
+  }
+  if (type === 'community_primary_gap') {
+    return isTierKey(evidence.primaryTier)
+      && isTierKey(evidence.communityTier)
+      && isCanonicalDate(evidence.completedWeekEnd);
+  }
+  if (type === 'visitor_next_step') {
+    return isCanonicalDate(evidence.firstPrimaryAttendanceDate)
+      && isNonNegativeInteger(evidence.laterPrimaryAttendances);
+  }
+  if (type === 're_engagement') {
+    return isNonNegativeInteger(evidence.eventId)
+      && isTierKey(evidence.fromTier)
+      && isTierKey(evidence.toTier)
+      && isCanonicalDate(evidence.effectiveWeekEnd)
+      && isString(evidence.recoveredAt);
+  }
+  return false;
+}
+
 function isPastoralInsight(value: unknown): boolean {
   if (!isRecord(value)
       || !isInteger(value.id)
@@ -176,7 +213,7 @@ function isPastoralInsight(value: unknown): boolean {
       || !isRecord(value.profiles)
       || !isAxisStatus(value.profiles.primary)
       || !isAxisStatus(value.profiles.community)
-      || !isRecord(value.evidence)
+      || !isPastoralEvidence(value.type, value.evidence)
       || !Array.isArray(value.caregivers)
       || !value.caregivers.every((caregiver) => isRecord(caregiver)
         && isInteger(caregiver.assignmentId)
@@ -190,7 +227,7 @@ function isPastoralInsight(value: unknown): boolean {
       || !['pending', 'delivered', 'cancelled'].every((field) => isNumber(value.deliverySummary[field]))
       || !isRecord(value.workflow)
       || !isOneOf(value.workflow.state, ['open', 'snoozed', 'dismissed', 'resolved'])
-      || !isNullableString(value.workflow.snoozedUntil)
+      || !(value.workflow.snoozedUntil === null || isCanonicalDate(value.workflow.snoozedUntil))
       || !(value.workflow.actedBy === null || isInteger(value.workflow.actedBy))
       || !isNullableString(value.workflow.createdAt)
       || !isNullableString(value.workflow.updatedAt)) return false;
@@ -271,10 +308,14 @@ export function readPastoralInsightsCache(churchId: string): PastoralInsightsDto
 
 export function writePastoralInsightsCache(insights: PastoralInsightsDto): void {
   if (!isPastoralInsights(insights)) return;
-  localStorage.setItem(pastoralCacheKey(insights.churchId), JSON.stringify({
-    cachedAt: Date.now(),
-    data: insights,
-  }));
+  try {
+    localStorage.setItem(pastoralCacheKey(insights.churchId), JSON.stringify({
+      cachedAt: Date.now(),
+      data: insights,
+    }));
+  } catch {
+    // Cache persistence is an optional optimisation; server data remains authoritative.
+  }
 }
 
 export function clearPastoralInsightsCache(churchId: string): void {

@@ -56,7 +56,13 @@ function evidenceString(insight: PastoralInsightDto, key: string): string | null
 
 function evidenceNumber(insight: PastoralInsightDto, key: string): number | null {
   const value = insight.evidence[key];
-  return typeof value === 'number' ? value : null;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isCanonicalDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function tierLabel(value: string | null, settings: EngagementSettingsDto): string {
@@ -74,8 +80,11 @@ function factualSummary(insight: PastoralInsightDto, settings: EngagementSetting
   if (insight.type === 'visitor_next_step') {
     const date = evidenceString(insight, 'firstPrimaryAttendanceDate');
     const later = evidenceNumber(insight, 'laterPrimaryAttendances');
+    if (!date || !isCanonicalDate(date) || later === null || !Number.isInteger(later) || later < 0) {
+      return 'Visitor attendance evidence is unavailable.';
+    }
     if (date && later === 0) return `First Primary attendance on ${formatDate(date)}; no later Primary attendance`;
-    if (date) return `First Primary attendance on ${formatDate(date)}; ${later ?? 0} later Primary attendances`;
+    return `First Primary attendance on ${formatDate(date)}; ${later} later Primary attendances`;
   }
   if (insight.type === 're_engagement') {
     return `Primary is now above the ${tierLabel(evidenceString(insight, 'toTier'), settings)} decline tier`;
@@ -110,13 +119,13 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
   const [updating, setUpdating] = useState(true);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
-  const [actingId, setActingId] = useState<number | null>(null);
+  const [actingIds, setActingIds] = useState<Set<number>>(() => new Set());
   const [snoozeTarget, setSnoozeTarget] = useState<PastoralInsightDto | null>(null);
   const [snoozeUntil, setSnoozeUntil] = useState('');
   const [dismissTarget, setDismissTarget] = useState<PastoralInsightDto | null>(null);
   const [caregiverFamilyId, setCaregiverFamilyId] = useState<number | null>(null);
   const queueRequest = useRef(0);
-  const actionRequest = useRef(0);
+  const actionGeneration = useRef(0);
   const churchRef = useRef(churchId);
   const queueRef = useRef(queueState);
   churchRef.current = churchId;
@@ -133,8 +142,9 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
       const response = await reportsAPI.getPastoralInsights({ includeSnoozed: true });
       if (requestId !== queueRequest.current || churchRef.current !== requestedChurch) return;
       if (response.data.churchId !== requestedChurch) throw new Error('The report belongs to another church.');
-      writePastoralInsightsCache(response.data);
+      queueRef.current = response.data;
       setQueue(response.data);
+      writePastoralInsightsCache(response.data);
     } catch {
       if (requestId !== queueRequest.current || churchRef.current !== requestedChurch) return;
       setError(fallback?.churchId === requestedChurch
@@ -148,12 +158,12 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
   useEffect(() => {
     const requestedChurch = churchId;
     const cached = readPastoralInsightsCache(requestedChurch);
-    actionRequest.current += 1;
+    actionGeneration.current += 1;
     setQueue(cached);
     setSettings(DEFAULT_SETTINGS);
     setError('');
     setActionError('');
-    setActingId(null);
+    setActingIds(new Set());
     setSnoozeTarget(null);
     setDismissTarget(null);
     setCaregiverFamilyId(null);
@@ -167,26 +177,34 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
 
   const applyAction = async (insight: PastoralInsightDto, action: PastoralInsightAction) => {
     const requestedChurch = churchId;
-    const requestId = ++actionRequest.current;
-    setActingId(insight.id);
+    const generation = actionGeneration.current;
+    setActingIds((current) => new Set(current).add(insight.id));
     setActionError('');
     try {
       const response = await reportsAPI.applyPastoralInsightAction(insight.id, action);
-      if (requestId !== actionRequest.current || churchRef.current !== requestedChurch) return;
+      if (generation !== actionGeneration.current || churchRef.current !== requestedChurch) return;
       const current = queueRef.current;
       if (!current || current.churchId !== requestedChurch) return;
       const updated = replaceInsight(current, response.data.insight);
+      queueRef.current = updated;
       setQueue(updated);
+      writePastoralInsightsCache(updated);
       setSnoozeTarget(null);
       setDismissTarget(null);
       setSnoozeUntil('');
       void refresh(updated);
     } catch {
-      if (requestId === actionRequest.current && churchRef.current === requestedChurch) {
+      if (generation === actionGeneration.current && churchRef.current === requestedChurch) {
         setActionError(`Could not update ${personName(insight)}. Please try again.`);
       }
     } finally {
-      if (requestId === actionRequest.current && churchRef.current === requestedChurch) setActingId(null);
+      if (generation === actionGeneration.current && churchRef.current === requestedChurch) {
+        setActingIds((current) => {
+          const next = new Set(current);
+          next.delete(insight.id);
+          return next;
+        });
+      }
     }
   };
 
@@ -281,11 +299,11 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
                   )}
                   {insight.workflow.state === 'open' ? (
                     <>
-                      <button type="button" disabled={actingId === insight.id} onClick={() => { setSnoozeTarget(insight); setSnoozeUntil(''); }} className="rounded-md bg-blue-50 px-3 py-2 text-sm font-medium text-blue-800 hover:bg-blue-100 disabled:opacity-50 dark:bg-blue-950 dark:text-blue-200">Snooze</button>
-                      <button type="button" disabled={actingId === insight.id} onClick={() => setDismissTarget(insight)} className="rounded-md bg-stone-100 px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-200 disabled:opacity-50 dark:bg-gray-700 dark:text-gray-200">Dismiss</button>
+                      <button type="button" disabled={actingIds.has(insight.id)} onClick={() => { setSnoozeTarget(insight); setSnoozeUntil(''); }} className="rounded-md bg-blue-50 px-3 py-2 text-sm font-medium text-blue-800 hover:bg-blue-100 disabled:opacity-50 dark:bg-blue-950 dark:text-blue-200">Snooze</button>
+                      <button type="button" disabled={actingIds.has(insight.id)} onClick={() => setDismissTarget(insight)} className="rounded-md bg-stone-100 px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-200 disabled:opacity-50 dark:bg-gray-700 dark:text-gray-200">Dismiss</button>
                     </>
                   ) : (insight.workflow.state === 'snoozed' || insight.workflow.state === 'dismissed') && (
-                    <button type="button" disabled={actingId === insight.id} onClick={() => void applyAction(insight, { action: 'reopen' })} className="rounded-md bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 hover:bg-indigo-100 disabled:opacity-50 dark:bg-indigo-950 dark:text-indigo-200">Reopen</button>
+                    <button type="button" disabled={actingIds.has(insight.id)} onClick={() => void applyAction(insight, { action: 'reopen' })} className="rounded-md bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 hover:bg-indigo-100 disabled:opacity-50 dark:bg-indigo-950 dark:text-indigo-200">Reopen</button>
                   )}
                 </div>
               </article>
@@ -309,7 +327,7 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
             <input id="pastoral-snooze-until" required type="date" value={snoozeUntil} onChange={(event) => setSnoozeUntil(event.target.value)} className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100" />
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={() => { setSnoozeTarget(null); setSnoozeUntil(''); }} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium dark:border-gray-600">Cancel</button>
-              <button type="submit" disabled={!snoozeUntil || actingId === snoozeTarget.id} className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Confirm snooze</button>
+              <button type="submit" disabled={!snoozeUntil || actingIds.has(snoozeTarget.id)} className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Confirm snooze</button>
             </div>
           </form>
         </AccessibleDialog>
@@ -322,7 +340,7 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
             <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">This dismisses the current factual episode. A later distinct episode may still appear.</p>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={() => setDismissTarget(null)} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium dark:border-gray-600">Keep insight</button>
-              <button type="button" disabled={actingId === dismissTarget.id} onClick={() => void applyAction(dismissTarget, { action: 'dismiss' })} className="rounded-md bg-stone-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-gray-600">Dismiss insight</button>
+              <button type="button" disabled={actingIds.has(dismissTarget.id)} onClick={() => void applyAction(dismissTarget, { action: 'dismiss' })} className="rounded-md bg-stone-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-gray-600">Dismiss insight</button>
             </div>
           </div>
         </AccessibleDialog>
