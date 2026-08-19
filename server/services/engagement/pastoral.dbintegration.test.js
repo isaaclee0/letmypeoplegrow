@@ -222,6 +222,25 @@ test('reconciles decline and re-engagement episodes from factual events without 
   });
 });
 
+test('pastoral workspace excludes decline events from retired calculation rules', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const actorId = await seedActor(churchId);
+    const subject = await seedFamilyPerson(churchId, actorId, { firstName: 'Legacy' });
+    await seedDecline(churchId, subject);
+    await Database.query(
+      `INSERT INTO engagement_settings (church_id, calculation_rules_version)
+       VALUES (?, 2)
+       ON CONFLICT(church_id) DO UPDATE SET calculation_rules_version = 2`,
+      [churchId],
+    );
+
+    const response = await getPastoralInsights(churchId, { asOf: AS_OF });
+
+    assert.equal(response.insights.some((insight) =>
+      insight.type === 'primary_decline' || insight.type === 're_engagement'), false);
+  });
+});
+
 test('reconciles a large pastoral workspace with bounded database queries', async (t) => {
   await withTestChurchDb(async (churchId) => {
     const db = Database.getChurchDb(churchId);
@@ -337,6 +356,77 @@ test('community-connected primary-irregular episodes can resolve and recur withi
       await getPastoralInsights(churchId, { asOf: new Date('2026-09-09T02:00:00.000Z') }),
       'community_primary_gap',
     ), undefined);
+  });
+});
+
+test('resolved fixed-source decline visitor and re-engagement episodes remain terminal', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const actorId = await seedActor(churchId);
+    const declineSubject = await seedFamilyPerson(churchId, actorId, { firstName: 'Decline' });
+    const recoveredSubject = await seedFamilyPerson(churchId, actorId, { firstName: 'Recovered' });
+    const visitorSubject = await seedFamilyPerson(churchId, actorId, {
+      firstName: 'Visitor', peopleType: 'local_visitor',
+    });
+    const declineEventId = await seedDecline(churchId, declineSubject);
+    const recoveredEventId = await seedDecline(churchId, recoveredSubject, {
+      recoveredAt: '2026-08-10 09:00:00',
+    });
+    const primaryId = await seedGathering(churchId, actorId, 'Sunday', 'primary');
+    await seedAttendance(churchId, actorId, primaryId, visitorSubject.personId, '2026-08-02', {
+      present: true,
+      peopleType: 'local_visitor',
+    });
+
+    const initial = await getPastoralInsights(churchId, { asOf: AS_OF });
+    assert.equal(initial.insights.some((row) => row.declineEventId === declineEventId), true);
+    assert.equal(initial.insights.some((row) => row.declineEventId === recoveredEventId), true);
+    assert.equal(initial.insights.some((row) => row.person.id === visitorSubject.personId), true);
+
+    await Database.query(
+      `UPDATE individuals SET is_active = 0
+       WHERE church_id = ? AND id IN (?, ?)`,
+      [churchId, declineSubject.personId, recoveredSubject.personId],
+    );
+    await Database.query(
+      `UPDATE individuals SET people_type = 'regular' WHERE church_id = ? AND id = ?`,
+      [churchId, visitorSubject.personId],
+    );
+    await getPastoralInsights(churchId, { asOf: AS_OF });
+
+    await Database.query(
+      `UPDATE individuals SET is_active = 1
+       WHERE church_id = ? AND id IN (?, ?)`,
+      [churchId, declineSubject.personId, recoveredSubject.personId],
+    );
+    await Database.query(
+      `UPDATE individuals SET people_type = 'local_visitor' WHERE church_id = ? AND id = ?`,
+      [churchId, visitorSubject.personId],
+    );
+    const returned = await getPastoralInsights(churchId, { asOf: AS_OF });
+
+    assert.equal(returned.insights.some((row) => row.declineEventId === declineEventId), false);
+    assert.equal(returned.insights.some((row) => row.declineEventId === recoveredEventId), false);
+    assert.equal(returned.insights.some((row) => row.person.id === visitorSubject.personId), false);
+    assert.deepEqual(await Database.query(
+      `SELECT insight_type AS type, episode_key AS episodeKey, workflow_state AS state
+       FROM pastoral_insight_states
+       WHERE church_id = ? AND subject_id IN (?, ?, ?)
+       ORDER BY insight_type, subject_id, id`,
+      [
+        churchId,
+        declineSubject.personId,
+        recoveredSubject.personId,
+        visitorSubject.personId,
+      ],
+    ), [
+      { type: 'primary_decline', episodeKey: `primary_decline:event:${declineEventId}`, state: 'resolved' },
+      { type: 're_engagement', episodeKey: `re_engagement:event:${recoveredEventId}`, state: 'resolved' },
+      {
+        type: 'visitor_next_step',
+        episodeKey: 'visitor_next_step:first_primary:2026-08-02',
+        state: 'resolved',
+      },
+    ]);
   });
 });
 

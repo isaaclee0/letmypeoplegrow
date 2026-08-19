@@ -2171,7 +2171,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, individual_id) DO UPDATE SET
                   present = excluded.present,
-                  people_type_at_time = excluded.people_type_at_time,
+                  people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time),
                   updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, req.user.church_id, peopleTypeAtTime, req.user.id]);
@@ -2192,7 +2192,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, individual_id) DO UPDATE SET
                   present = excluded.present,
-                  people_type_at_time = excluded.people_type_at_time,
+                  people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time),
                   updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, peopleTypeAtTime, req.user.id]);
@@ -3005,7 +3005,9 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
             VALUES (?, ?, 1, ?, ?)
-            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = excluded.present, people_type_at_time = excluded.people_type_at_time
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET
+              present = excluded.present,
+              people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
           `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
         } else {
           await conn.query(`
@@ -3151,7 +3153,9 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
             VALUES (?, ?, 1, ?, ?)
-            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET
+              present = 1,
+              people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
           `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
         } else {
           await conn.query(`
@@ -3165,7 +3169,9 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
             VALUES (?, ?, 1, ?)
-            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET
+              present = 1,
+              people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
           `, [sessionId, individualId, peopleTypeAtTime]);
         } else {
           await conn.query(`

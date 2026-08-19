@@ -2,6 +2,8 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
 const Database = require('../config/database');
+const { canUserAccessGathering } = require('../middleware/auth');
+const { kioskModeEnabled } = require('./kioskMode');
 const { getChurchDate, parseSqliteUtc, loadChurchTimeZone } = require('../utils/churchTime');
 const {
   ensureSessionWithConnection,
@@ -492,6 +494,14 @@ class WebSocketService {
         socket.emit('attendance_update_error', { message: 'Invalid attendance data' });
         return;
       }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('attendance_update_error', { message: 'Access denied to this gathering type.' });
+        return;
+      }
 
       // Create deduplication key based on user, gathering, date, and records
       const recordsKey = records.map(r => `${r.individualId}:${r.present}`).sort().join(',');
@@ -637,7 +647,7 @@ class WebSocketService {
               VALUES (?, ?, ?, ?, ?)
               ON CONFLICT(session_id, individual_id) DO UPDATE SET
                 present = excluded.present,
-                people_type_at_time = excluded.people_type_at_time,
+                people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time),
                 updated_at = CURRENT_TIMESTAMP
             `, [sessionId, individualId, present, socket.churchId, peopleTypeAtTime]);
           } else {
@@ -1654,18 +1664,27 @@ class WebSocketService {
    * @param {Object} data - Headcount data {gatheringId, date, headcount}
    */
   async handleUpdateHeadcount(socket, data) {
-    let gatheringId, date, headcount, mode;
+    let gatheringId, date, headcount, mode, dedupeKey;
     
     try {
       ({ gatheringId, date, headcount, mode = 'separate' } = data);
       
-      if (!gatheringId || !date || typeof headcount !== 'number') {
+      if (!gatheringId || !date || !Number.isFinite(headcount) || headcount < 0
+          || !['separate', 'combined', 'averaged'].includes(mode)) {
         socket.emit('headcount_update_error', { message: 'Invalid headcount data' });
+        return;
+      }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('headcount_update_error', { message: 'Access denied to this gathering type.' });
         return;
       }
 
       // Create deduplication key
-      const dedupeKey = `${socket.userId}:${gatheringId}:${date}:${headcount}`;
+      dedupeKey = `${socket.userId}:${gatheringId}:${date}:${headcount}`;
       const now = Date.now();
       
       // Smart deduplication: only block very rapid duplicates (within 500ms)
@@ -1787,7 +1806,9 @@ class WebSocketService {
         
       } catch (dbError) {
         logger.error('Database error in WebSocket headcount update:', dbError);
-        // Fall back to original headcount if database query fails
+        this.recentUpdates.delete(dedupeKey);
+        socket.emit('headcount_update_error', { message: 'Failed to update headcount' });
+        return;
       }
 
       logger.debugLog('Broadcasting headcount update via websocketBroadcast', {
@@ -1896,6 +1917,14 @@ class WebSocketService {
         socket.emit('headcount_mode_update_error', { message: 'Invalid mode data' });
         return;
       }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('headcount_mode_update_error', { message: 'Access denied to this gathering type.' });
+        return;
+      }
 
       logger.info('WebSocket headcount mode update received', {
         userId: socket.userId,
@@ -1967,12 +1996,28 @@ class WebSocketService {
     try {
       ({ gatheringId, date, individualIds, action, signerName } = data);
 
+      if (!kioskModeEnabled()) {
+        socket.emit('kiosk_action_error', {
+          code: 'KIOSK_DISABLED',
+          message: 'Self check-in is currently disabled.',
+        });
+        return;
+      }
+
       if (!gatheringId || !date || !individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
         socket.emit('kiosk_action_error', { message: 'Invalid kiosk action data' });
         return;
       }
       if (!['checkin', 'checkout'].includes(action)) {
         socket.emit('kiosk_action_error', { message: 'action must be "checkin" or "checkout"' });
+        return;
+      }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('kiosk_action_error', { message: 'Access denied to this gathering type.' });
         return;
       }
 
@@ -2062,7 +2107,9 @@ class WebSocketService {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
                   VALUES (?, ?, 1, ?, ?)
-                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                    present = 1,
+                    people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
                 `, [sessionId, individualId, socket.churchId, peopleTypeAtTime]);
               } else {
                 await conn.query(`
@@ -2076,7 +2123,9 @@ class WebSocketService {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
                   VALUES (?, ?, 1, ?)
-                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                    present = 1,
+                    people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
                 `, [sessionId, individualId, peopleTypeAtTime]);
               } else {
                 await conn.query(`

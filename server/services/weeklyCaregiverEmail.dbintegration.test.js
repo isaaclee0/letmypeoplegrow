@@ -257,6 +257,139 @@ test('generateCaregiverDigests includes a decline-only person card with stable I
   });
 });
 
+test('delayed decline retries render Primary evidence from the event effective week', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedDeclineFixture(churchId, { email: 'historical@example.test' });
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types
+         (church_id, name, attendance_type, engagement_role, is_active, created_by)
+       VALUES (?, 'Primary', 'standard', 'primary', 1, ?)`,
+      [churchId, fixture.adminId],
+    );
+    await Database.query(
+      `INSERT INTO gathering_lists
+         (church_id, gathering_type_id, individual_id, added_by)
+       VALUES (?, ?, ?, ?)`,
+      [churchId, gathering.insertId, fixture.personId, fixture.adminId],
+    );
+    const dates = [
+      '2026-06-21', '2026-06-28', '2026-07-05', '2026-07-12', '2026-07-19',
+      '2026-07-26', '2026-08-02', '2026-08-09', '2026-08-16',
+    ];
+    for (const date of dates) {
+      const session = await Database.query(
+        `INSERT INTO attendance_sessions
+           (church_id, gathering_type_id, session_date, created_by,
+            session_status, roster_provenance_version, roster_snapshotted)
+         VALUES (?, ?, ?, ?, 'held', 1, 1)`,
+        [churchId, gathering.insertId, date, fixture.adminId],
+      );
+      await Database.query(
+        `INSERT INTO attendance_records
+           (church_id, session_id, individual_id, present,
+            eligible_at_snapshot, people_type_at_time)
+         VALUES (?, ?, ?, 1, 1, 'regular')`,
+        [churchId, session.insertId, fixture.personId],
+      );
+    }
+
+    const [digest] = await generateCaregiverDigests(churchId, { now: NOW });
+    const evidence = digest.entries[0].reasons[0].opportunityEvidence;
+
+    assert.deepEqual(evidence, {
+      status: 'core',
+      attended: 8,
+      opportunities: 8,
+      rate: 1,
+    });
+  });
+});
+
+test('delayed retry preserves detection evidence after Primary assignment and role changes', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedDeclineFixture(churchId, { email: 'immutable@example.test' });
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types
+         (church_id, name, attendance_type, engagement_role, is_active, created_by)
+       VALUES (?, 'Primary at detection', 'standard', 'primary', 1, ?)`,
+      [churchId, fixture.adminId],
+    );
+    await Database.query(
+      `INSERT INTO gathering_lists
+         (church_id, gathering_type_id, individual_id, added_by)
+       VALUES (?, ?, ?, ?)`,
+      [churchId, gathering.insertId, fixture.personId, fixture.adminId],
+    );
+    const dates = [
+      '2026-06-21', '2026-06-28', '2026-07-05', '2026-07-12',
+      '2026-07-19', '2026-07-26', '2026-08-02', '2026-08-09',
+    ];
+    for (const [index, date] of dates.entries()) {
+      const session = await Database.query(
+        `INSERT INTO attendance_sessions
+           (church_id, gathering_type_id, session_date, created_by,
+            session_status, roster_provenance_version, roster_snapshotted)
+         VALUES (?, ?, ?, ?, 'held', 1, 1)`,
+        [churchId, gathering.insertId, date, fixture.adminId],
+      );
+      await Database.query(
+        `INSERT INTO attendance_records
+           (church_id, session_id, individual_id, present,
+            eligible_at_snapshot, people_type_at_time)
+         VALUES (?, ?, ?, ?, 1, 'regular')`,
+        [churchId, session.insertId, fixture.personId, index < 3 ? 1 : 0],
+      );
+    }
+    await Database.query(
+      `UPDATE engagement_decline_events
+       SET primary_attended_at_detection = 3,
+           primary_opportunities_at_detection = 8,
+           primary_rate_at_detection = 0.375
+       WHERE church_id = ? AND id = ?`,
+      [churchId, fixture.eventId],
+    );
+    const attempts = [];
+
+    assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+      now: NOW,
+      includeAbsences: false,
+      sendEmail: async (_email, _firstName, _churchName, entries) => {
+        attempts.push(entries[0].reasons[0].opportunityEvidence);
+        throw new Error('retry later');
+      },
+    }), 0);
+
+    await Database.query(
+      `DELETE FROM gathering_lists
+       WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ?`,
+      [churchId, gathering.insertId, fixture.personId],
+    );
+    await Database.query(
+      `UPDATE gathering_types SET engagement_role = 'community'
+       WHERE church_id = ? AND id = ?`,
+      [churchId, gathering.insertId],
+    );
+
+    assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+      now: NOW,
+      includeAbsences: false,
+      sendEmail: async (_email, _firstName, _churchName, entries) => {
+        attempts.push(entries[0].reasons[0].opportunityEvidence);
+      },
+    }), 1);
+
+    assert.deepEqual(attempts, [
+      { status: 'casual', attended: 3, opportunities: 8, rate: 0.375 },
+      { status: 'casual', attended: 3, opportunities: 8, rate: 0.375 },
+    ]);
+    assert.deepEqual(await Database.query(
+      `SELECT state, attempts FROM engagement_decline_deliveries
+       WHERE church_id = ? AND id = ?`,
+      [churchId, fixture.deliveryId],
+    ), [{ state: 'delivered', attempts: 2 }]);
+  });
+});
+
 test('generateCaregiverDigests combines absence and decline reasons for the same stable person', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedDeclineFixture(churchId);
@@ -391,6 +524,106 @@ test('delivery success and failure are persisted per recipient and only the fail
   });
 });
 
+test('revalidates each queued recipient immediately before its provider call', async (t) => {
+  const scenarios = [
+    {
+      name: 'opt-out',
+      expectedReason: 'recipient_ineligible',
+      mutate: (churchId, fixture) => Database.query(
+        `UPDATE users SET email_notifications = 0 WHERE church_id = ? AND id = ?`,
+        [churchId, fixture.recipientId],
+      ),
+    },
+    {
+      name: 'assignment removal',
+      expectedReason: 'assignment_removed',
+      mutate: (churchId, fixture) => Database.query(
+        `DELETE FROM family_caregivers WHERE church_id = ? AND id = ?`,
+        [churchId, fixture.assignmentId],
+      ),
+    },
+    {
+      name: 'pastoral dismissal',
+      expectedReason: 'pastoral_dismissed',
+      mutate: (churchId, fixture) => Database.query(
+        `UPDATE pastoral_insight_states
+         SET workflow_state = 'dismissed', updated_at = datetime('now')
+         WHERE church_id = ? AND decline_event_id = ?`,
+        [churchId, fixture.eventId],
+      ),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      await withTestChurchDb(async (churchId) => {
+        await seedDeclineFixture(churchId, { email: `first-${scenario.name}@example.test` });
+        const later = await seedDeclineFixture(churchId, {
+          email: `later-${scenario.name}@example.test`,
+        });
+        const calls = [];
+
+        assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+          now: NOW,
+          includeAbsences: false,
+          sendEmail: async (email) => {
+            calls.push(email);
+            if (calls.length === 1) await scenario.mutate(churchId, later);
+          },
+        }), 1);
+
+        assert.deepEqual(calls, [`first-${scenario.name}@example.test`]);
+        assert.deepEqual(await Database.query(
+          `SELECT state, cancellation_reason AS reason
+           FROM engagement_decline_deliveries WHERE church_id = ? AND id = ?`,
+          [churchId, later.deliveryId],
+        ), [{ state: 'cancelled', reason: scenario.expectedReason }]);
+      });
+    });
+  }
+});
+
+test('revalidates a same-email group again after it splits before either provider call', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedDeclineFixture(churchId, { email: 'trigger@example.test' });
+    const sharedEmail = `shared-split-${churchId}@example.test`;
+    await seedDeclineFixture(churchId, { email: sharedEmail });
+    const contact = await seedDeclineFixture(churchId, {
+      email: sharedEmail,
+      caregiverType: 'contact',
+    });
+    const calls = [];
+
+    assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+      now: NOW,
+      includeAbsences: false,
+      sendEmail: async (email) => {
+        calls.push(email);
+        if (calls.length === 1) {
+          await Database.query(
+            `UPDATE contacts SET email = 'moved-after-queue@example.test'
+             WHERE church_id = ? AND id = ?`,
+            [churchId, contact.recipientId],
+          );
+        } else if (calls.length === 2) {
+          await Database.query(
+            `UPDATE contacts SET primary_contact_method = 'sms'
+             WHERE church_id = ? AND id = ?`,
+            [churchId, contact.recipientId],
+          );
+        }
+      },
+    }), 2);
+
+    assert.deepEqual(calls, ['trigger@example.test', sharedEmail]);
+    assert.deepEqual(await Database.query(
+      `SELECT state, attempts, cancellation_reason AS reason
+       FROM engagement_decline_deliveries WHERE church_id = ? AND id = ?`,
+      [churchId, contact.deliveryId],
+    ), [{ state: 'cancelled', attempts: 0, reason: 'recipient_ineligible' }]);
+  });
+});
+
 test('stale family assignment and recipient eligibility cancel pending delivery before send', async () => {
   await withTestChurchDb(async (churchId) => {
     const moved = await seedDeclineFixture(churchId, { email: 'moved@example.test' });
@@ -422,6 +655,31 @@ test('stale family assignment and recipient eligibility cancel pending delivery 
       { id: removed.deliveryId, state: 'cancelled', reason: 'assignment_removed' },
       { id: inactive.deliveryId, state: 'cancelled', reason: 'recipient_ineligible' },
     ]);
+  });
+});
+
+test('sender independently cancels pending deliveries created under retired rules', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedDeclineFixture(churchId, { email: 'retired@example.test' });
+    await Database.query(
+      `INSERT INTO engagement_settings (church_id, calculation_rules_version)
+       VALUES (?, 2)
+       ON CONFLICT(church_id) DO UPDATE SET calculation_rules_version = 2`,
+      [churchId],
+    );
+    const sent = [];
+
+    assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+      now: NOW,
+      includeAbsences: false,
+      sendEmail: async (email) => sent.push(email),
+    }), 0);
+    assert.deepEqual(sent, []);
+    assert.deepEqual(await Database.query(
+      `SELECT state, cancellation_reason AS reason
+       FROM engagement_decline_deliveries WHERE church_id = ? AND id = ?`,
+      [churchId, fixture.deliveryId],
+    ), [{ state: 'cancelled', reason: 'rules_version_retired' }]);
   });
 });
 
@@ -602,5 +860,24 @@ test('last-present evidence excludes ineligible sessions but retains disclosed v
       gatheringName: 'Sunday',
       lastPresentDates: ['2026-07-05'],
     });
+  });
+});
+
+test('pastoral enrichment failure still sends the established absence-only digest', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedAbsenceOnlyFixture(churchId, 1);
+    await seedAbsenceSession(churchId, fixture, '2026-08-09');
+    await Database.query('DROP TABLE pastoral_insight_states');
+    const sends = [];
+
+    assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+      now: NOW,
+      sendEmail: async (email, _firstName, _churchName, entries) => sends.push({ email, entries }),
+    }), 1);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].email, 'absence-caregiver@example.test');
+    assert.deepEqual(sends[0].entries[0].reasons.map((reason) => reason.type), [
+      'consecutive_absence',
+    ]);
   });
 });

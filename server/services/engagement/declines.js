@@ -24,6 +24,9 @@ async function createEligibleDeliveryRowsWithConnection(conn, {
   toTier,
   effectiveWeekEnd,
   rulesVersion,
+  primaryAttended = null,
+  primaryOpportunities = null,
+  primaryRate = null,
 }) {
   const noCreation = { eventId: null, eventCreated: 0, deliveriesCreated: 0 };
   if (!churchId || !individualId || !fromTier || !toTier
@@ -32,8 +35,10 @@ async function createEligibleDeliveryRowsWithConnection(conn, {
   const inserted = await conn.query(
     `INSERT INTO engagement_decline_events
        (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
-        effective_week_end, rules_version, detected_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        effective_week_end, rules_version, detected_at,
+        primary_attended_at_detection, primary_opportunities_at_detection,
+        primary_rate_at_detection)
+     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
      ON CONFLICT(church_id, individual_id, to_tier, effective_week_end, rules_version)
      DO NOTHING`,
     [
@@ -44,6 +49,9 @@ async function createEligibleDeliveryRowsWithConnection(conn, {
       toTier,
       effectiveWeekEnd,
       rulesVersion,
+      primaryAttended,
+      primaryOpportunities,
+      primaryRate,
     ],
   );
   if (inserted.affectedRows !== 1) return noCreation;
@@ -136,19 +144,30 @@ async function loadEvaluationSnapshot(conn, churchId, rulesVersion) {
       [churchId],
     ),
     conn.query(
-      `SELECT id, individual_id AS individualId,
-              from_tier AS fromTier, to_tier AS toTier,
-              effective_week_end AS effectiveWeekEnd,
-              rules_version AS rulesVersion, recovered_at AS recoveredAt
-       FROM engagement_decline_events
-       WHERE church_id = ? AND rules_version = ?
+      `SELECT event.id, event.individual_id AS individualId,
+              event.from_tier AS fromTier, event.to_tier AS toTier,
+              event.effective_week_end AS effectiveWeekEnd,
+              event.rules_version AS rulesVersion, event.recovered_at AS recoveredAt,
+              metadata.has_superseded_events AS hasSupersededEvents
+       FROM (
+         SELECT EXISTS(
+           SELECT 1 FROM engagement_decline_events
+           WHERE church_id = ? AND rules_version <> ?
+         ) AS has_superseded_events
+       ) metadata
+       LEFT JOIN engagement_decline_events event
+         ON event.church_id = ? AND event.rules_version = ?
        ORDER BY individual_id,
          CASE to_tier WHEN 'irregular' THEN 0 WHEN 'casual' THEN 1 ELSE 2 END,
          id DESC`,
-      [churchId, rulesVersion],
+      [churchId, rulesVersion, churchId, rulesVersion],
     ),
   ]);
-  return { states, events };
+  return {
+    states,
+    events: events.filter((event) => event.id != null),
+    hasSupersededEvents: Boolean(events[0]?.hasSupersededEvents),
+  };
 }
 
 async function upsertEvaluationStates(conn, churchId, states) {
@@ -198,10 +217,12 @@ async function persistEvaluationActions(conn, churchId, rulesVersion, actions) {
   }
 
   if (actions.newEvents.length > 0) {
-    const inserted = await conn.query(
-      `INSERT INTO engagement_decline_events
+    const insertedEvents = await conn.queryReturning(
+       `INSERT INTO engagement_decline_events
          (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
-          effective_week_end, rules_version, detected_at)
+          effective_week_end, rules_version, detected_at,
+          primary_attended_at_detection, primary_opportunities_at_detection,
+          primary_rate_at_detection)
        SELECT ?,
               CAST(json_extract(event.value, '$.individualId') AS INTEGER),
               CAST(json_extract(event.value, '$.familyId') AS INTEGER),
@@ -209,80 +230,115 @@ async function persistEvaluationActions(conn, churchId, rulesVersion, actions) {
               json_extract(event.value, '$.toTier'),
               json_extract(event.value, '$.effectiveWeekEnd'),
               CAST(json_extract(event.value, '$.rulesVersion') AS INTEGER),
-              datetime('now')
+              datetime('now'),
+              CAST(json_extract(event.value, '$.primaryAttended') AS INTEGER),
+              CAST(json_extract(event.value, '$.primaryOpportunities') AS INTEGER),
+              CAST(json_extract(event.value, '$.primaryRate') AS REAL)
        FROM json_each(?) event
        WHERE 1
        ON CONFLICT(church_id, individual_id, to_tier, effective_week_end, rules_version)
-       DO NOTHING`,
+       DO NOTHING
+       RETURNING id,
+                 individual_id AS individualId,
+                 family_at_detection_id AS familyId`,
       [churchId, JSON.stringify(actions.newEvents)],
     );
-    eventsCreated = inserted.affectedRows;
+    eventsCreated = insertedEvents.length;
 
-    const deliveries = await conn.query(
-      `INSERT INTO engagement_decline_deliveries
-         (church_id, event_id, recipient_type, recipient_id,
-          family_caregiver_id, state, created_at, updated_at)
-       SELECT decline.church_id,
-              decline.id,
-              caregiver.caregiver_type,
-              CASE caregiver.caregiver_type
-                WHEN 'user' THEN caregiver.user_id
-                ELSE caregiver.contact_id
-              END,
-              caregiver.id,
-              'pending', datetime('now'), datetime('now')
-       FROM json_each(?) candidate
-       JOIN engagement_decline_events decline
-         ON decline.church_id = ?
-        AND decline.individual_id = CAST(json_extract(candidate.value, '$.individualId') AS INTEGER)
-        AND decline.to_tier = json_extract(candidate.value, '$.toTier')
-        AND decline.effective_week_end = json_extract(candidate.value, '$.effectiveWeekEnd')
-        AND decline.rules_version = CAST(json_extract(candidate.value, '$.rulesVersion') AS INTEGER)
-       JOIN individuals subject
-         ON subject.id = decline.individual_id
-        AND subject.church_id = ?
-        AND subject.family_id = decline.family_at_detection_id
-        AND subject.is_active = 1
-        AND subject.people_type = 'regular'
-       JOIN family_caregivers caregiver
-         ON caregiver.church_id = ?
-        AND caregiver.family_id = decline.family_at_detection_id
-       LEFT JOIN users recipient_user
-         ON caregiver.caregiver_type = 'user'
-        AND recipient_user.id = caregiver.user_id
-        AND recipient_user.church_id = ?
-       LEFT JOIN contacts recipient_contact
-         ON caregiver.caregiver_type = 'contact'
-        AND recipient_contact.id = caregiver.contact_id
-        AND recipient_contact.church_id = ?
-       WHERE (
-         (caregiver.caregiver_type = 'user'
-          AND recipient_user.is_active = 1
-          AND recipient_user.email IS NOT NULL
-          AND trim(recipient_user.email) <> ''
-          AND recipient_user.email_notifications = 1)
-         OR
-         (caregiver.caregiver_type = 'contact'
-          AND recipient_contact.is_active = 1
-          AND recipient_contact.email IS NOT NULL
-          AND trim(recipient_contact.email) <> ''
-          AND recipient_contact.primary_contact_method = 'email')
-       )
-       ON CONFLICT(church_id, event_id, recipient_type, recipient_id) DO NOTHING`,
-      [
-        JSON.stringify(actions.newEvents),
-        churchId,
-        churchId,
-        churchId,
-        churchId,
-        churchId,
-      ],
-    );
-    deliveriesCreated = deliveries.affectedRows;
+    if (insertedEvents.length > 0) {
+      const deliveries = await conn.query(
+        `INSERT INTO engagement_decline_deliveries
+           (church_id, event_id, recipient_type, recipient_id,
+            family_caregiver_id, state, created_at, updated_at)
+         SELECT decline.church_id,
+                decline.id,
+                caregiver.caregiver_type,
+                CASE caregiver.caregiver_type
+                  WHEN 'user' THEN caregiver.user_id
+                  ELSE caregiver.contact_id
+                END,
+                caregiver.id,
+                'pending', datetime('now'), datetime('now')
+         FROM json_each(?) inserted
+         JOIN engagement_decline_events decline
+           ON decline.id = CAST(json_extract(inserted.value, '$.id') AS INTEGER)
+          AND decline.church_id = ?
+         JOIN individuals subject
+           ON subject.id = decline.individual_id
+          AND subject.church_id = ?
+          AND subject.family_id = decline.family_at_detection_id
+          AND subject.is_active = 1
+          AND subject.people_type = 'regular'
+         JOIN family_caregivers caregiver
+           ON caregiver.church_id = ?
+          AND caregiver.family_id = decline.family_at_detection_id
+         LEFT JOIN users recipient_user
+           ON caregiver.caregiver_type = 'user'
+          AND recipient_user.id = caregiver.user_id
+          AND recipient_user.church_id = ?
+         LEFT JOIN contacts recipient_contact
+           ON caregiver.caregiver_type = 'contact'
+          AND recipient_contact.id = caregiver.contact_id
+          AND recipient_contact.church_id = ?
+         WHERE (
+           (caregiver.caregiver_type = 'user'
+            AND recipient_user.is_active = 1
+            AND recipient_user.email IS NOT NULL
+            AND trim(recipient_user.email) <> ''
+            AND recipient_user.email_notifications = 1)
+           OR
+           (caregiver.caregiver_type = 'contact'
+            AND recipient_contact.is_active = 1
+            AND recipient_contact.email IS NOT NULL
+            AND trim(recipient_contact.email) <> ''
+            AND recipient_contact.primary_contact_method = 'email')
+         )
+         ON CONFLICT(church_id, event_id, recipient_type, recipient_id) DO NOTHING`,
+        [
+          JSON.stringify(insertedEvents),
+          churchId,
+          churchId,
+          churchId,
+          churchId,
+          churchId,
+        ],
+      );
+      deliveriesCreated = deliveries.affectedRows;
+    }
   }
 
   await upsertEvaluationStates(conn, churchId, actions.states);
   return { eventsRecovered, eventsCreated, deliveriesCreated };
+}
+
+async function retireSupersededRulesWithConnection(conn, churchId, rulesVersion) {
+  await conn.query(
+    `UPDATE pastoral_insight_states
+     SET workflow_state = 'resolved',
+         snoozed_until = NULL,
+         resolved_at = COALESCE(resolved_at, datetime('now')),
+         updated_at = datetime('now')
+     WHERE church_id = ?
+       AND workflow_state <> 'resolved'
+       AND decline_event_id IN (
+         SELECT id FROM engagement_decline_events
+         WHERE church_id = ? AND rules_version <> ?
+       )`,
+    [churchId, churchId, rulesVersion],
+  );
+  await conn.query(
+    `UPDATE engagement_decline_deliveries
+     SET state = 'cancelled',
+         cancellation_reason = 'rules_version_retired',
+         updated_at = datetime('now')
+     WHERE church_id = ?
+       AND state = 'pending'
+       AND event_id IN (
+         SELECT id FROM engagement_decline_events
+         WHERE church_id = ? AND rules_version <> ?
+       )`,
+    [churchId, churchId, rulesVersion],
+  );
 }
 
 async function evaluateEngagementDeclines(churchId, options = {}) {
@@ -302,6 +358,11 @@ async function evaluateEngagementDeclines(churchId, options = {}) {
       deliveriesCreated: 0,
     };
     const snapshot = await loadEvaluationSnapshot(conn, churchId, rulesVersion);
+    // Retirement must not depend on mutable evaluation-state rows: dedupe/reset
+    // workflows may remove those rows while factual events remain.
+    if (snapshot.hasSupersededEvents) {
+      await retireSupersededRulesWithConnection(conn, churchId, rulesVersion);
+    }
     const stateByPerson = new Map(
       snapshot.states.map((state) => [state.individualId, state]),
     );
@@ -368,6 +429,9 @@ async function evaluateEngagementDeclines(churchId, options = {}) {
           toTier: currentTier,
           effectiveWeekEnd: completedWeekEnd,
           rulesVersion,
+          primaryAttended: profile.primary.attended,
+          primaryOpportunities: profile.primary.opportunities,
+          primaryRate: profile.primary.rate,
         };
         if (!existingEventKeys.has(eventKey(event))) actions.newEvents.push(event);
         activeTier = currentTier;

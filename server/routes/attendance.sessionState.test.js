@@ -221,7 +221,14 @@ test('REST standard and headcount writes finalize the session in the write trans
         baseUrl,
         token,
         `/api/attendance/${standard.insertId}/2026-08-20`,
-        { attendanceRecords: [], visitors: [] },
+        {
+          attendanceRecords: [{
+            individualId: person.insertId,
+            present: true,
+            clientTimestamp: '2099-08-20T00:00:00.000Z',
+          }],
+          visitors: [],
+        },
       );
       assert.equal(standardWrite.response.status, 200);
       assert.equal(standardWrite.body.sessionState.status, 'held');
@@ -234,11 +241,11 @@ test('REST standard and headcount writes finalize the session in the write trans
       assert.equal(standardSession.session_status, 'held');
       assert.equal(standardSession.roster_provenance_version, 1);
       assert.deepEqual(await Database.query(
-        `SELECT present, eligible_at_snapshot
+        `SELECT present, eligible_at_snapshot, updated_by
          FROM attendance_records
          WHERE session_id = ? AND individual_id = ? AND church_id = ?`,
         [standardSession.id, person.insertId, churchId],
-      ), [{ present: 0, eligible_at_snapshot: 1 }]);
+      ), [{ present: 1, eligible_at_snapshot: 1, updated_by: admin.insertId }]);
 
       const zeroWrite = await requestJson(
         baseUrl,
@@ -269,6 +276,79 @@ test('REST standard and headcount writes finalize the session in the write trans
          WHERE s.gathering_type_id = ? AND s.session_date = ? AND s.church_id = ?`,
         [headcount.insertId, '2026-08-21', churchId],
       ), [{ session_status: 'held', headcount: 0, updated_by: target.insertId }]);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      if (previousSecret === undefined) delete process.env.JWT_SECRET;
+      else process.env.JWT_SECRET = previousSecret;
+    }
+  });
+});
+
+test('REST attendance edits preserve a non-null historical people type', async () => {
+  await withTestChurchDb(async (churchId) => {
+    Database.getRegistryDb().prepare(
+      `INSERT INTO churches (church_id, church_name, is_approved)
+       VALUES (?, 'Historical Type Test', 1)`,
+    ).run(churchId);
+    const admin = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id)
+       VALUES ('historical-type@test.example', 'admin', 'Historical', 'Admin', 1, ?)`,
+      [churchId],
+    );
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (name, attendance_type, church_id)
+       VALUES ('Historical gathering', 'standard', ?)`,
+      [churchId],
+    );
+    const person = await Database.query(
+      `INSERT INTO individuals (first_name, last_name, people_type, church_id)
+       VALUES ('Former', 'Visitor', 'local_visitor', ?)`,
+      [churchId],
+    );
+    const session = await Database.query(
+      `INSERT INTO attendance_sessions
+         (gathering_type_id, session_date, created_by, session_status,
+          roster_provenance_version, church_id)
+       VALUES (?, '2025-08-20', ?, 'held', 0, ?)`,
+      [gathering.insertId, admin.insertId, churchId],
+    );
+    await Database.query(
+      `INSERT INTO attendance_records
+         (session_id, individual_id, present, people_type_at_time, church_id)
+       VALUES (?, ?, 0, 'local_visitor', ?)`,
+      [session.insertId, person.insertId, churchId],
+    );
+    await Database.query(
+      `UPDATE individuals SET people_type = 'regular'
+       WHERE id = ? AND church_id = ?`,
+      [person.insertId, churchId],
+    );
+
+    const previousSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = TEST_SECRET;
+    const token = jwt.sign({ userId: admin.insertId, churchId }, TEST_SECRET);
+    const { server, baseUrl } = await startApp();
+    try {
+      const result = await requestJson(
+        baseUrl,
+        token,
+        `/api/attendance/${gathering.insertId}/2025-08-20`,
+        {
+          attendanceRecords: [{
+            individualId: person.insertId,
+            present: true,
+            clientTimestamp: '2099-08-20T00:00:00.000Z',
+          }],
+          visitors: [],
+        },
+      );
+      assert.equal(result.response.status, 200);
+      assert.deepEqual(await Database.query(
+        `SELECT present, people_type_at_time
+         FROM attendance_records
+         WHERE session_id = ? AND individual_id = ? AND church_id = ?`,
+        [session.insertId, person.insertId, churchId],
+      ), [{ present: 1, people_type_at_time: 'local_visitor' }]);
     } finally {
       await new Promise((resolve) => server.close(resolve));
       if (previousSecret === undefined) delete process.env.JWT_SECRET;

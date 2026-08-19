@@ -1,4 +1,45 @@
 const UNKNOWN_EVENT_NAME = 'Unknown Event';
+const PCO_CHECKIN_SESSION_CANCELLED = 'PCO_CHECKIN_SESSION_CANCELLED';
+
+async function ensureHeldImportSessionWithConnection(conn, {
+  churchId,
+  gatheringTypeId,
+  sessionDate,
+  actorId,
+}) {
+  const existing = await conn.query(
+    `SELECT id, session_status
+     FROM attendance_sessions
+     WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?`,
+    [gatheringTypeId, sessionDate, churchId],
+  );
+  if (existing.length > 0) {
+    if (existing[0].session_status === 'cancelled') {
+      const error = new Error('Planning Center check-ins cannot be imported into a cancelled attendance session.');
+      error.code = PCO_CHECKIN_SESSION_CANCELLED;
+      error.statusCode = 409;
+      throw error;
+    }
+    if (existing[0].session_status === 'open') {
+      await conn.query(
+        `UPDATE attendance_sessions
+         SET session_status = 'held', updated_at = datetime('now')
+         WHERE id = ? AND church_id = ? AND session_status = 'open'`,
+        [existing[0].id, churchId],
+      );
+    }
+    return { id: Number(existing[0].id), created: false };
+  }
+
+  const inserted = await conn.query(
+    `INSERT INTO attendance_sessions
+       (gathering_type_id, session_date, created_by, session_status,
+        roster_snapshotted, roster_provenance_version, church_id)
+     VALUES (?, ?, ?, 'held', 0, 0, ?)`,
+    [gatheringTypeId, sessionDate, actorId, churchId],
+  );
+  return { id: Number(inserted.insertId), created: true };
+}
 
 // Returns the calendar date (YYYY-MM-DD) of an ISO timestamp, evaluated in tz.
 function localDateInTz(isoString, tz) {
@@ -336,6 +377,8 @@ function buildGatheringListAdds(normalized, activeIndividualIds, personToIndivid
 }
 
 module.exports = {
+  PCO_CHECKIN_SESSION_CANCELLED,
+  ensureHeldImportSessionWithConnection,
   localDateInTz, normalizeCheckIns, summarizeEvents, resolvePeople, buildRecordWrites, buildGatheringListAdds,
   suggestGatheringId, deriveSchedule, mergeCheckinImportState,
 };

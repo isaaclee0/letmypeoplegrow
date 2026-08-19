@@ -923,6 +923,7 @@ class Database {
     const run = async () => {
       const conn = {
         query: (sql, params = []) => Database._executeQuery(db, sql, params),
+        queryReturning: (sql, params = []) => Database._executeReturningQuery(db, sql, params),
         beginTransaction: () => {},
         commit: () => {},
         rollback: () => {}
@@ -1013,6 +1014,12 @@ class Database {
       }
       throw err;
     }
+  }
+
+  static _executeReturningQuery(db, sql, params = []) {
+    params = Database._normalizeParams(params);
+    const expanded = Database._expandArrayParams(sql, params);
+    return db.prepare(expanded.sql).all(...expanded.params);
   }
 
   static _expandArrayParams(sql, params) {

@@ -1,3 +1,21 @@
+const PASTORAL_INSIGHT_STATES_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS pastoral_insight_states (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  insight_type TEXT NOT NULL,
+  subject_id INTEGER NOT NULL REFERENCES individuals(id) ON DELETE RESTRICT,
+  episode_key TEXT NOT NULL,
+  decline_event_id INTEGER REFERENCES engagement_decline_events(id) ON DELETE SET NULL,
+  workflow_state TEXT NOT NULL DEFAULT 'open'
+    CHECK(workflow_state IN ('open','snoozed','dismissed','resolved')),
+  snoozed_until TEXT,
+  acted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, insight_type, subject_id, episode_key)
+);`;
+
 const ENGAGEMENT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS engagement_settings (
   church_id TEXT PRIMARY KEY,
@@ -29,6 +47,12 @@ CREATE TABLE IF NOT EXISTS engagement_decline_events (
   rules_version INTEGER NOT NULL CHECK(rules_version >= 1),
   detected_at TEXT NOT NULL DEFAULT (datetime('now')),
   recovered_at TEXT,
+  primary_attended_at_detection INTEGER
+    CHECK(primary_attended_at_detection IS NULL OR primary_attended_at_detection >= 0),
+  primary_opportunities_at_detection INTEGER
+    CHECK(primary_opportunities_at_detection IS NULL OR primary_opportunities_at_detection >= 0),
+  primary_rate_at_detection REAL
+    CHECK(primary_rate_at_detection IS NULL OR primary_rate_at_detection BETWEEN 0 AND 1),
   UNIQUE(church_id, individual_id, to_tier, effective_week_end, rules_version)
 );
 CREATE INDEX IF NOT EXISTS idx_engagement_decline_events_person
@@ -78,22 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_engagement_decline_deliveries_pending
 CREATE INDEX IF NOT EXISTS idx_engagement_decline_deliveries_recipient
   ON engagement_decline_deliveries(church_id, recipient_type, recipient_id, state);
 
-CREATE TABLE IF NOT EXISTS pastoral_insight_states (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  insight_type TEXT NOT NULL,
-  subject_id INTEGER NOT NULL,
-  episode_key TEXT NOT NULL,
-  decline_event_id INTEGER REFERENCES engagement_decline_events(id) ON DELETE SET NULL,
-  workflow_state TEXT NOT NULL DEFAULT 'open'
-    CHECK(workflow_state IN ('open','snoozed','dismissed','resolved')),
-  snoozed_until TEXT,
-  acted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  resolved_at TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(church_id, insight_type, subject_id, episode_key)
-);
+${PASTORAL_INSIGHT_STATES_TABLE_SQL}
 CREATE INDEX IF NOT EXISTS idx_pastoral_insight_states_subject
   ON pastoral_insight_states(church_id, insight_type, subject_id, workflow_state);
 CREATE INDEX IF NOT EXISTS idx_pastoral_insight_states_workflow
@@ -147,6 +156,34 @@ function addMissingColumns(db, tableName, columns) {
   }
 }
 
+function ensurePastoralSubjectForeignKey(db) {
+  if (!hasTable(db, 'pastoral_insight_states')) return;
+  const subjectForeignKey = db.prepare('PRAGMA foreign_key_list("pastoral_insight_states")').all()
+    .find((foreignKey) => foreignKey.from === 'subject_id');
+  if (subjectForeignKey?.table === 'individuals' && subjectForeignKey.on_delete === 'RESTRICT') {
+    return;
+  }
+
+  // The pre-release table briefly allowed workflow-only rows to outlive their subject.
+  // Such rows cannot be rendered or acted on, so discard them before enforcing integrity.
+  db.exec(`DELETE FROM pastoral_insight_states
+    WHERE NOT EXISTS (
+      SELECT 1 FROM individuals WHERE individuals.id = pastoral_insight_states.subject_id
+    )`);
+  db.exec(`
+    DROP TABLE IF EXISTS pastoral_insight_states_without_subject_fk;
+    ALTER TABLE pastoral_insight_states RENAME TO pastoral_insight_states_without_subject_fk;
+    ${PASTORAL_INSIGHT_STATES_TABLE_SQL}
+    INSERT INTO pastoral_insight_states
+      (id, church_id, insight_type, subject_id, episode_key, decline_event_id,
+       workflow_state, snoozed_until, acted_by, resolved_at, created_at, updated_at)
+    SELECT id, church_id, insight_type, subject_id, episode_key, decline_event_id,
+           workflow_state, snoozed_until, acted_by, resolved_at, created_at, updated_at
+    FROM pastoral_insight_states_without_subject_fk;
+    DROP TABLE pastoral_insight_states_without_subject_fk;
+  `);
+}
+
 function ensureEngagementLookupIndexes(db) {
   for (const [name, table, columns] of ENGAGEMENT_LOOKUP_INDEX_DEFINITIONS) {
     const existingColumns = new Set(tableColumns(db, table).map((column) => column.name));
@@ -176,8 +213,20 @@ function ensureEngagementSchema(db, churchId) {
     ]);
     addMissingColumns(db, 'attendance_records', [
       ['eligible_at_snapshot', 'INTEGER NOT NULL DEFAULT 0 CHECK (eligible_at_snapshot IN (0,1))'],
+      ['updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL'],
     ]);
 
+    db.exec(ENGAGEMENT_SCHEMA_SQL);
+    addMissingColumns(db, 'engagement_decline_events', [
+      ['primary_attended_at_detection',
+        'INTEGER CHECK(primary_attended_at_detection IS NULL OR primary_attended_at_detection >= 0)'],
+      ['primary_opportunities_at_detection',
+        'INTEGER CHECK(primary_opportunities_at_detection IS NULL OR primary_opportunities_at_detection >= 0)'],
+      ['primary_rate_at_detection',
+        'REAL CHECK(primary_rate_at_detection IS NULL OR primary_rate_at_detection BETWEEN 0 AND 1)'],
+    ]);
+    ensurePastoralSubjectForeignKey(db);
+    // Recreate the named indexes if the pastoral table was rebuilt above.
     db.exec(ENGAGEMENT_SCHEMA_SQL);
     ensureEngagementLookupIndexes(db);
 

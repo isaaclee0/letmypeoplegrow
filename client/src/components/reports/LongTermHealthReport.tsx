@@ -67,8 +67,8 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
       const response = await reportsAPI.getEngagementOverview();
       if (requestId !== overviewRequest.current) return;
       if (response.data.churchId !== churchId) throw new Error('The report belongs to another church.');
-      writeEngagementOverviewCache(response.data);
       setOverview(response.data);
+      writeEngagementOverviewCache(response.data);
     } catch {
       if (requestId !== overviewRequest.current) return;
       const hasCurrentFallback = fallback?.churchId === churchId;
@@ -123,11 +123,11 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
   const { settings } = overview;
   const denominator = overview.primaryDistribution.classified.denominator;
   const onSettingsSaved = async (_saved: EngagementSettingsDto) => {
-    clearEngagementOverviewCache(churchId);
     setOverview(null);
     setDrilldown(null);
     setError('');
     setShowSettings(false);
+    clearEngagementOverviewCache(churchId);
     await refresh(null);
   };
 

@@ -919,6 +919,21 @@ router.post('/clear-sample-data',
 
       await Database.transaction(async (conn) => {
         // Delete in dependency order
+        // Engagement history intentionally belongs to the sample dataset in this
+        // destructive reset flow; clear RESTRICT-protected audit rows explicitly.
+        await conn.query(`
+          DELETE FROM pastoral_insight_states WHERE church_id = ?
+        `, [churchId]);
+        await conn.query(`
+          DELETE FROM engagement_decline_deliveries WHERE church_id = ?
+        `, [churchId]);
+        await conn.query(`
+          DELETE FROM engagement_decline_events WHERE church_id = ?
+        `, [churchId]);
+        await conn.query(`
+          DELETE FROM engagement_evaluation_state WHERE church_id = ?
+        `, [churchId]);
+
         // 1. Attendance records
         await conn.query(`
           DELETE FROM attendance_records WHERE church_id = ?

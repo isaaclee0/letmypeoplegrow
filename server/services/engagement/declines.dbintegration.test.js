@@ -248,6 +248,58 @@ test('activation and rules-version changes baseline existing declines without al
   });
 });
 
+test('rules-version rollover retires old workflow even when evaluation state was removed', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const familyId = await seedFamily(churchId, 'Retired rules');
+    const individualId = await seedPerson(churchId, fixture, { familyId });
+    const caregiver = await assignUser(churchId, familyId);
+    const event = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at)
+       VALUES (?, ?, ?, 'core', 'casual', '2026-08-09', 1, '2026-08-10 08:00:00')`,
+      [churchId, individualId, familyId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_decline_deliveries
+         (church_id, event_id, recipient_type, recipient_id, family_caregiver_id)
+       VALUES (?, ?, 'user', ?, ?)`,
+      [churchId, event.insertId, caregiver.recipientId, caregiver.assignmentId],
+    );
+    await Database.query(
+      `INSERT INTO pastoral_insight_states
+         (church_id, insight_type, subject_id, episode_key, decline_event_id, workflow_state)
+       VALUES (?, 'primary_decline', ?, ?, ?, 'open')`,
+      [churchId, individualId, `primary_decline:event:${event.insertId}`, event.insertId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_settings (church_id, calculation_rules_version)
+       VALUES (?, 2)
+       ON CONFLICT(church_id) DO UPDATE SET calculation_rules_version = 2`,
+      [churchId],
+    );
+
+    await evaluateEngagementDeclines(churchId, { asOf: AS_OF });
+
+    assert.deepEqual(await Database.query(
+      `SELECT e.recovered_at AS recoveredAt,
+              p.workflow_state AS workflowState,
+              d.state AS deliveryState, d.cancellation_reason AS cancellationReason
+       FROM engagement_decline_events e
+       JOIN pastoral_insight_states p ON p.decline_event_id = e.id AND p.church_id = ?
+       JOIN engagement_decline_deliveries d ON d.event_id = e.id AND d.church_id = ?
+       WHERE e.id = ? AND e.church_id = ?`,
+      [churchId, churchId, event.insertId, churchId],
+    ), [{
+      recoveredAt: null,
+      workflowState: 'resolved',
+      deliveryState: 'cancelled',
+      cancellationReason: 'rules_version_retired',
+    }]);
+  });
+});
+
 test('baselines a large regular roster with bounded database queries', async (t) => {
   await withTestChurchDb(async (churchId) => {
     const db = Database.getChurchDb(churchId);
@@ -313,6 +365,19 @@ test('persists each supported Primary decline once for a completed week', async 
       { individualId: people[0], fromTier: 'core', toTier: 'casual', effectiveWeekEnd: SUNDAY },
       { individualId: people[1], fromTier: 'casual', toTier: 'irregular', effectiveWeekEnd: SUNDAY },
       { individualId: people[2], fromTier: 'core', toTier: 'irregular', effectiveWeekEnd: SUNDAY },
+    ]);
+    assert.deepEqual(await Database.query(
+      `SELECT individual_id AS individualId,
+              primary_attended_at_detection AS attended,
+              primary_opportunities_at_detection AS opportunities,
+              primary_rate_at_detection AS rate
+       FROM engagement_decline_events
+       WHERE church_id = ? ORDER BY id`,
+      [churchId],
+    ), [
+      { individualId: people[0], attended: 3, opportunities: 8, rate: 0.375 },
+      { individualId: people[1], attended: 0, opportunities: 8, rate: 0 },
+      { individualId: people[2], attended: 1, opportunities: 8, rate: 0.125 },
     ]);
     assert.deepEqual(await Database.query(
       `SELECT delivery.recipient_type AS recipientType,
@@ -775,6 +840,79 @@ test('does not add a caregiver assigned to the detection family after its recipi
        FROM engagement_decline_deliveries
        WHERE church_id = ? AND event_id = ?`,
       [churchId, initial.eventId],
+    ))[0].count, 0);
+  });
+});
+
+test('bulk conflict loser cannot snapshot caregivers onto the winning decline event', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const familyId = await seedFamily(churchId, 'Concurrent winner');
+    const individualId = await seedPerson(churchId, fixture, { familyId });
+    const baselineWeek = addDays(SUNDAY, -7);
+    await replaceProfileSnapshot(churchId, fixture, baselineWeek, [{
+      individualId,
+      primary: 'core_core',
+    }]);
+    await evaluateEngagementDeclines(churchId, { asOf: asOfAfter(baselineWeek) });
+    await replaceProfileSnapshot(churchId, fixture, SUNDAY, [{
+      individualId,
+      primary: 'core_casual',
+    }]);
+
+    const originalExecuteQuery = Database._executeQuery;
+    const originalExecuteReturningQuery = Database._executeReturningQuery;
+    let injected = false;
+    const withConcurrentWinner = (db, sql, params, execute) => {
+      if (!injected
+          && sql.includes('INSERT INTO engagement_decline_events')
+          && sql.includes('FROM json_each(?) event')) {
+        injected = true;
+        db.prepare(
+          `INSERT INTO engagement_decline_events
+             (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+              effective_week_end, rules_version, detected_at)
+           VALUES (?, ?, ?, 'core', 'casual', ?, 1, datetime('now'))`,
+        ).run(churchId, individualId, familyId, SUNDAY);
+        const recipient = db.prepare(
+          `INSERT INTO users
+             (church_id, email, role, first_name, last_name, is_active, email_notifications)
+           VALUES (?, ?, 'coordinator', 'Late', 'Caregiver', 1, 1)`,
+        ).run(churchId, `late-${churchId}@example.test`);
+        db.prepare(
+          `INSERT INTO family_caregivers
+             (church_id, family_id, caregiver_type, user_id)
+           VALUES (?, ?, 'user', ?)`,
+        ).run(churchId, familyId, recipient.lastInsertRowid);
+      }
+      return execute.call(Database, db, sql, params);
+    };
+    Database._executeQuery = (db, sql, params) =>
+      withConcurrentWinner(db, sql, params, originalExecuteQuery);
+    if (originalExecuteReturningQuery) {
+      Database._executeReturningQuery = (db, sql, params) =>
+        withConcurrentWinner(db, sql, params, originalExecuteReturningQuery);
+    }
+    let result;
+    try {
+      result = await evaluateEngagementDeclines(churchId, { asOf: AS_OF });
+    } finally {
+      Database._executeQuery = originalExecuteQuery;
+      if (originalExecuteReturningQuery) {
+        Database._executeReturningQuery = originalExecuteReturningQuery;
+      }
+    }
+
+    assert.equal(injected, true);
+    assert.equal(result.eventsCreated, 0);
+    assert.equal(result.deliveriesCreated, 0);
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count FROM engagement_decline_events WHERE church_id = ?`,
+      [churchId],
+    ))[0].count, 1);
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count FROM engagement_decline_deliveries WHERE church_id = ?`,
+      [churchId],
     ))[0].count, 0);
   });
 });

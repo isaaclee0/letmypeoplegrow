@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngagementOverviewDto } from './api';
 import {
   clearEngagementOverviewCache,
@@ -63,6 +63,33 @@ const overview = (churchId = 'church-a', completedWeekEnd = '2026-08-16'): Engag
 
 describe('engagement report cache', () => {
   beforeEach(() => localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
+
+  it('treats a storage read failure as a cache miss', () => {
+    writeEngagementOverviewCache(overview());
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked', 'SecurityError');
+    });
+
+    expect(readEngagementOverviewCache('church-a')).toBeNull();
+  });
+
+  it('ignores a storage write failure', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage quota exceeded', 'QuotaExceededError');
+    });
+
+    expect(() => writeEngagementOverviewCache(overview())).not.toThrow();
+  });
+
+  it('ignores a storage removal failure', () => {
+    writeEngagementOverviewCache(overview());
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked', 'SecurityError');
+    });
+
+    expect(() => clearEngagementOverviewCache('church-a')).not.toThrow();
+  });
 
   it('keeps overview entries separate by church, completed week, and schema version', () => {
     writeEngagementOverviewCache(overview('church-a', '2026-08-09'));

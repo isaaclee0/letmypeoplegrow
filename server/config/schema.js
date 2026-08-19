@@ -615,6 +615,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   present INTEGER DEFAULT 0,
   eligible_at_snapshot INTEGER NOT NULL DEFAULT 0 CHECK (eligible_at_snapshot IN (0,1)),
   people_type_at_time TEXT CHECK(people_type_at_time IN ('regular', 'local_visitor', 'traveller_visitor')),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   updated_at TEXT DEFAULT (datetime('now')),
   church_id TEXT NOT NULL,
   FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,

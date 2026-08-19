@@ -237,6 +237,62 @@ test('standard finalisation is idempotent and does not expand a completed roster
   });
 });
 
+test('editing a migrated held provenance-v0 session does not snapshot the current roster', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const actorId = await seedActor(churchId);
+    const gatheringTypeId = await seedGathering(churchId, actorId);
+    const historicalAttendeeId = await seedIndividual(churchId, 'Historical', 'local_visitor');
+    const currentRosterId = await seedIndividual(churchId, 'CurrentRoster');
+    await Database.query(
+      `INSERT INTO gathering_lists (church_id, gathering_type_id, individual_id, added_by)
+       VALUES (?, ?, ?, ?)`,
+      [churchId, gatheringTypeId, currentRosterId, actorId],
+    );
+    const session = await Database.query(
+      `INSERT INTO attendance_sessions
+         (church_id, gathering_type_id, session_date, created_by,
+          session_status, roster_snapshotted, roster_provenance_version)
+       VALUES (?, ?, '2025-08-17', ?, 'held', 0, 0)`,
+      [churchId, gatheringTypeId, actorId],
+    );
+    await Database.query(
+      `INSERT INTO attendance_records
+         (church_id, session_id, individual_id, present,
+          eligible_at_snapshot, people_type_at_time)
+       VALUES (?, ?, ?, 1, 0, 'local_visitor')`,
+      [churchId, session.insertId, historicalAttendeeId],
+    );
+
+    await Database.transaction((conn) => finalizeStandardSessionWithConnection(conn, {
+      churchId,
+      sessionId: session.insertId,
+      gatheringTypeId,
+    }));
+
+    assert.deepEqual(
+      await Database.query(
+        `SELECT session_status, roster_snapshotted, roster_provenance_version
+         FROM attendance_sessions WHERE id = ? AND church_id = ?`,
+        [session.insertId, churchId],
+      ),
+      [{ session_status: 'held', roster_snapshotted: 0, roster_provenance_version: 0 }],
+    );
+    assert.deepEqual(
+      await Database.query(
+        `SELECT individual_id, present, eligible_at_snapshot, people_type_at_time
+         FROM attendance_records WHERE session_id = ? AND church_id = ?`,
+        [session.insertId, churchId],
+      ),
+      [{
+        individual_id: historicalAttendeeId,
+        present: 1,
+        eligible_at_snapshot: 0,
+        people_type_at_time: 'local_visitor',
+      }],
+    );
+  });
+});
+
 test('manual held state records a standard gathering with nobody present', async () => {
   await withTestChurchDb(async (churchId) => {
     const actorId = await seedActor(churchId);

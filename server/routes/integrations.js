@@ -1630,20 +1630,14 @@ async function runCheckinImport({ req, commit }) {
       const sKey = `${w.gatheringTypeId}|${w.date}`;
       let sessionId = sessionCache.get(sKey);
       if (sessionId == null) {
-        const existing = await conn.query(
-          `SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?`,
-          [w.gatheringTypeId, w.date, churchId]
-        );
-        if (existing.length > 0) {
-          sessionId = existing[0].id;
-        } else {
-          const ins = await conn.query(
-            `INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id) VALUES (?, ?, ?, ?)`,
-            [w.gatheringTypeId, w.date, userId, churchId]
-          );
-          sessionId = ins.insertId;
-          sessionsCreated++;
-        }
+        const session = await checkinsImport.ensureHeldImportSessionWithConnection(conn, {
+          churchId,
+          gatheringTypeId: w.gatheringTypeId,
+          sessionDate: w.date,
+          actorId: userId,
+        });
+        sessionId = session.id;
+        if (session.created) sessionsCreated++;
         sessionCache.set(sKey, sessionId);
       }
 

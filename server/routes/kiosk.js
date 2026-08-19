@@ -4,6 +4,7 @@ const { verifyToken, requireGatheringAccess, auditLog } = require('../middleware
 const { columnExists } = require('../utils/databaseSchema');
 const logger = require('../config/logger');
 const { finalizeStandardSessionWithConnection } = require('../services/attendanceSessionState');
+const { kioskModeEnabled } = require('../services/kioskMode');
 
 const router = express.Router();
 
@@ -13,10 +14,6 @@ router.use(verifyToken);
 // entire church roster into the browser for an unattended, PIN-locked
 // device. See docs/superpowers/specs/2026-07-13-kiosk-mode-env-gate-design.md.
 // Only set KIOSK_MODE_ENABLED=true once that data-exposure issue is fixed.
-function kioskModeEnabled() {
-  return process.env.KIOSK_MODE_ENABLED === 'true';
-}
-
 // ===== Report whether self check-in / kiosk mode is enabled =====
 // GET /api/kiosk/status
 router.get('/status', (req, res) => {
@@ -44,7 +41,7 @@ const disableCache = (req, res, next) => {
 
 // ===== Record kiosk check-in or check-out =====
 // POST /api/kiosk/:gatheringTypeId/:date
-router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
+router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
     const { individualIds, action, signerName } = req.body;
@@ -130,7 +127,9 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
                 VALUES (?, ?, 1, ?, ?)
-                ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                  present = 1,
+                  people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
               `, [sessionId, individualId, churchId, peopleTypeAtTime]);
             } else {
               await conn.query(`
@@ -144,7 +143,9 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
                 VALUES (?, ?, 1, ?)
-                ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                  present = 1,
+                  people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
               `, [sessionId, individualId, peopleTypeAtTime]);
             } else {
               await conn.query(`

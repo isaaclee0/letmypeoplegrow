@@ -67,7 +67,7 @@ function candidateKey(type, source) {
   return `${type}:${source.completedWeekEnd}`;
 }
 
-async function loadPastoralSource(churchId, window) {
+async function loadPastoralSource(churchId, window, rulesVersion) {
   const query = (sql, params) => Database.queryForChurch(churchId, sql, params);
   const [people, families, caregivers, lastAttendance, declineEvents, visitorAttendance] = await Promise.all([
     query(
@@ -135,9 +135,9 @@ async function loadPastoralSource(churchId, window) {
               rules_version AS rulesVersion, detected_at AS detectedAt,
               recovered_at AS recoveredAt
        FROM engagement_decline_events
-       WHERE church_id = ?
+       WHERE church_id = ? AND rules_version = ?
        ORDER BY id`,
-      [churchId],
+      [churchId, rulesVersion],
     ),
     query(
       `SELECT ar.individual_id AS individualId,
@@ -284,13 +284,16 @@ async function reconcileStatesWithConnection(conn, churchId, candidates, today) 
   const statesToInsert = [];
   const expiredSnoozeIds = [];
   for (const candidate of candidates) {
-    let state = states.find((row) => row.type === candidate.type
+    const exactState = states.find((row) => row.type === candidate.type
       && row.subjectId === candidate.subjectId
-      && row.episodeKey === candidate.episodeKey
-      && row.workflowState !== 'resolved');
+      && row.episodeKey === candidate.episodeKey);
+    if (exactState?.workflowState === 'resolved' && !candidate.recurringCondition) continue;
+    let state = exactState?.workflowState === 'resolved' ? null : exactState;
     if (!state && candidate.recurringCondition) state = activeStateForCondition(states, candidate);
     if (!state) {
-      const episodeKey = uniqueEpisodeKey(candidate, states);
+      const episodeKey = candidate.recurringCondition
+        ? uniqueEpisodeKey(candidate, states)
+        : candidate.episodeKey;
       state = {
         id: null,
         type: candidate.type,
@@ -515,7 +518,11 @@ async function loadPastoralFacts(churchId, asOf, knownTimeZone) {
     calculateEngagementProfiles(churchId, { asOf }),
   ]);
   const today = getChurchDate(asOf, timeZone);
-  const source = await loadPastoralSource(churchId, profiles.window);
+  const source = await loadPastoralSource(
+    churchId,
+    profiles.window,
+    profiles.settings.calculationRulesVersion,
+  );
   const candidates = buildCandidates(source, profiles, profiles.window, timeZone);
   return { timeZone, today, profiles, source, candidates };
 }

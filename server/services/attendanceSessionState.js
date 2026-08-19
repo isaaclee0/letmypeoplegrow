@@ -135,7 +135,11 @@ async function finalizeStandardSessionWithConnection(conn, {
     throw invalidTransitionError('cancelled', 'held');
   }
 
-  if (session.roster_provenance_version !== 1) {
+  const shouldCaptureReliableRoster = session.session_status === 'open'
+    && session.roster_snapshotted !== 1
+    && session.roster_provenance_version !== 1;
+
+  if (shouldCaptureReliableRoster) {
     await conn.query(
       `INSERT INTO attendance_records
          (church_id, session_id, individual_id, present,
@@ -171,15 +175,24 @@ async function finalizeStandardSessionWithConnection(conn, {
     );
   }
 
-  await conn.query(
-    `UPDATE attendance_sessions
-     SET roster_snapshotted = 1,
-         roster_provenance_version = 1,
-         session_status = 'held',
-         updated_at = datetime('now')
-     WHERE id = ? AND church_id = ?`,
-    [sessionId, churchId],
-  );
+  if (shouldCaptureReliableRoster) {
+    await conn.query(
+      `UPDATE attendance_sessions
+       SET roster_snapshotted = 1,
+           roster_provenance_version = 1,
+           session_status = 'held',
+           updated_at = datetime('now')
+       WHERE id = ? AND church_id = ?`,
+      [sessionId, churchId],
+    );
+  } else {
+    await conn.query(
+      `UPDATE attendance_sessions
+       SET session_status = 'held', updated_at = datetime('now')
+       WHERE id = ? AND church_id = ?`,
+      [sessionId, churchId],
+    );
+  }
   return mapSession(await loadSessionByIdWithConnection(conn, { churchId, sessionId }));
 }
 

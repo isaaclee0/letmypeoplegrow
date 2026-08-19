@@ -4,7 +4,11 @@ const Database = require('../config/database');
 const { sendWeeklyCaregiverDigestEmail } = require('../utils/email');
 const { calculateConsecutiveAbsenceStreaks } = require('./attendancePeriodStreaks');
 const { getPastoralInsights } = require('./engagement/pastoral');
-const { getEngagementWindow } = require('./engagement/opportunities');
+const {
+  calculateEngagementProfiles,
+  getEngagementWindow,
+} = require('./engagement/opportunities');
+const { addDateOnly } = require('../utils/churchTime');
 
 const recipientKey = (type, id) => `${type}:${id}`;
 
@@ -154,6 +158,9 @@ async function loadAbsenceCards(churchId, threshold) {
 }
 
 function cancellationReason(row) {
+  if (Number(row.rulesVersion) !== Number(row.currentRulesVersion)) {
+    return 'rules_version_retired';
+  }
   if (row.recoveredAt != null) return 'event_recovered';
   if (Number(row.personActive) !== 1 || row.peopleType !== 'regular') return 'person_ineligible';
   if (row.currentFamilyId !== row.familyAtDetectionId) return 'family_changed';
@@ -177,6 +184,13 @@ async function loadPendingDeclineCards(churchId, { now, mutateDeliveryState }) {
             e.id AS eventId, e.individual_id AS personId,
             e.family_at_detection_id AS familyAtDetectionId, e.from_tier AS fromTier,
             e.to_tier AS toTier, e.effective_week_end AS effectiveWeekEnd,
+            e.rules_version AS rulesVersion,
+            e.primary_attended_at_detection AS primaryAttendedAtDetection,
+            e.primary_opportunities_at_detection AS primaryOpportunitiesAtDetection,
+            e.primary_rate_at_detection AS primaryRateAtDetection,
+            COALESCE((SELECT calculation_rules_version
+                      FROM engagement_settings
+                      WHERE church_id = ? LIMIT 1), 1) AS currentRulesVersion,
             e.recovered_at AS recoveredAt, i.first_name AS personFirstName,
             i.last_name AS personLastName, i.family_id AS currentFamilyId,
             i.is_active AS personActive, i.people_type AS peopleType, f.family_name AS familyName,
@@ -199,9 +213,21 @@ async function loadPendingDeclineCards(churchId, { now, mutateDeliveryState }) {
      LEFT JOIN pastoral_insight_states pis ON pis.decline_event_id = e.id
        AND pis.church_id = ? AND pis.insight_type = 'primary_decline'
      WHERE d.church_id = ? AND d.state = 'pending' ORDER BY d.id`,
-    [churchId, churchId, churchId, churchId, churchId, churchId, churchId, churchId],
+    [
+      churchId,
+      churchId, churchId, churchId, churchId, churchId, churchId, churchId, churchId,
+    ],
   );
   const output = [];
+  const profilesByWeek = new Map();
+  const profilesForWeek = (effectiveWeekEnd) => {
+    if (!profilesByWeek.has(effectiveWeekEnd)) {
+      profilesByWeek.set(effectiveWeekEnd, calculateEngagementProfiles(churchId, {
+        asOf: new Date(`${addDateOnly(effectiveWeekEnd, { days: 1 })}T12:00:00.000Z`),
+      }));
+    }
+    return profilesByWeek.get(effectiveWeekEnd);
+  };
   for (const row of rows) {
     const reason = cancellationReason(row);
     if (reason) {
@@ -218,6 +244,21 @@ async function loadPendingDeclineCards(churchId, { now, mutateDeliveryState }) {
     const insight = pastoral.insights.find((item) => item.type === 'primary_decline'
       && item.declineEventId === row.eventId);
     if (!insight) continue;
+    let opportunityEvidence;
+    if (row.primaryAttendedAtDetection != null
+        && row.primaryOpportunitiesAtDetection != null
+        && row.primaryRateAtDetection != null) {
+      opportunityEvidence = {
+        status: row.toTier,
+        attended: Number(row.primaryAttendedAtDetection),
+        opportunities: Number(row.primaryOpportunitiesAtDetection),
+        rate: Number(row.primaryRateAtDetection),
+      };
+    } else {
+      const eventProfiles = await profilesForWeek(row.effectiveWeekEnd);
+      opportunityEvidence = eventProfiles.current.get(row.personId)?.primary
+        || { status: 'not_assigned', attended: 0, opportunities: 0, rate: null };
+    }
     output.push({
       caregiver: {
         type: row.recipientType, id: row.recipientId, email: row.email,
@@ -232,7 +273,7 @@ async function loadPendingDeclineCards(churchId, { now, mutateDeliveryState }) {
           type: 'primary_tier_decline', eventId: row.eventId,
           fromTier: row.fromTier, toTier: row.toTier,
           effectiveWeekEnd: row.effectiveWeekEnd,
-          opportunityEvidence: insight.profiles.primary,
+          opportunityEvidence,
         }],
       },
     });
@@ -248,18 +289,31 @@ async function generateCaregiverDigests(churchId, options = {}) {
   );
   if (!settings) return [];
   const digests = new Map();
+  const recipientFilter = options.recipientIds
+    ? new Set(options.recipientIds.map((recipient) => recipientKey(recipient.type, recipient.id)))
+    : null;
+  const includesRecipient = (caregiver) => recipientFilter == null
+    || recipientFilter.has(recipientKey(caregiver.type, caregiver.id));
   if (options.includeAbsences !== false) {
     for (const item of await loadAbsenceCards(churchId, settings.caregiver_absence_threshold ?? 3)) {
-      addCard(digests, item.caregiver, item.card);
+      if (includesRecipient(item.caregiver)) addCard(digests, item.caregiver, item.card);
     }
   }
   let completedWeekEnd = getEngagementWindow(now, settings.timezone || 'UTC').completedWeekEnd;
   if (options.includePendingDeclines !== false) {
-    const declines = await loadPendingDeclineCards(churchId, {
-      now, mutateDeliveryState: options.mutateDeliveryState !== false,
-    });
-    completedWeekEnd = declines.completedWeekEnd;
-    for (const item of declines.cards) addCard(digests, item.caregiver, item.card, item.deliveryId);
+    try {
+      const declines = await loadPendingDeclineCards(churchId, {
+        now, mutateDeliveryState: options.mutateDeliveryState !== false,
+      });
+      completedWeekEnd = declines.completedWeekEnd;
+      for (const item of declines.cards) {
+        if (includesRecipient(item.caregiver)) {
+          addCard(digests, item.caregiver, item.card, item.deliveryId);
+        }
+      }
+    } catch (error) {
+      console.error(`Caregiver digest: Decline enrichment failed for church ${churchId}:`, error.message);
+    }
   }
   for (const digest of digests.values()) {
     digest.completedWeekEnd = completedWeekEnd;
@@ -301,12 +355,26 @@ async function sendWeeklyCaregiverDigests(churchId, options = {}) {
       `SELECT church_name, timezone FROM church_settings WHERE church_id = ? LIMIT 1`, [churchId],
     );
     if (!settings) return 0;
-    const digests = await generateCaregiverDigests(churchId, {
+    const queuedDigests = await generateCaregiverDigests(churchId, {
       now,
       includeAbsences: options.includeAbsences,
       mutateDeliveryState: !testMode,
     });
-    for (const digest of digests) {
+    const recipientQueue = queuedDigests.map((digest) => digest.recipientIds);
+    while (recipientQueue.length > 0) {
+      const recipientIds = recipientQueue.shift();
+      const currentDigests = await generateCaregiverDigests(churchId, {
+        now,
+        includeAbsences: options.includeAbsences,
+        mutateDeliveryState: !testMode,
+        recipientIds,
+      });
+      if (currentDigests.length > 1) {
+        recipientQueue.unshift(...currentDigests.map((digest) => digest.recipientIds));
+        continue;
+      }
+      const [digest] = currentDigests;
+      if (!digest) continue;
       const firstRecipient = digest.recipientIds[0];
       const messageKey = firstRecipient
         ? `engagement-digest:${churchId}:${firstRecipient.type}:${firstRecipient.id}:${digest.completedWeekEnd}`

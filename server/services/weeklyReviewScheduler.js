@@ -136,7 +136,11 @@ async function processChurch(church, options = {}) {
       const isRetryDay = localDay === retryDay;
 
       if (isPrimaryDay) {
-        await evaluateDeclines(churchId, { asOf: now });
+        try {
+          await evaluateDeclines(churchId, { asOf: now });
+        } catch (error) {
+          console.error(`Weekly review: Engagement evaluation failed for church ${churchId}:`, error.message);
+        }
       }
 
       // Evaluation keeps engagement state current even when email is disabled.

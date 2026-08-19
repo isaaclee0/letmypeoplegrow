@@ -98,6 +98,22 @@ function createLegacyDb() {
       church_id TEXT NOT NULL,
       UNIQUE(session_id, updated_by)
     );
+    CREATE TABLE pastoral_insight_states (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      church_id TEXT NOT NULL,
+      insight_type TEXT NOT NULL,
+      subject_id INTEGER NOT NULL,
+      episode_key TEXT NOT NULL,
+      decline_event_id INTEGER REFERENCES engagement_decline_events(id) ON DELETE SET NULL,
+      workflow_state TEXT NOT NULL DEFAULT 'open'
+        CHECK(workflow_state IN ('open','snoozed','dismissed','resolved')),
+      snoozed_until TEXT,
+      acted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      resolved_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(church_id, insight_type, subject_id, episode_key)
+    );
   `);
   return db;
 }
@@ -185,6 +201,16 @@ function assertEngagementColumns(db) {
     { type: eligibleColumn.type, notnull: eligibleColumn.notnull, default: eligibleColumn.dflt_value },
     { type: 'INTEGER', notnull: 1, default: '0' },
   );
+  const attendanceUpdatedByColumn = db.prepare('PRAGMA table_info(attendance_records)').all()
+    .find((column) => column.name === 'updated_by');
+  assert.deepEqual(
+    {
+      type: attendanceUpdatedByColumn?.type,
+      notnull: attendanceUpdatedByColumn?.notnull,
+      default: attendanceUpdatedByColumn?.dflt_value,
+    },
+    { type: 'INTEGER', notnull: 0, default: null },
+  );
 
   assert.match(tableSql(db, 'gathering_types'), /CHECK\s*\(engagement_role IN \('primary','community','other'\)\)/i);
   assert.match(tableSql(db, 'attendance_sessions'), /CHECK\s*\(session_status IN \('open','held','cancelled'\)\)/i);
@@ -201,6 +227,8 @@ function assertEngagementTables(db) {
     engagement_decline_events: [
       'id', 'church_id', 'individual_id', 'family_at_detection_id', 'from_tier',
       'to_tier', 'effective_week_end', 'rules_version', 'detected_at', 'recovered_at',
+      'primary_attended_at_detection', 'primary_opportunities_at_detection',
+      'primary_rate_at_detection',
     ],
     engagement_evaluation_state: [
       'church_id', 'individual_id', 'rules_version', 'last_evaluated_week_end',
@@ -362,6 +390,11 @@ function assertChecksAndUniqueKeys(db, ids) {
 
 function assertForeignKeysAndIndexes(db) {
   assert.deepEqual(
+    { table: foreignKey(db, 'attendance_records', 'updated_by').table,
+      onDelete: foreignKey(db, 'attendance_records', 'updated_by').on_delete },
+    { table: 'users', onDelete: 'SET NULL' },
+  );
+  assert.deepEqual(
     { table: foreignKey(db, 'attendance_sessions', 'cancelled_by').table,
       onDelete: foreignKey(db, 'attendance_sessions', 'cancelled_by').on_delete },
     { table: 'users', onDelete: 'SET NULL' },
@@ -370,6 +403,16 @@ function assertForeignKeysAndIndexes(db) {
     { table: foreignKey(db, 'engagement_decline_deliveries', 'family_caregiver_id').table,
       onDelete: foreignKey(db, 'engagement_decline_deliveries', 'family_caregiver_id').on_delete },
     { table: 'family_caregivers', onDelete: 'SET NULL' },
+  );
+  assert.deepEqual(
+    { table: foreignKey(db, 'engagement_decline_events', 'individual_id')?.table,
+      onDelete: foreignKey(db, 'engagement_decline_events', 'individual_id')?.on_delete },
+    { table: 'individuals', onDelete: 'RESTRICT' },
+  );
+  assert.deepEqual(
+    { table: foreignKey(db, 'pastoral_insight_states', 'subject_id')?.table,
+      onDelete: foreignKey(db, 'pastoral_insight_states', 'subject_id')?.on_delete },
+    { table: 'individuals', onDelete: 'RESTRICT' },
   );
 
   const requiredIndexPrefixes = {

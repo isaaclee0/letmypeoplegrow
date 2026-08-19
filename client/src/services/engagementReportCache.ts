@@ -246,8 +246,20 @@ function isPastoralInsights(value: unknown): value is PastoralInsightsDto {
 
 function churchKeys(churchId: string): string[] {
   const prefix = prefixForChurch(churchId);
-  return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-    .filter((key): key is string => !!key && key.startsWith(prefix));
+  try {
+    return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .filter((key): key is string => !!key && key.startsWith(prefix));
+  } catch {
+    return [];
+  }
+}
+
+function removeCacheEntry(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Cache persistence is an optional optimisation; server data remains authoritative.
+  }
 }
 
 export function readEngagementOverviewCache(churchId: string): EngagementOverviewDto | null {
@@ -256,17 +268,17 @@ export function readEngagementOverviewCache(churchId: string): EngagementOvervie
     try {
       const parsed: unknown = JSON.parse(localStorage.getItem(key) || 'null');
       if (!isOverview(parsed) || parsed.churchId !== churchId) {
-        localStorage.removeItem(key);
+        removeCacheEntry(key);
         continue;
       }
       const expectedKey = `${prefixForChurch(churchId)}${parsed.window.completedWeekEnd}`;
       if (key !== expectedKey) {
-        localStorage.removeItem(key);
+        removeCacheEntry(key);
         continue;
       }
       return parsed;
     } catch {
-      localStorage.removeItem(key);
+      removeCacheEntry(key);
     }
   }
   return null;
@@ -275,11 +287,15 @@ export function readEngagementOverviewCache(churchId: string): EngagementOvervie
 export function writeEngagementOverviewCache(overview: EngagementOverviewDto): void {
   if (!isOverview(overview)) return;
   const key = `${prefixForChurch(overview.churchId)}${overview.window.completedWeekEnd}`;
-  localStorage.setItem(key, JSON.stringify(overview));
+  try {
+    localStorage.setItem(key, JSON.stringify(overview));
+  } catch {
+    // Cache persistence is an optional optimisation; server data remains authoritative.
+  }
 }
 
 export function clearEngagementOverviewCache(churchId: string): void {
-  churchKeys(churchId).forEach((key) => localStorage.removeItem(key));
+  churchKeys(churchId).forEach(removeCacheEntry);
 }
 
 function pastoralCacheKey(churchId: string): string {

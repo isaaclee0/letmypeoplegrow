@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngagementOverviewDto } from '../../services/api';
 import { reportsAPI, settingsAPI } from '../../services/api';
 import { writeEngagementOverviewCache } from '../../services/engagementReportCache';
@@ -106,6 +106,53 @@ describe('LongTermHealthReport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders authoritative server data and completes loading when overview storage is blocked', async () => {
+    writeEngagementOverviewCache(overview({ population: { activeRegulars: 9 } }));
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked', 'SecurityError');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked', 'SecurityError');
+    });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked', 'SecurityError');
+    });
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({
+      data: overview({ population: { activeRegulars: 13 } }),
+    } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+
+    expect(await screen.findByText('13 active regulars')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Updating…')).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('refreshes to authoritative rules after settings save when cache removal fails', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview)
+      .mockResolvedValueOnce({ data: overview() } as never)
+      .mockResolvedValueOnce({ data: overview({
+        population: { activeRegulars: 14 },
+        settings: { ...settings, coreMinimum: 65, calculationRulesVersion: 3 },
+      }) } as never);
+    vi.mocked(settingsAPI.updateEngagementSettings).mockResolvedValue({ data: { settings: {
+      ...settings, coreMinimum: 65, calculationRulesVersion: 3,
+    } } } as never);
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure engagement' }));
+    fireEvent.change(screen.getByLabelText('Core minimum'), { target: { value: '65' } });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked', 'SecurityError');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save engagement settings' }));
+
+    expect(await screen.findByText('14 active regulars')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Configure engagement' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Updating…')).not.toBeInTheDocument());
   });
 
   it('renders setup guidance instead of an empty chart when Primary is not configured', async () => {

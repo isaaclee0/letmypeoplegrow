@@ -164,3 +164,21 @@ test('a church evaluation failure is contained so the next church still evaluate
     asOf: '2026-08-13T21:15:00.000Z',
   }]);
 });
+
+test('a decline evaluation failure does not suppress established weekly or absence email paths', async () => {
+  const { calls, processChurch } = schedulerHarness({
+    enabled: 1,
+    evaluatorError: new Error('decline evaluator unavailable'),
+  });
+  const now = new Date('2026-08-13T21:15:00.000Z');
+
+  await processChurch({ church_id: 'church-a' }, { now });
+
+  assert.equal(calls.evaluations.length, 1);
+  assert.deepEqual(calls.reviews, ['admin@example.test']);
+  assert.deepEqual(calls.digests, [{
+    churchId: 'church-a',
+    now: '2026-08-13T21:15:00.000Z',
+    includeAbsences: undefined,
+  }]);
+});
