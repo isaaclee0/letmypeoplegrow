@@ -96,6 +96,32 @@ const requireRole = (allowedRoles) => {
   };
 };
 
+const canUserAccessGathering = async ({ churchId, userId, gatheringTypeId }) => {
+  const users = await Database.queryForChurch(
+    churchId,
+    `SELECT role FROM users
+     WHERE id = ? AND church_id = ? AND is_active = 1`,
+    [userId, churchId],
+  );
+  if (users.length === 0) return false;
+
+  const gatherings = await Database.queryForChurch(
+    churchId,
+    `SELECT id FROM gathering_types WHERE id = ? AND church_id = ?`,
+    [gatheringTypeId, churchId],
+  );
+  if (gatherings.length === 0) return false;
+  if (users[0].role === 'admin') return true;
+
+  const assignments = await Database.queryForChurch(
+    churchId,
+    `SELECT id FROM user_gathering_assignments
+     WHERE user_id = ? AND gathering_type_id = ? AND church_id = ?`,
+    [userId, gatheringTypeId, churchId],
+  );
+  return assignments.length > 0;
+};
+
 const requireGatheringAccess = async (req, res, next) => {
   try {
     logger.accessLog('GATHERING ACCESS: Checking access', {
@@ -107,18 +133,12 @@ const requireGatheringAccess = async (req, res, next) => {
 
     const gatheringTypeId = req.params.gatheringTypeId || req.params.gatheringId;
     const userId = req.user.id;
-    const userRole = req.user.role;
-
-    if (userRole === 'admin') {
-      return next();
-    }
-
-    const assignments = await Database.query(
-      'SELECT id FROM user_gathering_assignments WHERE user_id = ? AND gathering_type_id = ?',
-      [userId, gatheringTypeId]
-    );
-
-    if (assignments.length === 0) {
+    const allowed = await canUserAccessGathering({
+      churchId: req.user.church_id,
+      userId,
+      gatheringTypeId,
+    });
+    if (!allowed) {
       return res.status(403).json({ error: 'Access denied to this gathering type.' });
     }
 
@@ -249,6 +269,7 @@ const auditLog = (action) => {
 module.exports = {
   verifyToken,
   requireRole,
+  canUserAccessGathering,
   requireGatheringAccess,
   auditLog
 };

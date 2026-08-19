@@ -51,6 +51,10 @@ const sendEmail = async (to, subject, htmlContent, textContent = null, options =
       emailData.messageId = options.messageId;
     }
 
+    if (options.messageKey) {
+      emailData.headers['X-LMPG-Message-Key'] = options.messageKey;
+    }
+
     const response = await brevo.transactionalEmails.sendTransacEmail(emailData);
     console.log('Email sent successfully:', response);
     return { success: true, messageId: response.messageId };
@@ -684,7 +688,7 @@ function formatLastAttendances(lastAttendances) {
  *   where lastAttendances is an array (most recent first, up to 3) of { date, gatheringName }
  */
 const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entries, options = {}) => {
-  const subject = `${churchName} — Pastoral follow-up this week`;
+  const subject = `${options.testMode ? '[TEST] ' : ''}${churchName} — Pastoral follow-up this week`;
   const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
 
   const dateLabel = new Intl.DateTimeFormat('en-AU', {
@@ -692,6 +696,23 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
   }).format(options.now || new Date());
 
   const cardCardsHtml = entries.map(entry => {
+    if (Array.isArray(entry.reasons)) {
+      const reasonRows = entry.reasons.map((reason) => {
+        if (reason.type === 'consecutive_absence') {
+          const count = reason.streak === 1 ? '1 consecutive absence' : `${reason.streak} consecutive absences`;
+          const gathering = reason.gatheringName ? ` in <strong>${reason.gatheringName}</strong>` : '';
+          const lastPresent = reason.lastPresentDates?.length
+            ? reason.lastPresentDates.map(formatShortDate).join(', ')
+            : 'No attendance on record';
+          return `<div style="margin-top:8px;font-size:13px;color:#6b7280;">${count}${gathering}<br><span style="font-size:12px;color:#9ca3af;">Last present: ${lastPresent}</span></div>`;
+        }
+        const evidence = reason.opportunityEvidence || {};
+        const fromTier = `${reason.fromTier}`.charAt(0).toUpperCase() + `${reason.fromTier}`.slice(1);
+        const toTier = `${reason.toTier}`.charAt(0).toUpperCase() + `${reason.toTier}`.slice(1);
+        return `<div style="margin-top:8px;font-size:13px;color:#6b7280;">Primary engagement moved from <strong>${fromTier}</strong> to <strong>${toTier}</strong> for the week ending ${formatShortDate(reason.effectiveWeekEnd)}.<br><span style="font-size:12px;color:#9ca3af;">${evidence.attended ?? 0} of ${evidence.opportunities ?? 0} attendance opportunities</span></div>`;
+      }).join('');
+      return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;"><tr><td style="background-color:#fff7ed;border-radius:8px;padding:14px 16px;border-left:4px solid #f97316;"><div style="font-family:'Montserrat','Helvetica Neue',Arial,sans-serif;font-weight:600;color:#1f2937;font-size:15px;">${entry.name}</div>${entry.familyName ? `<div style="font-size:12px;color:#9ca3af;margin-top:2px;">${entry.familyName}</div>` : ''}${reasonRows}</td></tr></table>`;
+    }
     if (entry.type === 'family') {
       // Family card: heading is the family name, list each member with their streak
       const memberRows = entry.members.map(m => {
@@ -799,6 +820,7 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
               <tr>
                 <td style="background-color: #ffffff; padding: 30px; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb;">
                   <p style="margin: 0 0 8px; color: #374151; font-size: 15px;">Hi ${firstName},</p>
+                  ${options.testMode ? '<p style="margin:0 0 16px;padding:10px;background:#fef3c7;color:#92400e;font-weight:600;">TEST SEND — no pastoral follow-up items were consumed.</p>' : ''}
                   <p style="margin: 0 0 20px; color: #6b7280; font-size: 14px;">
                     Here ${introText} you're caring for who may need a check-in this week:
                   </p>
@@ -843,6 +865,20 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
   `;
 
   const entriesText = entries.map(entry => {
+    if (Array.isArray(entry.reasons)) {
+      const reasons = entry.reasons.map((reason) => {
+        if (reason.type === 'consecutive_absence') {
+          const gathering = reason.gatheringName ? ` in ${reason.gatheringName}` : '';
+          const lastPresent = reason.lastPresentDates?.length
+            ? reason.lastPresentDates.map(formatShortDate).join(', ')
+            : 'No attendance on record';
+          return `  - ${reason.streak} consecutive absence${reason.streak === 1 ? '' : 's'}${gathering} (last present: ${lastPresent})`;
+        }
+        const evidence = reason.opportunityEvidence || {};
+        return `  - Primary engagement moved from ${reason.fromTier} to ${reason.toTier} for the week ending ${formatShortDate(reason.effectiveWeekEnd)} (${evidence.attended ?? 0} of ${evidence.opportunities ?? 0} opportunities)`;
+      }).join('\n');
+      return `- ${entry.name}${entry.familyName ? ` (${entry.familyName})` : ''}:\n${reasons}`;
+    }
     if (entry.type === 'family') {
       const memberLines = entry.members.map(m => {
         const streakText = m.streak === 1 ? '1 absence' : `${m.streak} absences`;
@@ -855,9 +891,9 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
     return `- ${entry.name}${entry.familyName ? ` (${entry.familyName})` : ''}: ${streakText}${gathering} (last present: ${formatLastAttendances(entry.lastAttendances)})`;
   }).join('\n');
 
-  const textContent = `Hi ${firstName},\n\nHere ${introText} you're caring for who may need a check-in this week:\n\n${entriesText}\n\nResearch shows that a personal follow-up from someone who knows them makes a real difference.\n\nView attendance reports: ${appUrl}/app/reports\n\nBlessings,\n${churchName}\n\n---\nYou're receiving this because you've been assigned as a caregiver in ${churchName}'s attendance system.`;
+  const textContent = `Hi ${firstName},\n\n${options.testMode ? 'TEST SEND — no pastoral follow-up items were consumed.\n\n' : ''}Here ${introText} you're caring for who may need a check-in this week:\n\n${entriesText}\n\nResearch shows that a personal follow-up from someone who knows them makes a real difference.\n\nView attendance reports: ${appUrl}/app/reports\n\nBlessings,\n${churchName}\n\n---\nYou're receiving this because you've been assigned as a caregiver in ${churchName}'s attendance system.`;
 
-  await sendEmail(email, subject, htmlContent, textContent);
+  await sendEmail(email, subject, htmlContent, textContent, { messageKey: options.messageKey });
 };
 
 module.exports = {

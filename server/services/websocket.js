@@ -2,7 +2,14 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
 const Database = require('../config/database');
+const { canUserAccessGathering } = require('../middleware/auth');
+const { kioskModeEnabled } = require('./kioskMode');
 const { getChurchDate, parseSqliteUtc, loadChurchTimeZone } = require('../utils/churchTime');
+const {
+  ensureSessionWithConnection,
+  finalizeStandardSessionWithConnection,
+  finalizeHeadcountSessionWithConnection,
+} = require('./attendanceSessionState');
 
 function canSnapshotRoster(date, timeZone, now = new Date()) {
   return date <= getChurchDate(now, timeZone);
@@ -487,8 +494,14 @@ class WebSocketService {
         socket.emit('attendance_update_error', { message: 'Invalid attendance data' });
         return;
       }
-
-      const timeZone = await loadChurchTimeZone(socket.churchId);
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('attendance_update_error', { message: 'Access denied to this gathering type.' });
+        return;
+      }
 
       // Create deduplication key based on user, gathering, date, and records
       const recordsKey = records.map(r => `${r.individualId}:${r.present}`).sort().join(',');
@@ -574,42 +587,11 @@ class WebSocketService {
           sessionId = sessionResult[0].id;
         }
 
-        // Snapshot roster if any record is being marked present
-        if (records.some(r => r.present)) {
-          try {
-            // Check if already snapshotted
-            const sessionCheck = await conn.query(
-              'SELECT roster_snapshotted FROM attendance_sessions WHERE id = ?',
-              [sessionId]
-            );
-            if (sessionCheck.length > 0 && sessionCheck[0].roster_snapshotted !== 1) {
-              if (canSnapshotRoster(date, timeZone)) {
-                const gathering = await conn.query(
-                  'SELECT attendance_type FROM gathering_types WHERE id = ? AND church_id = ?',
-                  [gatheringId, socket.churchId]
-                );
-                if (gathering.length > 0 && gathering[0].attendance_type === 'standard') {
-                  const rosterMembers = await conn.query(`
-                    SELECT gl.individual_id, COALESCE(i.people_type, 'regular') as people_type
-                    FROM gathering_lists gl
-                    JOIN individuals i ON gl.individual_id = i.id
-                    WHERE gl.gathering_type_id = ? AND i.is_active = 1 AND i.church_id = ?
-                  `, [gatheringId, socket.churchId]);
-                  for (const member of rosterMembers) {
-                    await conn.query(`
-                      INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
-                      VALUES (?, ?, 0, ?, ?)
-                      ON CONFLICT(session_id, individual_id) DO NOTHING
-                    `, [sessionId, member.individual_id, socket.churchId, member.people_type]);
-                  }
-                  await conn.query('UPDATE attendance_sessions SET roster_snapshotted = 1 WHERE id = ?', [sessionId]);
-                }
-              }
-            }
-          } catch (snapshotError) {
-            logger.error('Error creating roster snapshot via WebSocket', { error: snapshotError.message });
-          }
-        }
+        await finalizeStandardSessionWithConnection(conn, {
+          churchId: socket.churchId,
+          sessionId,
+          gatheringTypeId: Number(gatheringId),
+        });
 
         // Record attendance, with the same timestamp-based conflict detection
         // as the REST endpoint (POST /:gatheringTypeId/:date in attendance.js)
@@ -665,7 +647,7 @@ class WebSocketService {
               VALUES (?, ?, ?, ?, ?)
               ON CONFLICT(session_id, individual_id) DO UPDATE SET
                 present = excluded.present,
-                people_type_at_time = excluded.people_type_at_time,
+                people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time),
                 updated_at = CURRENT_TIMESTAMP
             `, [sessionId, individualId, present, socket.churchId, peopleTypeAtTime]);
           } else {
@@ -1682,18 +1664,27 @@ class WebSocketService {
    * @param {Object} data - Headcount data {gatheringId, date, headcount}
    */
   async handleUpdateHeadcount(socket, data) {
-    let gatheringId, date, headcount, mode;
+    let gatheringId, date, headcount, mode, dedupeKey;
     
     try {
       ({ gatheringId, date, headcount, mode = 'separate' } = data);
       
-      if (!gatheringId || !date || typeof headcount !== 'number') {
+      if (!gatheringId || !date || !Number.isFinite(headcount) || headcount < 0
+          || !['separate', 'combined', 'averaged'].includes(mode)) {
         socket.emit('headcount_update_error', { message: 'Invalid headcount data' });
+        return;
+      }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('headcount_update_error', { message: 'Access denied to this gathering type.' });
         return;
       }
 
       // Create deduplication key
-      const dedupeKey = `${socket.userId}:${gatheringId}:${date}:${headcount}`;
+      dedupeKey = `${socket.userId}:${gatheringId}:${date}:${headcount}`;
       const now = Date.now();
       
       // Smart deduplication: only block very rapid duplicates (within 500ms)
@@ -1732,87 +1723,92 @@ class WebSocketService {
       let sessionId;
       
       try {
-        // Get or create attendance session (same logic as API)
-        let sessionResult = await Database.query(`
-          SELECT id, headcount_mode FROM attendance_sessions 
-          WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-        `, [gatheringId, date, socket.churchId]);
-
-        if (sessionResult.length === 0) {
-          // Create new session with the specified mode
-          const newSession = await Database.query(`
-            INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
-            VALUES (?, ?, ?, ?, ?)
-          `, [gatheringId, date, socket.userId, socket.churchId, mode]);
-          sessionId = newSession.insertId;
-        } else {
-          sessionId = sessionResult[0].id;
-          const sessionMode = sessionResult[0].headcount_mode || 'separate';
-          
-          // Update session mode if it's different
-          if (sessionMode !== mode) {
-            await Database.query(`
-              UPDATE attendance_sessions 
-              SET headcount_mode = ? 
-              WHERE id = ?
-            `, [mode, sessionId]);
-          }
-        }
-
-        // Insert or update headcount record (same logic as API)
-        await Database.query(`
-          INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(session_id, updated_by) DO UPDATE SET 
-          headcount = excluded.headcount,
-          updated_by = excluded.updated_by,
-          updated_at = datetime('now')
-        `, [sessionId, headcount, socket.userId, socket.churchId]);
-
-        // Now calculate the display value based on mode (same logic as API)
-        if (mode === 'combined') {
-          const combinedResult = await Database.query(`
-            SELECT COALESCE(SUM(headcount), 0) as total_headcount
-            FROM headcount_records 
-            WHERE session_id = ?
-          `, [sessionId]);
-          displayHeadcount = combinedResult[0].total_headcount;
-          
-          logger.debugLog('WebSocket combined calculation', {
-            userHeadcount: headcount,
-            displayHeadcount: displayHeadcount,
-            sessionId: sessionId
+        await Database.transactionForChurch(socket.churchId, async (conn) => {
+          const sessionState = await ensureSessionWithConnection(conn, {
+            churchId: socket.churchId,
+            gatheringTypeId: Number(gatheringId),
+            sessionDate: date,
+            actorId: socket.userId,
+            headcountMode: mode,
           });
-        } else if (mode === 'averaged') {
-          const averagedResult = await Database.query(`
-            SELECT COALESCE(ROUND(AVG(headcount)), 0) as avg_headcount
-            FROM headcount_records 
-            WHERE session_id = ?
-          `, [sessionId]);
-          displayHeadcount = averagedResult[0].avg_headcount;
-        }
+          sessionId = sessionState.id;
+          const sessionResult = await conn.query(
+            'SELECT headcount_mode FROM attendance_sessions WHERE id = ? AND church_id = ?',
+            [sessionId, socket.churchId],
+          );
+          const sessionMode = sessionResult[0]?.headcount_mode || 'separate';
 
-        // Get other users data
-        const otherUsersResult = await Database.query(`
-          SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
-          FROM headcount_records h
-          LEFT JOIN users u ON h.updated_by = u.id
-          WHERE h.session_id = ?
-          ORDER BY h.updated_at DESC
-        `, [sessionId]);
-        
-        // Map users with raw data (no personalization yet)
-        otherUsers = otherUsersResult
-          .map(user => ({
-            userId: user.id,
-            name: `${user.first_name} ${user.last_name}`, // Always use real name, no "You" yet
-            headcount: user.headcount,
-            lastUpdated: user.updated_at
-          }));
+          if (sessionMode !== mode) {
+            await conn.query(
+              `UPDATE attendance_sessions
+               SET headcount_mode = ?
+               WHERE id = ? AND church_id = ?`,
+              [mode, sessionId, socket.churchId],
+            );
+          }
+
+          await finalizeHeadcountSessionWithConnection(conn, {
+            churchId: socket.churchId,
+            sessionId,
+          });
+
+          // Insert or update headcount record (same logic as API)
+          await conn.query(`
+            INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id, updated_by) DO UPDATE SET
+            headcount = excluded.headcount,
+            updated_by = excluded.updated_by,
+            updated_at = datetime('now')
+          `, [sessionId, headcount, socket.userId, socket.churchId]);
+
+          // Now calculate the display value based on mode (same logic as API)
+          if (mode === 'combined') {
+            const combinedResult = await conn.query(`
+              SELECT COALESCE(SUM(headcount), 0) as total_headcount
+              FROM headcount_records
+              WHERE session_id = ?
+            `, [sessionId]);
+            displayHeadcount = combinedResult[0].total_headcount;
+
+            logger.debugLog('WebSocket combined calculation', {
+              userHeadcount: headcount,
+              displayHeadcount: displayHeadcount,
+              sessionId: sessionId
+            });
+          } else if (mode === 'averaged') {
+            const averagedResult = await conn.query(`
+              SELECT COALESCE(ROUND(AVG(headcount)), 0) as avg_headcount
+              FROM headcount_records
+              WHERE session_id = ?
+            `, [sessionId]);
+            displayHeadcount = averagedResult[0].avg_headcount;
+          }
+
+          // Get other users data
+          const otherUsersResult = await conn.query(`
+            SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+            FROM headcount_records h
+            LEFT JOIN users u ON h.updated_by = u.id
+            WHERE h.session_id = ?
+            ORDER BY h.updated_at DESC
+          `, [sessionId]);
+
+          // Map users with raw data (no personalization yet)
+          otherUsers = otherUsersResult
+            .map(user => ({
+              userId: user.id,
+              name: `${user.first_name} ${user.last_name}`, // Always use real name, no "You" yet
+              headcount: user.headcount,
+              lastUpdated: user.updated_at
+            }));
+        });
         
       } catch (dbError) {
         logger.error('Database error in WebSocket headcount update:', dbError);
-        // Fall back to original headcount if database query fails
+        this.recentUpdates.delete(dedupeKey);
+        socket.emit('headcount_update_error', { message: 'Failed to update headcount' });
+        return;
       }
 
       logger.debugLog('Broadcasting headcount update via websocketBroadcast', {
@@ -1921,6 +1917,14 @@ class WebSocketService {
         socket.emit('headcount_mode_update_error', { message: 'Invalid mode data' });
         return;
       }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('headcount_mode_update_error', { message: 'Access denied to this gathering type.' });
+        return;
+      }
 
       logger.info('WebSocket headcount mode update received', {
         userId: socket.userId,
@@ -1992,12 +1996,28 @@ class WebSocketService {
     try {
       ({ gatheringId, date, individualIds, action, signerName } = data);
 
+      if (!kioskModeEnabled()) {
+        socket.emit('kiosk_action_error', {
+          code: 'KIOSK_DISABLED',
+          message: 'Self check-in is currently disabled.',
+        });
+        return;
+      }
+
       if (!gatheringId || !date || !individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
         socket.emit('kiosk_action_error', { message: 'Invalid kiosk action data' });
         return;
       }
       if (!['checkin', 'checkout'].includes(action)) {
         socket.emit('kiosk_action_error', { message: 'action must be "checkin" or "checkout"' });
+        return;
+      }
+      if (!(await canUserAccessGathering({
+        churchId: socket.churchId,
+        userId: socket.userId,
+        gatheringTypeId: gatheringId,
+      }))) {
+        socket.emit('kiosk_action_error', { message: 'Access denied to this gathering type.' });
         return;
       }
 
@@ -2064,6 +2084,12 @@ class WebSocketService {
             sessionId = Number(sessions[0].id);
           }
 
+          await finalizeStandardSessionWithConnection(conn, {
+            churchId: socket.churchId,
+            sessionId,
+            gatheringTypeId: Number(gatheringId),
+          });
+
           // Mark each individual as present
           for (const individualId of individualIds) {
             let peopleTypeAtTime = null;
@@ -2081,7 +2107,9 @@ class WebSocketService {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
                   VALUES (?, ?, 1, ?, ?)
-                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                    present = 1,
+                    people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
                 `, [sessionId, individualId, socket.churchId, peopleTypeAtTime]);
               } else {
                 await conn.query(`
@@ -2095,7 +2123,9 @@ class WebSocketService {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
                   VALUES (?, ?, 1, ?)
-                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                    present = 1,
+                    people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
                 `, [sessionId, individualId, peopleTypeAtTime]);
               } else {
                 await conn.query(`

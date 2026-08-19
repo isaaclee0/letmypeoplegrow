@@ -4,6 +4,7 @@ const { generateWeeklyReviewData, detectSendDay } = require('./weeklyReview');
 const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewInsight');
 const { sendWeeklyReviewEmail } = require('../utils/email');
 const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
+const { evaluateEngagementDeclines } = require('./engagement/declines');
 const { shouldNudgeForGuidance } = require('./weeklyReviewGuidance');
 const { getChurchDate, getZonedParts, addDateOnly } = require('../utils/churchTime');
 
@@ -89,11 +90,21 @@ async function hasMainGatheringData(churchId, startDate, endDate) {
  */
 async function processChurch(church, options = {}) {
   const churchId = church.church_id;
+  const deps = options.__deps || {};
+  const database = deps.database || Database;
+  const evaluateDeclines = deps.evaluateEngagementDeclines || evaluateEngagementDeclines;
+  const loadReview = deps.generateWeeklyReviewData || generateWeeklyReviewData;
+  const resolveSendDay = deps.detectSendDay || detectSendDay;
+  const sendReview = deps.sendWeeklyReviewEmail || sendWeeklyReviewEmail;
+  const sendCaregiverDigests = deps.sendWeeklyCaregiverDigests || sendWeeklyCaregiverDigests;
+  const checkMainGatheringData = deps.hasMainGatheringData || hasMainGatheringData;
+  const createInsight = deps.generateInsight || generateInsight;
+  const saveInsight = deps.saveInsightAsConversation || saveInsightAsConversation;
 
   try {
-    await Database.setChurchContext(churchId, async () => {
+    await database.setChurchContext(churchId, async () => {
       // Get church settings
-      const settings = await Database.query(
+      const settings = await database.query(
         `SELECT weekly_review_email_enabled, weekly_review_email_day,
                 weekly_review_email_include_insight, weekly_review_email_last_sent,
                 timezone
@@ -103,9 +114,6 @@ async function processChurch(church, options = {}) {
 
       if (settings.length === 0) return;
       const s = settings[0];
-
-      // Check if enabled
-      if (!s.weekly_review_email_enabled) return;
 
       const timezone = s.timezone || 'UTC';
       const now = options.now || new Date();
@@ -119,7 +127,7 @@ async function processChurch(church, options = {}) {
       // Determine send day
       let sendDay = s.weekly_review_email_day;
       if (!sendDay) {
-        sendDay = await detectSendDay(churchId);
+        sendDay = await resolveSendDay(churchId);
       }
 
       // Allow sending on the primary send day OR the day after (retry)
@@ -127,15 +135,30 @@ async function processChurch(church, options = {}) {
       const isPrimaryDay = localDay === sendDay;
       const isRetryDay = localDay === retryDay;
 
+      if (isPrimaryDay) {
+        try {
+          await evaluateDeclines(churchId, { asOf: now });
+        } catch (error) {
+          console.error(`Weekly review: Engagement evaluation failed for church ${churchId}:`, error.message);
+        }
+      }
+
+      // Evaluation keeps engagement state current even when email is disabled.
+      if (!s.weekly_review_email_enabled) return;
+
       if (!isPrimaryDay && !isRetryDay) return;
 
       // Check for duplicate sends this week
-      if (wasSentThisWeek(s.weekly_review_email_last_sent, now)) return;
+      if (wasSentThisWeek(s.weekly_review_email_last_sent, now)) {
+        await sendCaregiverDigests(churchId, { now, includeAbsences: false });
+        return;
+      }
 
       // Generate review data
-      const reviewData = await generateWeeklyReviewData(churchId, { now });
+      const reviewData = await loadReview(churchId, { now });
       if (!reviewData) {
         console.log(`Weekly review: No attendance data for church ${churchId}, skipping`);
+        await sendCaregiverDigests(churchId, { now, includeAbsences: false });
         return;
       }
 
@@ -143,20 +166,21 @@ async function processChurch(church, options = {}) {
       // If not, defer to the retry day (gives people time to enter data).
       if (isPrimaryDay) {
         const today = getChurchDate(now, timezone);
-        const hasData = await hasMainGatheringData(
+        const hasData = await checkMainGatheringData(
           churchId,
           addDateOnly(today, { days: -7 }),
           today
         );
         if (!hasData) {
           console.log(`Weekly review: Main gathering data not yet entered for church ${churchId}, deferring to ${retryDay}`);
+          await sendCaregiverDigests(churchId, { now, includeAbsences: false });
           return;
         }
       }
 
       // Decide whether to nudge the church to set up AI guidance.
       const NUDGE_TITLE = 'Sharpen your weekly insights';
-      const guidanceRow = await Database.query(
+      const guidanceRow = await database.query(
         `SELECT weekly_review_guidance FROM church_settings WHERE church_id = ? LIMIT 1`,
         [churchId]
       );
@@ -166,13 +190,13 @@ async function processChurch(church, options = {}) {
       // (guidance not yet set). Established churches short-circuit here.
       let nudgeGuidance = false;
       if (!hasGuidance) {
-        const peopleRow = await Database.query(
+        const peopleRow = await database.query(
           `SELECT COUNT(*) as cnt FROM individuals WHERE is_active = 1 AND church_id = ?`,
           [churchId]
         );
         const peopleCount = peopleRow[0]?.cnt || 0;
 
-        const pendingRow = await Database.query(
+        const pendingRow = await database.query(
           `SELECT COUNT(*) as cnt FROM notifications
            WHERE church_id = ? AND notification_type = 'system' AND title = ? AND is_read = 0`,
           [churchId, NUDGE_TITLE]
@@ -191,7 +215,7 @@ async function processChurch(church, options = {}) {
       // Generate insight
       let insight = null;
       if (s.weekly_review_email_include_insight) {
-        insight = await generateInsight(reviewData);
+        insight = await createInsight(reviewData);
       }
 
       // Send to each recipient and save insight as conversation
@@ -199,11 +223,11 @@ async function processChurch(church, options = {}) {
       const weekLabel = `${reviewData.weekStartDate} to ${reviewData.weekEndDate}`;
       for (const recipient of reviewData.recipients) {
         try {
-          await sendWeeklyReviewEmail(recipient.email, recipient.first_name, reviewData, insight, { showGuidanceNudge: nudgeGuidance });
+          await sendReview(recipient.email, recipient.first_name, reviewData, insight, { showGuidanceNudge: nudgeGuidance });
           sentCount++;
           // Save insight as AI conversation so user can follow up
           if (insight) {
-            await saveInsightAsConversation(churchId, recipient.id, insight, weekLabel);
+            await saveInsight(churchId, recipient.id, insight, weekLabel);
           }
         } catch (err) {
           console.error(`Weekly review: Failed to send to ${recipient.email}:`, err.message);
@@ -212,7 +236,7 @@ async function processChurch(church, options = {}) {
 
       // Update last sent date
       const localDate = getLocalDateString(timezone, now);
-      await Database.query(
+      await database.query(
         `UPDATE church_settings SET weekly_review_email_last_sent = ? WHERE church_id = ?`,
         [localDate, churchId]
       );
@@ -223,13 +247,13 @@ async function processChurch(church, options = {}) {
 
       // One-time in-app nudge to admins/coordinators to set up AI guidance.
       if (nudgeGuidance) {
-        const admins = await Database.query(
+        const admins = await database.query(
           `SELECT id FROM users
            WHERE role IN ('admin', 'coordinator') AND is_active = 1 AND church_id = ?`,
           [churchId]
         );
         for (const admin of admins) {
-          await Database.query(
+          await database.query(
             `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
              VALUES (?, ?, ?, 'system', ?)`,
             [admin.id, NUDGE_TITLE,
@@ -241,11 +265,18 @@ async function processChurch(church, options = {}) {
       }
 
       // Send caregiver digest emails on the same day
-      await sendWeeklyCaregiverDigests(churchId);
+      await sendCaregiverDigests(churchId, { now });
     });
   } catch (err) {
     console.error(`Weekly review: Error processing church ${churchId}:`, err.message);
   }
+}
+
+function createProcessChurch(dependencies = {}) {
+  return (church, options = {}) => processChurch(church, {
+    ...options,
+    __deps: dependencies,
+  });
 }
 
 /**
@@ -279,4 +310,12 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, processChurch, getLocalHour, getLocalDayName, getLocalDateString };
+module.exports = {
+  start,
+  stop,
+  processChurch,
+  createProcessChurch,
+  getLocalHour,
+  getLocalDayName,
+  getLocalDateString,
+};

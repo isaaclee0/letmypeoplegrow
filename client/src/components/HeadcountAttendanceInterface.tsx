@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { PlusIcon, MinusIcon, PencilIcon, CheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import { attendanceAPI } from '../services/api';
+import { attendanceAPI, type AttendanceSessionState } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 interface HeadcountAttendanceInterfaceProps {
@@ -9,12 +9,13 @@ interface HeadcountAttendanceInterfaceProps {
   date: string;
   gatheringName: string;
   onHeadcountChange?: (headcount: number) => void;
+  onSessionStateChange?: (state: AttendanceSessionState) => void;
   isFullscreen?: boolean;
   onExitFullscreen?: () => void;
   // WebSocket props
   socket: any;
   isConnected: boolean;
-  sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
+  sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<any>;
 }
 
 interface HeadcountData {
@@ -23,6 +24,7 @@ interface HeadcountData {
   lastUpdated?: string;
   lastUpdatedBy?: string;
   sessionId?: number;
+  sessionState?: AttendanceSessionState;
   otherUsers?: Array<{
     userId: number;
     name: string;
@@ -36,6 +38,7 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   date,
   gatheringName,
   onHeadcountChange,
+  onSessionStateChange,
   isFullscreen = false,
   onExitFullscreen,
   socket,
@@ -76,6 +79,7 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       setLastUpdated(data.lastUpdated || new Date().toISOString());
       setLastUpdatedBy(data.lastUpdatedBy || 'you');
       setOtherUsers(data.otherUsers || []);
+      if (data.sessionState) onSessionStateChange?.(data.sessionState);
     } catch (error: any) {
       console.error('Failed to load headcount:', error);
       setHeadcount(0);
@@ -88,7 +92,7 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
         setIsLoading(false);
       }
     }
-  }, [gatheringTypeId, date, authLoading, isAuthenticated, user]);
+  }, [gatheringTypeId, date, authLoading, isAuthenticated, user, onSessionStateChange]);
 
   useEffect(() => {
     return () => {
@@ -125,14 +129,16 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     setLastUpdatedBy('You');
     
     try {
-      await sendHeadcountUpdate(gatheringTypeId, date, newCount, 'combined');
+      const result = await sendHeadcountUpdate(gatheringTypeId, date, newCount, 'combined');
+      if (result?.sessionState) onSessionStateChange?.(result.sessionState);
+      else await loadHeadcount(false);
     } catch (error: any) {
       console.error('Failed to update headcount via WebSocket:', error);
       setUserHeadcount(previousUserHeadcount);
       setLastUpdated(new Date().toISOString());
       setLastUpdatedBy('You (reverted)');
     }
-  }, [gatheringTypeId, date, headcount, userHeadcount, sendHeadcountUpdate]);
+  }, [gatheringTypeId, date, userHeadcount, sendHeadcountUpdate, onSessionStateChange, loadHeadcount]);
 
   useEffect(() => {
     if (!socket || !isConnected) return;
@@ -229,7 +235,8 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
 
     setIsUpdatingUserHeadcount(true);
     try {
-      await attendanceAPI.updateUserHeadcount(gatheringTypeId, date, editingUserId, numValue);
+      const response = await attendanceAPI.updateUserHeadcount(gatheringTypeId, date, editingUserId, numValue);
+      if (response.data.sessionState) onSessionStateChange?.(response.data.sessionState);
     } catch (error: any) {
       console.error('Failed to update user headcount:', error);
     } finally {

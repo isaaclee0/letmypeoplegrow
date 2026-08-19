@@ -13,6 +13,7 @@ const {
 const { randomUUID } = require('crypto');
 const logger = require('./logger');
 const { timeZoneFromCoordinates } = require('../utils/churchTime');
+const { ensureEngagementSchema } = require('./engagementSchema');
 
 const asyncLocalStorage = new AsyncLocalStorage();
 const churchDbs = new Map();
@@ -837,6 +838,8 @@ class Database {
       backfillProviderNeutralSync(db, churchId);
     }
 
+    ensureEngagementSchema(db, churchId);
+
     migrateChurchTimezoneFromLocation(db, churchId);
     migratePeopleImportRunTrigger(db);
 
@@ -853,6 +856,7 @@ class Database {
   static ensureChurchSchema(churchId) {
     const db = Database.getChurchDb(churchId);
     ensureProviderNeutralSyncSchema(db);
+    ensureEngagementSchema(db, churchId);
     migratePeopleImportRunTrigger(db);
     ensureCompatibleUpdatedAtTriggers(db);
     backfillProviderNeutralSync(db, churchId);
@@ -919,6 +923,7 @@ class Database {
     const run = async () => {
       const conn = {
         query: (sql, params = []) => Database._executeQuery(db, sql, params),
+        queryReturning: (sql, params = []) => Database._executeReturningQuery(db, sql, params),
         beginTransaction: () => {},
         commit: () => {},
         rollback: () => {}
@@ -1009,6 +1014,12 @@ class Database {
       }
       throw err;
     }
+  }
+
+  static _executeReturningQuery(db, sql, params = []) {
+    params = Database._normalizeParams(params);
+    const expanded = Database._expandArrayParams(sql, params);
+    return db.prepare(expanded.sql).all(...expanded.params);
   }
 
   static _expandArrayParams(sql, params) {

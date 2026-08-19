@@ -7,6 +7,8 @@ const { getChurchDate, loadChurchTimeZone } = require('../utils/churchTime');
 
 const router = express.Router();
 router.use(verifyToken);
+router.use('/engagement', requireRole(['admin', 'coordinator']), require('./reports/engagement'));
+router.use('/pastoral', requireRole(['admin', 'coordinator']), require('./reports/pastoral'));
 
 // Test endpoint to check database tables
 router.get('/test', requireRole(['admin', 'coordinator']), async (req, res) => {

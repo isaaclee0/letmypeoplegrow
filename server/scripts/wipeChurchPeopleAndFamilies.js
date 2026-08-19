@@ -2,8 +2,9 @@
   Usage:
     node server/scripts/wipeChurchPeopleAndFamilies.js <church_id>
 
-  Deletes all individuals and families for the given church_id.
-  Dependent rows in gathering_lists and attendance_records will be removed via cascading FKs.
+  Deletes all individuals, families, and their engagement history for the given church_id.
+  Most dependent rows are removed via cascading FKs; RESTRICT-protected engagement
+  audit rows are intentionally removed first because this script is a destructive wipe.
 */
 
 const Database = require('../config/database');
@@ -30,7 +31,12 @@ async function main() {
       );
       console.log(`Found ${indCount.c} individuals and ${famCount.c} families to delete`);
 
-      // Delete individuals first (cascades remove gathering_lists and attendance_records)
+      await conn.query('DELETE FROM pastoral_insight_states WHERE church_id = ?', [churchId]);
+      await conn.query('DELETE FROM engagement_decline_deliveries WHERE church_id = ?', [churchId]);
+      await conn.query('DELETE FROM engagement_decline_events WHERE church_id = ?', [churchId]);
+      await conn.query('DELETE FROM engagement_evaluation_state WHERE church_id = ?', [churchId]);
+
+      // Delete individuals after their protected audit history.
       const delInd = await conn.query(
         'DELETE FROM individuals WHERE church_id = ?',
         [churchId]
@@ -54,5 +60,4 @@ async function main() {
 }
 
 main();
-
 

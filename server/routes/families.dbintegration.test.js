@@ -659,3 +659,186 @@ test('legacy PCO settings toggle rejects activation and may disable existing PCO
     }
   });
 });
+
+test('individual deduplication re-homes engagement history and canonicalises event collisions', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const keepId = await seedIndividual(churchId);
+    const deleteId = await seedIndividual(churchId);
+    const recipientId = await seedUser(churchId);
+    const detectedFamilyId = await seedFamily(churchId, 'Historical family');
+    const keepEvent = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at)
+       VALUES (?, ?, 'core', 'casual', '2026-08-09', 1, '2026-08-10 09:00:00')`,
+      [churchId, keepId],
+    );
+    const duplicateEvent = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at, recovered_at,
+          primary_attended_at_detection, primary_opportunities_at_detection,
+          primary_rate_at_detection)
+       VALUES (?, ?, ?, 'core', 'casual', '2026-08-09', 1,
+               '2026-08-10 08:00:00', '2026-08-18 07:00:00', 3, 8, 0.375)`,
+      [churchId, deleteId, detectedFamilyId],
+    );
+    const uniqueEvent = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at)
+       VALUES (?, ?, 'casual', 'irregular', '2026-08-16', 1, '2026-08-17 08:00:00')`,
+      [churchId, deleteId],
+    );
+    for (const eventId of [keepEvent.insertId, duplicateEvent.insertId]) {
+      await Database.query(
+        `INSERT INTO engagement_decline_deliveries
+           (church_id, event_id, recipient_type, recipient_id, state, attempts)
+         VALUES (?, ?, 'user', ?, 'pending', 1)`,
+        [churchId, eventId, recipientId],
+      );
+    }
+    for (const [subjectId, eventId, state] of [
+      [keepId, keepEvent.insertId, 'open'],
+      [deleteId, duplicateEvent.insertId, 'dismissed'],
+      [deleteId, uniqueEvent.insertId, 'open'],
+    ]) {
+      await Database.query(
+        `INSERT INTO pastoral_insight_states
+           (church_id, insight_type, subject_id, episode_key,
+            decline_event_id, workflow_state)
+         VALUES (?, 'primary_decline', ?, ?, ?, ?)`,
+        [churchId, subjectId, `primary_decline:event:${eventId}`, eventId, state],
+      );
+    }
+    await Database.query(
+      `INSERT INTO pastoral_insight_states
+         (church_id, insight_type, subject_id, episode_key, workflow_state)
+       VALUES (?, 'visitor_next_step', ?, 'visitor_next_step:first_primary:2026-08-02', 'resolved')`,
+      [churchId, deleteId],
+    );
+    for (const individualId of [keepId, deleteId]) {
+      await Database.query(
+        `INSERT INTO engagement_evaluation_state
+           (church_id, individual_id, rules_version, last_evaluated_week_end,
+            current_tier, baseline_suppressed)
+         VALUES (?, ?, 1, '2026-08-16', 'casual', 0)`,
+        [churchId, individualId],
+      );
+    }
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request('/api/individuals/deduplicate', {
+        method: 'POST',
+        body: JSON.stringify({ keepId, deleteIds: [deleteId], mergeAssignments: false }),
+      });
+
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT id, individual_id AS individualId, to_tier AS toTier,
+                family_at_detection_id AS familyAtDetectionId,
+                detected_at AS detectedAt, recovered_at AS recoveredAt,
+                primary_attended_at_detection AS attended,
+                primary_opportunities_at_detection AS opportunities,
+                primary_rate_at_detection AS rate
+         FROM engagement_decline_events WHERE church_id = ? ORDER BY id`,
+        [churchId],
+      ), [
+        {
+          id: keepEvent.insertId,
+          individualId: keepId,
+          toTier: 'casual',
+          familyAtDetectionId: detectedFamilyId,
+          detectedAt: '2026-08-10 08:00:00',
+          recoveredAt: '2026-08-18 07:00:00',
+          attended: 3,
+          opportunities: 8,
+          rate: 0.375,
+        },
+        {
+          id: uniqueEvent.insertId,
+          individualId: keepId,
+          toTier: 'irregular',
+          familyAtDetectionId: null,
+          detectedAt: '2026-08-17 08:00:00',
+          recoveredAt: null,
+          attended: null,
+          opportunities: null,
+          rate: null,
+        },
+      ]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT event_id AS eventId, recipient_id AS recipientId, attempts
+         FROM engagement_decline_deliveries WHERE church_id = ? ORDER BY id`,
+        [churchId],
+      ), [{ eventId: keepEvent.insertId, recipientId, attempts: 2 }]);
+      const pastoral = await Database.query(
+        `SELECT subject_id AS subjectId, episode_key AS episodeKey,
+                decline_event_id AS declineEventId
+         FROM pastoral_insight_states WHERE church_id = ? ORDER BY id`,
+        [churchId],
+      );
+      assert.equal(pastoral.every((row) => row.subjectId === keepId), true);
+      assert.equal(pastoral.some((row) => row.declineEventId === duplicateEvent.insertId), false);
+      assert.equal(pastoral.filter((row) =>
+        row.episodeKey === `primary_decline:event:${keepEvent.insertId}`).length, 1);
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM engagement_evaluation_state
+         WHERE church_id = ? AND individual_id IN (?, ?)`,
+        [churchId, keepId, deleteId],
+      ))[0].count, 0);
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
+        [churchId, deleteId],
+      ))[0].count, 0);
+      assert.deepStrictEqual(Database.getChurchDb(churchId).prepare('PRAGMA foreign_key_check').all(), []);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('permanent deletion with engagement history returns an archive-only conflict', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const event = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at)
+       VALUES (?, ?, 'core', 'casual', '2026-08-09', 1, '2026-08-10 08:00:00')`,
+      [churchId, individualId],
+    );
+    await Database.query(
+      `INSERT INTO pastoral_insight_states
+         (church_id, insight_type, subject_id, episode_key,
+          decline_event_id, workflow_state)
+       VALUES (?, 'primary_decline', ?, ?, ?, 'resolved')`,
+      [churchId, individualId, `primary_decline:event:${event.insertId}`, event.insertId],
+    );
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request(`/api/individuals/${individualId}/permanent`, {
+        method: 'DELETE',
+      });
+
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(response.body.code, 'ENGAGEMENT_HISTORY_REQUIRES_ARCHIVE');
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
+        [churchId, individualId],
+      ))[0].count, 1);
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM engagement_decline_events
+         WHERE church_id = ? AND individual_id = ?`,
+        [churchId, individualId],
+      ))[0].count, 1);
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM pastoral_insight_states
+         WHERE church_id = ? AND subject_id = ?`,
+        [churchId, individualId],
+      ))[0].count, 1);
+    } finally {
+      await app.close();
+    }
+  });
+});

@@ -158,6 +158,10 @@ function seed() {
 
   // --- Clear old seed data ---
   db.exec(`
+    DELETE FROM pastoral_insight_states;
+    DELETE FROM engagement_decline_deliveries;
+    DELETE FROM engagement_decline_events;
+    DELETE FROM engagement_evaluation_state;
     DELETE FROM attendance_records;
     DELETE FROM headcount_records;
     DELETE FROM attendance_sessions;

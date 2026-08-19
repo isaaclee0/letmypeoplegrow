@@ -8,9 +8,37 @@ const backgroundCheckSync = require('../services/planningCenter/backgroundCheckS
 const medicalNotesPolicy = require('../services/planningCenter/medicalNotesPolicy');
 const medicalNotesSync = require('../services/planningCenter/medicalNotesSync');
 const pcoCredentialMigration = require('../services/peopleSync/pcoCredentialMigration');
+const engagementSettings = require('../services/engagement/settings');
 
 const router = express.Router();
 router.use(verifyToken);
+
+router.get('/engagement', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const settings = await engagementSettings.getEngagementSettings(req.user.church_id);
+    res.json({ settings });
+  } catch (error) {
+    console.error('Get engagement settings error:', error);
+    res.status(500).json({ error: 'Failed to retrieve engagement settings.' });
+  }
+});
+
+router.put('/engagement', requireRole(['admin']), async (req, res) => {
+  try {
+    const settings = await engagementSettings.updateEngagementSettings(
+      req.user.church_id,
+      req.user.id,
+      req.body,
+    );
+    res.json({ settings });
+  } catch (error) {
+    if (error instanceof engagementSettings.EngagementSettingsValidationError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    console.error('Update engagement settings error:', error);
+    res.status(500).json({ error: 'Failed to update engagement settings.' });
+  }
+});
 
 // Get church settings
 router.get('/', requireRole(['admin']), async (req, res) => {
@@ -670,17 +698,12 @@ router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
 // Send test caregiver digest emails
 router.post('/caregiver-digest/test', requireRole(['admin']), async (req, res) => {
   try {
-    const { generateCaregiverDigests, sendWeeklyCaregiverDigests } = require('../services/weeklyCaregiverEmail');
-
-    // Call generateCaregiverDigests directly so any SQL/config errors surface
-    const digests = await generateCaregiverDigests(req.user.church_id);
-
-    if (digests.length === 0) {
-      return res.json({ message: 'No caregiver digest emails to send — no caregivers have assigned families with recent absences.' });
+    const { sendWeeklyCaregiverDigests } = require('../services/weeklyCaregiverEmail');
+    const sent = await sendWeeklyCaregiverDigests(req.user.church_id, { testMode: true });
+    if (sent === 0) {
+      return res.json({ message: 'No caregiver digest test emails to send — no caregivers have qualifying follow-up items.' });
     }
-
-    const sent = await sendWeeklyCaregiverDigests(req.user.church_id);
-    res.json({ message: `${sent} caregiver digest email${sent !== 1 ? 's' : ''} sent (${digests.length} caregiver${digests.length !== 1 ? 's' : ''} had qualifying absences).` });
+    res.json({ message: `${sent} labelled caregiver digest test email${sent !== 1 ? 's' : ''} sent. No delivery items were consumed.` });
   } catch (error) {
     console.error('Send test caregiver digest error:', error);
     res.status(500).json({ error: `Failed to generate caregiver digests: ${error.message}` });

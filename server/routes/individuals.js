@@ -104,6 +104,246 @@ const parseGatheringPairs = (pairsStr) => {
   });
 };
 
+const EVENT_INSIGHT_TYPES = new Set(['primary_decline', 're_engagement']);
+const DELIVERY_STATE_RANK = Object.freeze({ cancelled: 0, pending: 1, delivered: 2 });
+const WORKFLOW_STATE_RANK = Object.freeze({ open: 0, snoozed: 1, dismissed: 2, resolved: 3 });
+
+function eventDedupeKey(event) {
+  return [event.toTier, event.effectiveWeekEnd, event.rulesVersion].join(':');
+}
+
+function laterTimestamp(left, right) {
+  if (!left) return right || null;
+  if (!right) return left;
+  return left >= right ? left : right;
+}
+
+function earlierTimestamp(left, right) {
+  if (!left) return right || null;
+  if (!right) return left;
+  return left <= right ? left : right;
+}
+
+async function mergeEventDeliveries(conn, churchId, duplicateEventId, canonicalEventId) {
+  const deliveries = await conn.query(
+    `SELECT id, recipient_type AS recipientType, recipient_id AS recipientId,
+            family_caregiver_id AS familyCaregiverId, state, attempts,
+            last_attempt_at AS lastAttemptAt, last_error AS lastError,
+            cancellation_reason AS cancellationReason, delivered_at AS deliveredAt,
+            created_at AS createdAt, updated_at AS updatedAt
+     FROM engagement_decline_deliveries
+     WHERE church_id = ? AND event_id = ? ORDER BY id`,
+    [churchId, duplicateEventId],
+  );
+  for (const delivery of deliveries) {
+    const [existing] = await conn.query(
+      `SELECT id, family_caregiver_id AS familyCaregiverId, state, attempts,
+              last_attempt_at AS lastAttemptAt, last_error AS lastError,
+              cancellation_reason AS cancellationReason, delivered_at AS deliveredAt,
+              created_at AS createdAt, updated_at AS updatedAt
+       FROM engagement_decline_deliveries
+       WHERE church_id = ? AND event_id = ?
+         AND recipient_type = ? AND recipient_id = ? LIMIT 1`,
+      [churchId, canonicalEventId, delivery.recipientType, delivery.recipientId],
+    );
+    if (!existing) {
+      await conn.query(
+        `UPDATE engagement_decline_deliveries
+         SET event_id = ?, updated_at = datetime('now')
+         WHERE church_id = ? AND id = ?`,
+        [canonicalEventId, churchId, delivery.id],
+      );
+      continue;
+    }
+    const state = DELIVERY_STATE_RANK[delivery.state] > DELIVERY_STATE_RANK[existing.state]
+      ? delivery.state : existing.state;
+    const latestIsDuplicate = laterTimestamp(existing.lastAttemptAt, delivery.lastAttemptAt)
+      === delivery.lastAttemptAt;
+    await conn.query(
+      `UPDATE engagement_decline_deliveries
+       SET family_caregiver_id = ?, state = ?, attempts = ?,
+           last_attempt_at = ?, last_error = ?, cancellation_reason = ?,
+           delivered_at = ?, created_at = ?, updated_at = ?
+       WHERE church_id = ? AND id = ?`,
+      [
+        existing.familyCaregiverId ?? delivery.familyCaregiverId,
+        state,
+        Number(existing.attempts) + Number(delivery.attempts),
+        laterTimestamp(existing.lastAttemptAt, delivery.lastAttemptAt),
+        latestIsDuplicate ? delivery.lastError : existing.lastError,
+        state === 'cancelled'
+          ? (existing.cancellationReason || delivery.cancellationReason)
+          : null,
+        earlierTimestamp(existing.deliveredAt, delivery.deliveredAt),
+        earlierTimestamp(existing.createdAt, delivery.createdAt),
+        laterTimestamp(existing.updatedAt, delivery.updatedAt),
+        churchId,
+        existing.id,
+      ],
+    );
+    await conn.query(
+      `DELETE FROM engagement_decline_deliveries WHERE church_id = ? AND id = ?`,
+      [churchId, delivery.id],
+    );
+  }
+}
+
+async function rehomePastoralStates(conn, churchId, keepId, deleteIds, eventMappings) {
+  const mappedEventIds = [...eventMappings.keys()];
+  const rows = await conn.query(
+    `SELECT id, insight_type AS insightType, subject_id AS subjectId,
+            episode_key AS episodeKey, decline_event_id AS declineEventId,
+            workflow_state AS workflowState, snoozed_until AS snoozedUntil,
+            acted_by AS actedBy, resolved_at AS resolvedAt,
+            created_at AS createdAt, updated_at AS updatedAt
+     FROM pastoral_insight_states
+     WHERE church_id = ?
+       AND (subject_id IN (?)
+         ${mappedEventIds.length > 0 ? 'OR decline_event_id IN (?)' : ''})
+     ORDER BY id`,
+    mappedEventIds.length > 0
+      ? [churchId, deleteIds, mappedEventIds]
+      : [churchId, deleteIds],
+  );
+  const deletedSubjects = new Set(deleteIds.map(Number));
+  for (const row of rows) {
+    const targetSubjectId = deletedSubjects.has(Number(row.subjectId)) ? keepId : row.subjectId;
+    const targetEventId = row.declineEventId == null
+      ? null
+      : (eventMappings.get(Number(row.declineEventId)) || row.declineEventId);
+    const targetEpisodeKey = targetEventId != null && EVENT_INSIGHT_TYPES.has(row.insightType)
+      ? `${row.insightType}:event:${targetEventId}`
+      : row.episodeKey;
+    const [existing] = await conn.query(
+      `SELECT id, decline_event_id AS declineEventId,
+              workflow_state AS workflowState, snoozed_until AS snoozedUntil,
+              acted_by AS actedBy, resolved_at AS resolvedAt,
+              created_at AS createdAt, updated_at AS updatedAt
+       FROM pastoral_insight_states
+       WHERE church_id = ? AND insight_type = ? AND subject_id = ?
+         AND episode_key = ? AND id <> ? LIMIT 1`,
+      [churchId, row.insightType, targetSubjectId, targetEpisodeKey, row.id],
+    );
+    if (!existing) {
+      await conn.query(
+        `UPDATE pastoral_insight_states
+         SET subject_id = ?, episode_key = ?, decline_event_id = ?, updated_at = datetime('now')
+         WHERE church_id = ? AND id = ?`,
+        [targetSubjectId, targetEpisodeKey, targetEventId, churchId, row.id],
+      );
+      continue;
+    }
+    const chooseRow = WORKFLOW_STATE_RANK[row.workflowState]
+      > WORKFLOW_STATE_RANK[existing.workflowState];
+    const workflowState = chooseRow ? row.workflowState : existing.workflowState;
+    const chosen = chooseRow ? row : existing;
+    await conn.query(
+      `UPDATE pastoral_insight_states
+       SET decline_event_id = ?, workflow_state = ?, snoozed_until = ?,
+           acted_by = ?, resolved_at = ?, created_at = ?, updated_at = ?
+       WHERE church_id = ? AND id = ?`,
+      [
+        targetEventId ?? existing.declineEventId,
+        workflowState,
+        workflowState === 'snoozed' ? chosen.snoozedUntil : null,
+        chosen.actedBy ?? existing.actedBy ?? row.actedBy,
+        workflowState === 'resolved' ? (existing.resolvedAt || row.resolvedAt) : null,
+        earlierTimestamp(existing.createdAt, row.createdAt),
+        laterTimestamp(existing.updatedAt, row.updatedAt),
+        churchId,
+        existing.id,
+      ],
+    );
+    await conn.query(
+      `DELETE FROM pastoral_insight_states WHERE church_id = ? AND id = ?`,
+      [churchId, row.id],
+    );
+  }
+}
+
+async function rehomeEngagementHistoryWithConnection(conn, {
+  churchId,
+  keepId,
+  deleteIds,
+}) {
+  const events = await conn.query(
+    `SELECT id, individual_id AS individualId, to_tier AS toTier,
+            effective_week_end AS effectiveWeekEnd, rules_version AS rulesVersion,
+            family_at_detection_id AS familyAtDetectionId,
+            detected_at AS detectedAt, recovered_at AS recoveredAt,
+            primary_attended_at_detection AS primaryAttended,
+            primary_opportunities_at_detection AS primaryOpportunities,
+            primary_rate_at_detection AS primaryRate
+     FROM engagement_decline_events
+     WHERE church_id = ? AND individual_id IN (?) ORDER BY id`,
+    [churchId, [keepId, ...deleteIds]],
+  );
+  const canonicalByKey = new Map();
+  for (const event of events.filter((row) => Number(row.individualId) === Number(keepId))) {
+    canonicalByKey.set(eventDedupeKey(event), event);
+  }
+  const eventMappings = new Map();
+  for (const event of events.filter((row) => Number(row.individualId) !== Number(keepId))) {
+    const key = eventDedupeKey(event);
+    const canonical = canonicalByKey.get(key);
+    if (canonical) {
+      eventMappings.set(Number(event.id), Number(canonical.id));
+      canonical.familyAtDetectionId ??= event.familyAtDetectionId;
+      canonical.detectedAt = earlierTimestamp(canonical.detectedAt, event.detectedAt);
+      canonical.recoveredAt = earlierTimestamp(canonical.recoveredAt, event.recoveredAt);
+      const canonicalHasEvidence = canonical.primaryAttended != null
+        && canonical.primaryOpportunities != null
+        && canonical.primaryRate != null;
+      const duplicateHasEvidence = event.primaryAttended != null
+        && event.primaryOpportunities != null
+        && event.primaryRate != null;
+      if (!canonicalHasEvidence && duplicateHasEvidence) {
+        canonical.primaryAttended = event.primaryAttended;
+        canonical.primaryOpportunities = event.primaryOpportunities;
+        canonical.primaryRate = event.primaryRate;
+      }
+      await conn.query(
+        `UPDATE engagement_decline_events
+         SET family_at_detection_id = ?, detected_at = ?, recovered_at = ?,
+             primary_attended_at_detection = ?,
+             primary_opportunities_at_detection = ?,
+             primary_rate_at_detection = ?
+         WHERE church_id = ? AND id = ?`,
+        [
+          canonical.familyAtDetectionId,
+          canonical.detectedAt,
+          canonical.recoveredAt,
+          canonical.primaryAttended,
+          canonical.primaryOpportunities,
+          canonical.primaryRate,
+          churchId,
+          canonical.id,
+        ],
+      );
+      await mergeEventDeliveries(conn, churchId, event.id, canonical.id);
+    } else {
+      await conn.query(
+        `UPDATE engagement_decline_events SET individual_id = ?
+         WHERE church_id = ? AND id = ?`,
+        [keepId, churchId, event.id],
+      );
+      canonicalByKey.set(key, { ...event, individualId: keepId });
+    }
+  }
+  await rehomePastoralStates(conn, churchId, keepId, deleteIds, eventMappings);
+  for (const duplicateEventId of eventMappings.keys()) {
+    await conn.query(
+      `DELETE FROM engagement_decline_events WHERE church_id = ? AND id = ?`,
+      [churchId, duplicateEventId],
+    );
+  }
+  await conn.query(
+    `DELETE FROM engagement_evaluation_state
+     WHERE church_id = ? AND individual_id IN (?)`,
+    [churchId, [keepId, ...deleteIds]],
+  );
+}
+
 // Get potential duplicates based on name matching
 router.get('/duplicates', requireRole(['admin']), async (req, res) => {
   try {
@@ -188,6 +428,11 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 
     // Start a transaction
     await Database.transaction(async (conn) => {
+      await rehomeEngagementHistoryWithConnection(conn, {
+        churchId: req.user.church_id,
+        keepId: Number(keepId),
+        deleteIds: deleteIds.map(Number),
+      });
       // If merging assignments, move assignments from deleted IDs to kept ID
       if (mergeAssignments) {
         for (const deleteId of deleteIds) {
@@ -566,6 +811,22 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
     }
 
     await Database.transaction(async (conn) => {
+      const [history] = await conn.query(
+        `SELECT EXISTS(
+           SELECT 1 FROM engagement_decline_events
+           WHERE church_id = ? AND individual_id = ?
+         ) OR EXISTS(
+           SELECT 1 FROM pastoral_insight_states
+           WHERE church_id = ? AND subject_id = ?
+         ) AS hasHistory`,
+        [req.user.church_id, id, req.user.church_id, id],
+      );
+      if (Number(history.hasHistory) === 1) {
+        throw Object.assign(
+          new Error('Individual has engagement history and must be archived instead.'),
+          { statusCode: 409, code: 'ENGAGEMENT_HISTORY_REQUIRES_ARCHIVE' },
+        );
+      }
       // Remove gathering assignments first to satisfy FK constraints
       await conn.query(
         `DELETE FROM gathering_lists WHERE individual_id = ? AND church_id = ?`,
@@ -596,6 +857,12 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
   } catch (error) {
     if (error && error.statusCode === 404) {
       return res.status(404).json({ error: 'Individual not found' });
+    }
+    if (error && error.statusCode === 409) {
+      return res.status(409).json({
+        error: error.message,
+        code: error.code,
+      });
     }
     console.error('Permanent delete individual error:', error);
     res.status(500).json({ error: 'Failed to permanently delete individual.' });

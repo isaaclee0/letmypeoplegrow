@@ -8,20 +8,18 @@ const logger = require('../config/logger');
 const { isBackgroundCheckTrackingEnabled } = require('../services/planningCenter/mode');
 const { getMedicalNotesVisibility } = require('../services/planningCenter/medicalNotesPolicy');
 const { getChurchDate, addDateOnly, parseSqliteUtc, loadChurchTimeZone } = require('../utils/churchTime');
+const {
+  SESSION_NOT_FOUND,
+  INVALID_SESSION_TRANSITION,
+  SESSION_HAS_ACTIVITY,
+  ensureSessionWithConnection,
+  finalizeStandardSessionWithConnection,
+  finalizeHeadcountSessionWithConnection,
+  setSessionState,
+} = require('../services/attendanceSessionState');
 
 const router = express.Router();
 
-/**
- * Snapshot the current roster into attendance_records with present=0.
- * This preserves the historical roster state so past sessions show who was on the list at that time.
- * Uses ON CONFLICT DO NOTHING so existing records (e.g., already marked present) are preserved.
- *
- * @param {object} conn - Database connection (within transaction)
- * @param {number} sessionId - The attendance session ID
- * @param {number} gatheringTypeId - The gathering type ID
- * @param {string} churchId - The church ID
- * @param {string} date - The session date (YYYY-MM-DD)
- */
 function classifyChurchDate(date, timeZone, now = new Date()) {
   const today = getChurchDate(now, timeZone);
   return date < today ? 'past' : date > today ? 'future' : 'today';
@@ -31,68 +29,50 @@ function getRecentVisitorsAnchor(timeZone, now = new Date()) {
   return getChurchDate(now, timeZone);
 }
 
-async function createRosterSnapshot(conn, sessionId, gatheringTypeId, churchId, date, timeZone) {
-  try {
-    // Check if already snapshotted
-    const session = await conn.query(
-      'SELECT roster_snapshotted FROM attendance_sessions WHERE id = ?',
-      [sessionId]
-    );
-    if (session.length > 0 && session[0].roster_snapshotted === 1) {
-      return; // Already snapshotted
-    }
+router.use(verifyToken);
 
-    // Don't snapshot future dates
-    if (classifyChurchDate(date, timeZone) === 'future') {
-      return;
-    }
-
-    // Only snapshot standard attendance type gatherings (not headcount)
-    const gathering = await conn.query(
-      'SELECT attendance_type FROM gathering_types WHERE id = ? AND church_id = ?',
-      [gatheringTypeId, churchId]
-    );
-    if (gathering.length === 0 || gathering[0].attendance_type !== 'standard') {
-      return;
-    }
-
-    // Get all active individuals on this gathering's roster
-    const rosterMembers = await conn.query(`
-      SELECT gl.individual_id, COALESCE(i.people_type, 'regular') as people_type
-      FROM gathering_lists gl
-      JOIN individuals i ON gl.individual_id = i.id
-      WHERE gl.gathering_type_id = ?
-        AND i.is_active = 1
-        AND i.church_id = ?
-    `, [gatheringTypeId, churchId]);
-
-    // Bulk-insert with ON CONFLICT DO NOTHING to preserve existing records
-    for (const member of rosterMembers) {
-      await conn.query(`
-        INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
-        VALUES (?, ?, 0, ?, ?)
-        ON CONFLICT(session_id, individual_id) DO NOTHING
-      `, [sessionId, member.individual_id, churchId, member.people_type]);
-    }
-
-    // Mark session as snapshotted
-    await conn.query(
-      'UPDATE attendance_sessions SET roster_snapshotted = 1 WHERE id = ?',
-      [sessionId]
-    );
-
-    logger.debugLog('Roster snapshot created', {
-      sessionId,
-      gatheringTypeId,
-      rosterSize: rosterMembers.length
-    });
-  } catch (error) {
-    // Log but don't fail the parent operation
-    logger.error('Error creating roster snapshot', { error: error.message, sessionId });
-  }
+function isValidDateOnly(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
 }
 
-router.use(verifyToken);
+function sessionStateErrorResponse(error) {
+  if (error?.code === SESSION_NOT_FOUND) return { status: 404, code: error.code, error: error.message };
+  if (error?.code === SESSION_HAS_ACTIVITY) return { status: 409, code: error.code, error: error.message };
+  if (error?.code === INVALID_SESSION_TRANSITION) return { status: 400, code: error.code, error: error.message };
+  return null;
+}
+
+function mapSessionStateRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    gatheringTypeId: row.gathering_type_id,
+    sessionDate: row.session_date,
+    status: row.session_status,
+    rosterProvenanceVersion: row.roster_provenance_version,
+    cancelledAt: row.cancelled_at,
+    cancelledBy: row.cancelled_by,
+  };
+}
+
+async function ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, sessionDate) {
+  const session = await ensureSessionWithConnection(conn, {
+    churchId: req.user.church_id,
+    gatheringTypeId: Number(gatheringTypeId),
+    sessionDate,
+    actorId: req.user.id,
+  });
+  return finalizeStandardSessionWithConnection(conn, {
+    churchId: req.user.church_id,
+    sessionId: session.id,
+    gatheringTypeId: Number(gatheringTypeId),
+  });
+}
 
 // Debug middleware to log all requests
 router.use((req, res, next) => {
@@ -118,6 +98,34 @@ const disableCache = (req, res, next) => {
   res.removeHeader('ETag');
   next();
 };
+
+router.put('/sessions/state',
+  disableCache,
+  requireRole(['admin', 'coordinator']),
+  async (req, res) => {
+    const { gatheringTypeId, sessionDate, status } = req.body || {};
+    if (!Number.isInteger(gatheringTypeId) || gatheringTypeId <= 0
+        || !isValidDateOnly(sessionDate)
+        || !['open', 'held', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'A valid gathering, session date, and status are required.' });
+    }
+
+    try {
+      const sessionState = await setSessionState({
+        churchId: req.user.church_id,
+        gatheringTypeId,
+        sessionDate,
+        actorId: req.user.id,
+        status,
+      });
+      return res.json({ sessionState });
+    } catch (error) {
+      const mapped = sessionStateErrorResponse(error);
+      if (mapped) return res.status(mapped.status).json({ code: mapped.code, error: mapped.error });
+      logger.error('Failed to update attendance session state', { error: error.message });
+      return res.status(500).json({ error: 'Failed to update attendance session state.' });
+    }
+  });
 
 // ===== HEADCOUNT ENDPOINTS (MUST BE FIRST TO AVOID ROUTE CONFLICTS) =====
 
@@ -158,24 +166,21 @@ router.get('/headcount/:gatheringTypeId/:date', (req, res, next) => {
     // Get or create attendance session (use transaction for consistency)
     let sessionId;
     let sessionMode = 'separate';
+    let sessionState;
     await Database.transaction(async (conn) => {
-      let sessionResult = await conn.query(`
-        SELECT id, headcount_mode FROM attendance_sessions 
-        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-      `, [gatheringTypeId, date, req.user.church_id]);
-
-      if (sessionResult.length === 0) {
-        // Create new session with default mode
-        const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
-          VALUES (?, ?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id, mode]);
-        sessionId = newSession.insertId;
-        sessionMode = mode;
-      } else {
-        sessionId = sessionResult[0].id;
-        sessionMode = sessionResult[0].headcount_mode || 'separate';
-      }
+      sessionState = await ensureSessionWithConnection(conn, {
+        churchId: req.user.church_id,
+        gatheringTypeId: Number(gatheringTypeId),
+        sessionDate: date,
+        actorId: req.user.id,
+        headcountMode: mode,
+      });
+      sessionId = sessionState.id;
+      const sessionResult = await conn.query(
+        'SELECT headcount_mode FROM attendance_sessions WHERE id = ? AND church_id = ?',
+        [sessionId, req.user.church_id],
+      );
+      sessionMode = sessionResult[0]?.headcount_mode || 'separate';
     });
 
     // Get headcount records based on mode
@@ -272,6 +277,7 @@ router.get('/headcount/:gatheringTypeId/:date', (req, res, next) => {
       lastUpdatedBy: headcountData ? 
         `${headcountData.first_name} ${headcountData.last_name}` : null,
       sessionId,
+      sessionState,
       mode,
       sessionMode,
       otherUsers: otherUsersData
@@ -334,35 +340,34 @@ router.post('/headcount/update/:gatheringTypeId/:date', disableCache, requireGat
 
     let sessionId;
     let sessionMode = 'separate';
+    let sessionState;
     await Database.transaction(async (conn) => {
-      // Get or create attendance session
-      let sessionResult = await conn.query(`
-        SELECT id, headcount_mode FROM attendance_sessions 
-        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-      `, [gatheringTypeId, date, req.user.church_id]);
+      sessionState = await ensureSessionWithConnection(conn, {
+        churchId: req.user.church_id,
+        gatheringTypeId: Number(gatheringTypeId),
+        sessionDate: date,
+        actorId: req.user.id,
+        headcountMode: mode,
+      });
+      sessionId = sessionState.id;
+      const sessionResult = await conn.query(
+        'SELECT headcount_mode FROM attendance_sessions WHERE id = ? AND church_id = ?',
+        [sessionId, req.user.church_id],
+      );
+      sessionMode = sessionResult[0]?.headcount_mode || 'separate';
 
-      if (sessionResult.length === 0) {
-        // Create new session with the specified mode
-        const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
-          VALUES (?, ?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id, mode]);
-        sessionId = newSession.insertId;
+      if (sessionMode !== mode) {
+        await conn.query(
+          'UPDATE attendance_sessions SET headcount_mode = ? WHERE id = ? AND church_id = ?',
+          [mode, sessionId, req.user.church_id],
+        );
         sessionMode = mode;
-      } else {
-        sessionId = sessionResult[0].id;
-        sessionMode = sessionResult[0].headcount_mode || 'separate';
-        
-        // Update session mode if it's different
-        if (sessionMode !== mode) {
-          await conn.query(`
-            UPDATE attendance_sessions 
-            SET headcount_mode = ? 
-            WHERE id = ?
-          `, [mode, sessionId]);
-          sessionMode = mode;
-        }
       }
+
+      sessionState = await finalizeHeadcountSessionWithConnection(conn, {
+        churchId: req.user.church_id,
+        sessionId,
+      });
 
       // Insert or update headcount record (now supports per-user records)
       await conn.query(`
@@ -462,6 +467,7 @@ router.post('/headcount/update/:gatheringTypeId/:date', disableCache, requireGat
       headcount: displayHeadcount,
       userHeadcount: headcount,
       mode: displayMode,
+      sessionState,
       updatedBy: `${req.user.first_name} ${req.user.last_name}`,
       otherUsers: otherUsersForBroadcast
         .map(user => ({
@@ -513,27 +519,18 @@ router.put('/headcount/mode/:gatheringTypeId/:date', disableCache, requireGather
     // Get or create attendance session
     let sessionId;
     await Database.transaction(async (conn) => {
-      let sessionResult = await conn.query(`
-        SELECT id FROM attendance_sessions 
-        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-      `, [gatheringTypeId, date, req.user.church_id]);
-
-      if (sessionResult.length === 0) {
-        // Create new session with the specified mode
-        const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
-          VALUES (?, ?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id, mode]);
-        sessionId = newSession.insertId;
-      } else {
-        sessionId = sessionResult[0].id;
-        // Update existing session mode
-        await conn.query(`
-          UPDATE attendance_sessions 
-          SET headcount_mode = ? 
-          WHERE id = ?
-        `, [mode, sessionId]);
-      }
+      const sessionState = await ensureSessionWithConnection(conn, {
+        churchId: req.user.church_id,
+        gatheringTypeId: Number(gatheringTypeId),
+        sessionDate: date,
+        actorId: req.user.id,
+        headcountMode: mode,
+      });
+      sessionId = sessionState.id;
+      await conn.query(
+        'UPDATE attendance_sessions SET headcount_mode = ? WHERE id = ? AND church_id = ?',
+        [mode, sessionId, req.user.church_id],
+      );
     });
 
     // Broadcast the mode change via WebSocket
@@ -615,25 +612,26 @@ router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId',
 
       let sessionId;
       let sessionMode = 'separate';
+      let sessionState;
       await Database.transaction(async (conn) => {
-        // Get or create attendance session
-        let sessionResult = await conn.query(`
-          SELECT id, headcount_mode FROM attendance_sessions 
-          WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-        `, [gatheringTypeId, date, req.user.church_id]);
+        sessionState = await ensureSessionWithConnection(conn, {
+          churchId: req.user.church_id,
+          gatheringTypeId: Number(gatheringTypeId),
+          sessionDate: date,
+          actorId: req.user.id,
+          headcountMode: 'separate',
+        });
+        sessionId = sessionState.id;
+        const sessionResult = await conn.query(
+          'SELECT headcount_mode FROM attendance_sessions WHERE id = ? AND church_id = ?',
+          [sessionId, req.user.church_id],
+        );
+        sessionMode = sessionResult[0]?.headcount_mode || 'separate';
 
-        if (sessionResult.length === 0) {
-          // Create new session with separate mode
-          const newSession = await conn.query(`
-            INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
-            VALUES (?, ?, ?, ?, ?)
-          `, [gatheringTypeId, date, req.user.id, req.user.church_id, 'separate']);
-          sessionId = newSession.insertId;
-          sessionMode = 'separate';
-        } else {
-          sessionId = sessionResult[0].id;
-          sessionMode = sessionResult[0].headcount_mode || 'separate';
-        }
+        sessionState = await finalizeHeadcountSessionWithConnection(conn, {
+          churchId: req.user.church_id,
+          sessionId,
+        });
 
         // Insert or update headcount record for the target user
         await conn.query(`
@@ -722,6 +720,7 @@ router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId',
         headcount: displayHeadcount,
         userHeadcount: headcount,
         mode: displayMode,
+        sessionState,
         updatedUser: {
           id: parseInt(targetUserId),
           name: `${targetUser[0].first_name} ${targetUser[0].last_name}`
@@ -1175,11 +1174,11 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
     const sessions = hasSessionsChurchId
       ? await Database.query(
-          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          'SELECT id, gathering_type_id, session_date, session_status, roster_provenance_version, cancelled_at, cancelled_by, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
           [gatheringTypeId, date, req.user.church_id]
         )
       : await Database.query(
-          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          'SELECT id, gathering_type_id, session_date, session_status, roster_provenance_version, cancelled_at, cancelled_by, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
 
@@ -1426,6 +1425,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     // Format and return combined response
     const responseData = processApiResponse({
       sessionId: sessionId,
+      sessionState: mapSessionStateRow(sessions[0]),
       excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
       showBackgroundCheckStatus,
       attendanceList: attendanceList.map(({ pco_background_check_cleared, pco_has_medical_notes, ...attendee }) => ({
@@ -1502,11 +1502,11 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
     const sessions = hasSessionsChurchId
       ? await Database.query(
-          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          'SELECT id, gathering_type_id, session_date, session_status, roster_provenance_version, cancelled_at, cancelled_by, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
           [gatheringTypeId, date, req.user.church_id]
         )
       : await Database.query(
-          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          'SELECT id, gathering_type_id, session_date, session_status, roster_provenance_version, cancelled_at, cancelled_by, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
 
@@ -1645,6 +1645,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
       const responseData = processApiResponse({
         sessionId: sessionId,
+        sessionState: mapSessionStateRow(sessions[0]),
         excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
         attendanceList: attendanceList.map(attendee => ({
           ...attendee,
@@ -2044,6 +2045,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
     // Use systematic conversion utility to handle BigInt and snake_case to camelCase conversion
     const responseData = processApiResponse({
+      sessionId,
+      sessionState: mapSessionStateRow(sessions[0]),
+      excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
       attendanceList: attendanceList.map(attendee => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
@@ -2074,8 +2078,6 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
   try {
     const { gatheringTypeId, date } = req.params;
     const { attendanceRecords, visitors, clientTimeOffset = 0 } = req.body;
-    const timeZone = await loadChurchTimeZone(req.user.church_id);
-
     logger.debugLog('GENERIC ROUTE MATCHED', {
       path: req.path,
       gatheringTypeId,
@@ -2087,51 +2089,15 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 
     // Track skipped records for conflict detection
     const skippedRecords = [];
+    let sessionState;
 
     await Database.transaction(async (conn) => {
-      const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
       const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
       const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
-      // Create or get attendance session
-      let sessionResult;
-      if (hasSessionsChurchId) {
-        sessionResult = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-      } else {
-        sessionResult = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
-          VALUES (?, ?, ?)
-          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
-        `, [gatheringTypeId, date, req.user.id]);
-      }
-
-      logger.debugLog('Session result', sessionResult);
-
-      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
-      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
-      const sessions1 = hasSessionsChurchId
-        ? await conn.query(
-            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-            [gatheringTypeId, date, req.user.church_id]
-          )
-        : await conn.query(
-            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-            [gatheringTypeId, date]
-          );
-      if (sessions1.length === 0) {
-        throw new Error('Failed to create or retrieve attendance session');
-      }
-      const sessionId = Number(sessions1[0].id);
+      sessionState = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+      const sessionId = sessionState.id;
 
       logger.debugLog('Session ID', sessionId);
-
-      // Snapshot roster when any record is being marked present
-      if (attendanceRecords && attendanceRecords.some(r => r.present)) {
-        await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date, timeZone);
-      }
 
       // Update individual attendance records with timestamp-based conflict detection
       if (attendanceRecords && attendanceRecords.length > 0) {
@@ -2205,7 +2171,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, individual_id) DO UPDATE SET
                   present = excluded.present,
-                  people_type_at_time = excluded.people_type_at_time,
+                  people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time),
                   updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, req.user.church_id, peopleTypeAtTime, req.user.id]);
@@ -2226,7 +2192,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, individual_id) DO UPDATE SET
                   present = excluded.present,
-                  people_type_at_time = excluded.people_type_at_time,
+                  people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time),
                   updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, peopleTypeAtTime, req.user.id]);
@@ -2304,6 +2270,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 
     res.json({
       message: 'Attendance recorded successfully',
+      sessionState,
       skippedRecords: skippedRecords.length > 0 ? skippedRecords : undefined,
       hasConflicts: skippedRecords.length > 0
     });
@@ -2414,20 +2381,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
     }
 
     await Database.transaction(async (conn) => {
-      // Get or create attendance session
-      let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
-      `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-
-      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
-      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
-      const sessionsLookup = await conn.query(
-        'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-        [gatheringTypeId, date, req.user.church_id]
-      );
-      const sessionId = Number(sessionsLookup[0].id);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Prepare people to create
       let peopleToCreate = [];
@@ -2684,20 +2638,7 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
     }
 
     await Database.transaction(async (conn) => {
-      // Get or create attendance session
-      let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
-      `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-
-      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
-      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
-      const sessionsLookup = await conn.query(
-        'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-        [gatheringTypeId, date, req.user.church_id]
-      );
-      const sessionId = Number(sessionsLookup[0].id);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Treat visitorId as individual_id; update or replace the individuals and gathering list
       // Remove the old individual's attendance and gathering list assignment for this session
@@ -2820,6 +2761,8 @@ router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, auditLog
     }
 
     await Database.transaction(async (conn) => {
+      await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
+
       // Create family if multiple people
       let familyId = null;
       let familyLastName = 'Unknown';
@@ -2940,7 +2883,7 @@ router.delete('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAcc
       if (sessions.length === 0) {
         return res.status(404).json({ error: 'Attendance session not found' });
       }
-      const sessionId = Number(sessions[0].id);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // New system: treat visitorId as individual_id and remove from this session and gathering list
       const individual = await conn.query(
@@ -2993,8 +2936,6 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
     const gatheringTypeId = Number(req.params.gatheringTypeId);
     const date = req.params.date;
     const familyId = Number(req.params.familyId);
-    const timeZone = await loadChurchTimeZone(req.user.church_id);
-
     if (!Number.isInteger(gatheringTypeId) || gatheringTypeId <= 0) {
       return res.status(400).json({ error: 'Invalid gathering type' });
     }
@@ -3023,38 +2964,7 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         return res.status(404).json({ error: 'Visitor family not found' });
       }
 
-      // Get or create attendance session
-      const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
-      let sessionResult;
-      if (hasSessionsChurchId) {
-        sessionResult = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-      } else {
-        sessionResult = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
-          VALUES (?, ?, ?)
-          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
-        `, [gatheringTypeId, date, req.user.id]);
-      }
-
-      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
-      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
-      const sessionsLookup = hasSessionsChurchId
-        ? await conn.query(
-            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-            [gatheringTypeId, date, req.user.church_id]
-          )
-        : await conn.query(
-            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-            [gatheringTypeId, date]
-          );
-      const sessionId = Number(sessionsLookup[0].id);
-
-      // Snapshot roster before recording visitor attendance
-      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date, timeZone);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Get all individuals in the visitor family (use numeric id for FK consistency)
       const individuals = await conn.query(`
@@ -3095,7 +3005,9 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
             VALUES (?, ?, 1, ?, ?)
-            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = excluded.present, people_type_at_time = excluded.people_type_at_time
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET
+              present = excluded.present,
+              people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
           `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
         } else {
           await conn.query(`
@@ -3170,8 +3082,6 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
 router.post('/:gatheringTypeId/:date/individual/:individualId', requireGatheringAccess, auditLog('ADD_INDIVIDUAL_TO_SERVICE'), async (req, res) => {
   try {
     const { gatheringTypeId, date, individualId } = req.params;
-    const timeZone = await loadChurchTimeZone(req.user.church_id);
-    
     logger.debugLog('🔍 Adding individual to service:', {
       gatheringTypeId,
       date,
@@ -3182,7 +3092,6 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
 
     await Database.transaction(async (conn) => {
       // Check which columns exist for backward compatibility
-      const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
       const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
       const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
       const hasGatheringListsChurchId = await columnExists('gathering_lists', 'church_id');
@@ -3201,36 +3110,7 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
 
       const individual = individualCheck[0];
 
-      // Get or create attendance session
-      let sessionResult;
-      if (hasSessionsChurchId) {
-        sessionResult = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-      } else {
-        sessionResult = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
-          VALUES (?, ?, ?)
-          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
-        `, [gatheringTypeId, date, req.user.id]);
-      }
-
-      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
-      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
-      const sessionsLookup = await conn.query(
-        hasSessionsChurchId
-          ? 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?'
-          : 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-        hasSessionsChurchId
-          ? [gatheringTypeId, date, req.user.church_id]
-          : [gatheringTypeId, date]
-      );
-      const sessionId = Number(sessionsLookup[0].id);
-
-      // Snapshot roster before recording individual attendance
-      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date, timeZone);
+      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
 
       // Add individual to gathering list if not already there
       const existingGatheringList = await conn.query(
@@ -3273,7 +3153,9 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
             VALUES (?, ?, 1, ?, ?)
-            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET
+              present = 1,
+              people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
           `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
         } else {
           await conn.query(`
@@ -3287,7 +3169,9 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
             VALUES (?, ?, 1, ?)
-            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET
+              present = 1,
+              people_type_at_time = COALESCE(attendance_records.people_type_at_time, excluded.people_type_at_time)
           `, [sessionId, individualId, peopleTypeAtTime]);
         } else {
           await conn.query(`
