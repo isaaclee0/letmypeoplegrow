@@ -946,6 +946,10 @@ app.get('/api/local-backups', async (req, res) => {
       });
     }
 
+    const newestFirst = (left, right) => new Date(right.modified) - new Date(left.modified);
+    files.sort(newestFirst);
+    zips.sort(newestFirst);
+
     res.json({ files, zips });
   } catch (error) {
     console.error('Local backups scan error:', error);

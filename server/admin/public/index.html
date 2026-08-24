@@ -981,7 +981,10 @@
       // Load data if needed
       if (view === 'users') loadAllUsers(1);
       if (view === 'audit') loadAuditLog();
-      if (view === 'backups') loadBackupStatus();
+      if (view === 'backups') {
+        loadBackupStatus();
+        scanLocalBackups();
+      }
       if (view === 'ai-settings') loadAiSettings();
     }
 
