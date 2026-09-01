@@ -10,7 +10,11 @@ process.env.JWT_SECRET = 'engagement-overview-test-secret';
 
 const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
-const { readDrilldownToken } = require('./drilldownTokens');
+const {
+  DrilldownTokenError,
+  createDrilldownToken,
+  readDrilldownToken,
+} = require('./drilldownTokens');
 const {
   summarizeEngagementProfiles,
   buildEngagementOverview,
@@ -57,26 +61,32 @@ function profile(individualId, primary, community) {
   };
 }
 
-test('summarizes classified-only distribution, four-way movement, and the established 3x3 matrix', () => {
+test('summarizes established tiers and only active confirmations or recent transitions', () => {
   const current = new Map([
-    [1, profile(1, axis('core', 8, 10), axis('core', 8, 8))],
-    [2, profile(2, axis('casual', 4, 10), axis('irregular', 1, 8))],
-    [3, profile(3, axis('irregular', 1, 10), axis('casual', 4, 8))],
-    [4, profile(4, axis('establishing', 3, 6), axis('core', 8, 8))],
-    [5, profile(5, axis('not_assigned'), axis('not_assigned'))],
-  ]);
-  const comparison = new Map([
-    [1, profile(1, axis('casual', 4, 10), axis('core', 8, 8))],
-    [2, profile(2, axis('core', 8, 10), axis('irregular', 1, 8))],
-    [3, profile(3, axis('irregular', 1, 10), axis('casual', 4, 8))],
-    [4, profile(4, axis('establishing', 2, 5), axis('core', 8, 8))],
-    [5, profile(5, axis('core', 8, 10), axis('not_assigned'))],
+    [1, profile(1, { ...axis('irregular', 8, 10), statusSource: 'established' },
+      { ...axis('core', 8, 8), statusSource: 'established' })],
+    [2, profile(2, { ...axis('casual', 4, 10), statusSource: 'established' },
+      { ...axis('irregular', 1, 8), statusSource: 'established' })],
+    [3, profile(3, { ...axis('core', 9, 10), statusSource: 'calculated_fallback' },
+      { ...axis('casual', 4, 8), statusSource: 'established' })],
+    [4, profile(4, { ...axis('establishing', 3, 6), statusSource: 'established' },
+      { ...axis('core', 8, 8), statusSource: 'established' })],
+    [5, profile(5, { ...axis('not_assigned'), statusSource: 'established' },
+      { ...axis('not_assigned'), statusSource: 'established' })],
   ]);
 
   const summary = summarizeEngagementProfiles({
     churchId: 'church_summary',
     current,
-    comparison,
+    tierStates: [
+      { individualId: 1, axis: 'primary', candidateTier: 'core', candidateDirection: 'higher' },
+      { individualId: 2, axis: 'community', candidateTier: 'core', candidateDirection: 'higher' },
+      { individualId: 4, axis: 'primary', candidateTier: null, candidateDirection: null },
+    ],
+    recentTransitions: [
+      { individualId: 1, axis: 'primary' },
+      { individualId: 2, axis: 'community' },
+    ],
     coverage: {
       eligibleHeldSessions: 3,
       explicitProvenanceSessions: 2,
@@ -102,17 +112,30 @@ test('summarizes classified-only distribution, four-way movement, and the establ
   );
   assert.equal(summary.primaryDistribution.establishing.count, 1);
   assert.equal(summary.primaryDistribution.notAssigned.count, 1);
+  assert.deepEqual(summary.baseline, { pending: true, pendingAxes: 1 });
+  assert.equal(summary.movement, undefined);
+  assert.equal(summary.tierMovement.recentWindowWeeks, 13);
   assert.deepEqual(
-    Object.fromEntries(Object.entries(summary.movement.categories).map(([key, value]) => [key, value.count])),
-    { higher: 1, same: 1, lower: 1, nonComparable: 2 },
+    Object.fromEntries(Object.entries(summary.tierMovement.axes).map(([axisKey, movement]) => [
+      axisKey,
+      {
+        confirmingHigher: movement.confirmingHigher.count,
+        confirmingLower: movement.confirmingLower.count,
+        confirmedRecently: movement.confirmedRecently.count,
+      },
+    ])),
+    {
+      primary: { confirmingHigher: 1, confirmingLower: 0, confirmedRecently: 1 },
+      community: { confirmingHigher: 1, confirmingLower: 0, confirmedRecently: 1 },
+    },
   );
   assert.equal(summary.matrix.classifiedOnBothAxes, 3);
   assert.equal(summary.matrix.cells.length, 9);
-  assert.equal(summary.matrix.cells.find((cell) => cell.primaryTier === 'core'
+  assert.equal(summary.matrix.cells.find((cell) => cell.primaryTier === 'irregular'
     && cell.communityTier === 'core').count, 1);
   assert.equal(summary.matrix.cells.find((cell) => cell.primaryTier === 'casual'
     && cell.communityTier === 'irregular').count, 1);
-  assert.equal(summary.matrix.cells.find((cell) => cell.primaryTier === 'irregular'
+  assert.equal(summary.matrix.cells.find((cell) => cell.primaryTier === 'core'
     && cell.communityTier === 'casual').count, 1);
   assert.deepEqual(summary.matrix.outside, {
     primaryEstablishing: 1,
@@ -141,22 +164,34 @@ test('summarizes classified-only distribution, four-way movement, and the establ
     kind: 'people',
     now: '2026-08-17T01:00:00.000Z',
   }).selector, { type: 'primary_status', status: 'core' });
+  assert.deepEqual(readDrilldownToken(
+    summary.tierMovement.axes.primary.confirmingHigher.peopleToken,
+    {
+      churchId: 'church_summary',
+      kind: 'people',
+      now: '2026-08-17T01:00:00.000Z',
+    },
+  ).selector, { type: 'confirmation', axis: 'primary', direction: 'higher' });
+  assert.deepEqual(readDrilldownToken(
+    summary.tierMovement.axes.community.confirmedRecently.peopleToken,
+    {
+      churchId: 'church_summary',
+      kind: 'people',
+      now: '2026-08-17T01:00:00.000Z',
+    },
+  ).selector, { type: 'transition', axis: 'community', recentWeeks: 13 });
 });
 
-test('includes the previous Primary tier for Higher and Lower people lists', () => {
+test('rejects retired four-way movement selectors', () => {
   const current = new Map([
     [1, profile(1, axis('casual', 4, 8), axis('not_assigned'))],
   ]);
-  const comparison = new Map([
-    [1, profile(1, axis('core', 8, 8), axis('not_assigned'))],
-  ]);
-
-  const rows = engagementRows({ profiles: { current, comparison } }, {
-    type: 'movement', direction: 'lower',
-  });
-
-  assert.equal(rows.length, 1);
-  assert.deepEqual(rows[0].previousPrimary, axis('core', 8, 8));
+  assert.throws(
+    () => engagementRows({ establishedProfiles: current }, {
+      type: 'movement', direction: 'lower',
+    }),
+    DrilldownTokenError,
+  );
 });
 
 async function insertPerson(churchId, firstName, lastName, peopleType = 'regular') {
@@ -306,6 +341,129 @@ async function seedOverviewFixture(churchId) {
   return { regulars, localReturn, converted, headcountSession };
 }
 
+async function insertTierState(churchId, individualId, axisKey, overrides = {}) {
+  await Database.query(
+    `INSERT INTO engagement_tier_state
+       (church_id, individual_id, axis, rules_version, established_tier,
+        candidate_tier, candidate_direction, candidate_started_week_end,
+        candidate_final_week_end, last_evaluated_week_end)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      churchId,
+      individualId,
+      axisKey,
+      overrides.rulesVersion ?? 1,
+      overrides.establishedTier ?? null,
+      overrides.candidateTier ?? null,
+      overrides.candidateDirection ?? null,
+      overrides.candidateStartedWeekEnd ?? null,
+      overrides.candidateFinalWeekEnd ?? null,
+      overrides.lastEvaluatedWeekEnd ?? '2026-08-16',
+    ],
+  );
+}
+
+async function insertTransition(churchId, individualId, axisKey, overrides = {}) {
+  await Database.query(
+    `INSERT INTO engagement_tier_transitions
+       (church_id, individual_id, axis, from_tier, to_tier,
+        candidate_started_week_end, confirmed_week_end, rules_version,
+        long_term_attended, long_term_opportunities, long_term_rate,
+        confirmation_attended, confirmation_opportunities, confirmation_rate)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      churchId,
+      individualId,
+      axisKey,
+      overrides.fromTier ?? 'irregular',
+      overrides.toTier ?? 'casual',
+      overrides.candidateStartedWeekEnd ?? '2026-03-01',
+      overrides.confirmedWeekEnd,
+      overrides.rulesVersion ?? 1,
+      overrides.longTermAttended ?? 4,
+      overrides.longTermOpportunities ?? 10,
+      overrides.longTermRate ?? 0.4,
+      overrides.confirmationAttended ?? 4,
+      overrides.confirmationOpportunities ?? 8,
+      overrides.confirmationRate ?? 0.5,
+    ],
+  );
+}
+
+async function seedEstablishedTierActivity(churchId, regulars, converted) {
+  await insertTierState(churchId, regulars[0], 'primary', {
+    establishedTier: 'irregular',
+  });
+  await insertTierState(churchId, regulars[0], 'community', {
+    establishedTier: 'core',
+    candidateTier: 'irregular',
+    candidateDirection: 'lower',
+    candidateStartedWeekEnd: '2026-08-16',
+    candidateFinalWeekEnd: '2026-11-15',
+  });
+  await insertTierState(churchId, regulars[1], 'primary', {
+    establishedTier: 'casual',
+    candidateTier: 'core',
+    candidateDirection: 'higher',
+    candidateStartedWeekEnd: '2026-06-28',
+    candidateFinalWeekEnd: '2026-09-27',
+  });
+  await insertTierState(churchId, regulars[1], 'community', {
+    establishedTier: 'irregular',
+  });
+  await insertTierState(churchId, regulars[2], 'primary', {
+    rulesVersion: 2,
+    establishedTier: 'irregular',
+  });
+  await insertTierState(churchId, regulars[2], 'community');
+  await insertTierState(churchId, converted, 'primary');
+  await insertTierState(churchId, converted, 'community');
+
+  await insertTransition(churchId, regulars[0], 'primary', {
+    confirmedWeekEnd: '2026-05-24',
+  });
+  await insertTransition(churchId, regulars[1], 'community', {
+    fromTier: 'core',
+    toTier: 'irregular',
+    candidateStartedWeekEnd: '2026-05-10',
+    confirmedWeekEnd: '2026-08-09',
+    longTermAttended: 1,
+    longTermOpportunities: 10,
+    longTermRate: 0.1,
+    confirmationAttended: 1,
+    confirmationOpportunities: 8,
+    confirmationRate: 0.125,
+  });
+  await insertTransition(churchId, regulars[1], 'community', {
+    fromTier: 'irregular',
+    toTier: 'casual',
+    candidateStartedWeekEnd: '2026-05-03',
+    confirmedWeekEnd: '2026-06-07',
+    longTermAttended: 3,
+    longTermOpportunities: 10,
+    longTermRate: 0.3,
+    confirmationAttended: 3,
+    confirmationOpportunities: 8,
+    confirmationRate: 0.375,
+  });
+  await insertTransition(churchId, regulars[2], 'primary', {
+    fromTier: 'casual',
+    toTier: 'irregular',
+    confirmedWeekEnd: '2026-05-17',
+  });
+  await insertTransition(churchId, regulars[0], 'primary', {
+    fromTier: 'casual',
+    toTier: 'core',
+    confirmedWeekEnd: '2026-08-23',
+  });
+  await insertTransition(churchId, regulars[2], 'community', {
+    fromTier: 'core',
+    toTier: 'casual',
+    confirmedWeekEnd: '2026-08-02',
+    rulesVersion: 2,
+  });
+}
+
 async function seedRepresentativeOverviewFixture(churchId) {
   await Database.query(
     `UPDATE church_settings SET timezone = 'Australia/Hobart' WHERE church_id = ?`,
@@ -401,6 +559,8 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
 
     assert.equal(overview.window.currentStart, '2025-08-18');
     assert.equal(overview.window.currentEnd, '2026-08-16');
+    assert.equal(overview.schemaVersion, 2);
+    assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 8 });
     assert.equal(overview.trend.buckets.length, 13);
     assert.equal(overview.trend.buckets[0].startDate, '2025-08-18');
     assert.equal(overview.trend.buckets[12].endDate, '2026-08-16');
@@ -447,7 +607,8 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
     });
     assert.equal(firstPage.rows.length, 2);
     assert.equal(firstPage.rows.every((row) => row.rowType === 'engagement_profile'
-      && row.primary.status === 'core'), true);
+      && row.primary.status === 'core'
+      && row.primary.statusSource === 'calculated_fallback'), true);
     assert.ok(firstPage.nextCursor);
     const secondPage = await listEngagementPeople(churchId, {
       segment: coreSegment,
@@ -465,6 +626,169 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
     });
     assert.deepEqual(sessionPage.rows.map((row) => row.sessionId), [fixture.headcountSession]);
     assert.equal(sessionPage.rows[0].attendance, 21);
+  });
+});
+
+test('uses established tiers and serves recomputed confirmation and recent transition rows', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedOverviewFixture(churchId);
+    await seedEstablishedTierActivity(churchId, fixture.regulars, fixture.converted);
+
+    const overview = await buildEngagementOverview(churchId, {
+      asOf: '2026-08-16T14:00:00.000Z',
+    });
+
+    assert.equal(overview.schemaVersion, 2);
+    assert.equal(overview.movement, undefined);
+    assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 1 });
+    assert.deepEqual(
+      overview.primaryDistribution.classified.tiers.map(({ tier, count }) => ({ tier, count })),
+      [
+        { tier: 'core', count: 1 },
+        { tier: 'casual', count: 1 },
+        { tier: 'irregular', count: 1 },
+      ],
+    );
+    assert.equal(overview.matrix.classifiedOnBothAxes, 2);
+    assert.equal(overview.matrix.cells.find((cell) => cell.primaryTier === 'irregular'
+      && cell.communityTier === 'core').count, 1);
+    assert.equal(overview.matrix.cells.find((cell) => cell.primaryTier === 'casual'
+      && cell.communityTier === 'irregular').count, 1);
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(overview.tierMovement.axes).map(([axisKey, movement]) => [
+        axisKey,
+        {
+          confirmingHigher: movement.confirmingHigher.count,
+          confirmingLower: movement.confirmingLower.count,
+          confirmedRecently: movement.confirmedRecently.count,
+        },
+      ])),
+      {
+        primary: { confirmingHigher: 1, confirmingLower: 0, confirmedRecently: 1 },
+        community: { confirmingHigher: 0, confirmingLower: 1, confirmedRecently: 2 },
+      },
+    );
+
+    const fallbackToken = overview.primaryDistribution.classified.tiers
+      .find((tier) => tier.tier === 'core').peopleToken;
+    const fallbackRows = await listEngagementPeople(churchId, { segment: fallbackToken });
+    assert.deepEqual(fallbackRows.rows.map((row) => ({
+      id: row.individualId,
+      status: row.primary.status,
+      source: row.primary.statusSource,
+      attended: row.primary.attended,
+      opportunities: row.primary.opportunities,
+      rate: row.primary.rate,
+    })), [{
+      id: fixture.regulars[2],
+      status: 'core',
+      source: 'calculated_fallback',
+      attended: 9,
+      opportunities: 9,
+      rate: 1,
+    }]);
+
+    const establishedToken = overview.primaryDistribution.classified.tiers
+      .find((tier) => tier.tier === 'casual').peopleToken;
+    const establishedRows = await listEngagementPeople(churchId, {
+      segment: establishedToken,
+    });
+    assert.deepEqual(establishedRows.rows.map((row) => ({
+      id: row.individualId,
+      status: row.primary.status,
+      source: row.primary.statusSource,
+      attended: row.primary.attended,
+      opportunities: row.primary.opportunities,
+      rate: row.primary.rate,
+    })), [{
+      id: fixture.regulars[1],
+      status: 'casual',
+      source: 'established',
+      attended: 9,
+      opportunities: 9,
+      rate: 1,
+    }]);
+
+    const confirmationToken = overview.tierMovement.axes.primary.confirmingHigher.peopleToken;
+    assert.deepEqual(readDrilldownToken(confirmationToken, {
+      churchId,
+      kind: 'people',
+    }).selector, { type: 'confirmation', axis: 'primary', direction: 'higher' });
+    const confirmationRows = await listEngagementPeople(churchId, {
+      segment: confirmationToken,
+    });
+    assert.deepEqual(confirmationRows.rows, [{
+      rowType: 'engagement_confirmation',
+      individualId: fixture.regulars[1],
+      firstName: 'Ben',
+      lastName: 'Baker',
+      familyId: null,
+      axis: 'primary',
+      direction: 'higher',
+      establishedTier: 'casual',
+      candidateTier: 'core',
+      observedOpportunities: 6,
+      attended: 6,
+      rate: 1,
+      candidateStartedWeekEnd: '2026-06-28',
+      candidateFinalWeekEnd: '2026-09-27',
+      currentWeek: 7,
+    }]);
+
+    const zeroWeekRows = await listEngagementPeople(churchId, {
+      segment: overview.tierMovement.axes.community.confirmingLower.peopleToken,
+    });
+    assert.equal(zeroWeekRows.rows[0].currentWeek, 0);
+    assert.equal(zeroWeekRows.rows[0].observedOpportunities, 0);
+    assert.equal(zeroWeekRows.rows[0].rate, null);
+
+    const transitionToken = overview.tierMovement.axes.community.confirmedRecently.peopleToken;
+    assert.deepEqual(readDrilldownToken(transitionToken, {
+      churchId,
+      kind: 'people',
+    }).selector, { type: 'transition', axis: 'community', recentWeeks: 13 });
+    const firstTransitionPage = await listEngagementPeople(churchId, {
+      segment: transitionToken,
+      limit: 1,
+    });
+    assert.equal(firstTransitionPage.rows.length, 1);
+    assert.ok(firstTransitionPage.nextCursor);
+    const secondTransitionPage = await listEngagementPeople(churchId, {
+      segment: transitionToken,
+      cursor: firstTransitionPage.nextCursor,
+      limit: 1,
+    });
+    assert.deepEqual(
+      [...firstTransitionPage.rows, ...secondTransitionPage.rows]
+        .map((row) => row.confirmedWeekEnd),
+      ['2026-06-07', '2026-08-09'],
+    );
+    assert.deepEqual(secondTransitionPage.rows, [{
+      rowType: 'engagement_transition',
+      individualId: fixture.regulars[1],
+      firstName: 'Ben',
+      lastName: 'Baker',
+      familyId: null,
+      axis: 'community',
+      fromTier: 'core',
+      toTier: 'irregular',
+      candidateStartedWeekEnd: '2026-05-10',
+      confirmedWeekEnd: '2026-08-09',
+      longTermEvidence: { attended: 1, opportunities: 10, rate: 0.1 },
+      confirmationEvidence: { attended: 1, opportunities: 8, rate: 0.125 },
+    }]);
+
+    const retiredToken = createDrilldownToken({
+      churchId,
+      kind: 'people',
+      selector: { type: 'movement', direction: 'higher' },
+      completedWeekEnd: overview.window.completedWeekEnd,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await assert.rejects(
+      () => listEngagementPeople(churchId, { segment: retiredToken }),
+      DrilldownTokenError,
+    );
   });
 });
 

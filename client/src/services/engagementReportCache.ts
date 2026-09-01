@@ -2,11 +2,12 @@ import type { EngagementOverviewDto, PastoralInsightsDto } from './api';
 
 const CACHE_PREFIX = 'engagement-overview';
 const PASTORAL_CACHE_PREFIX = 'pastoral-insights';
-const SCHEMA_VERSION = 1;
+const OVERVIEW_SCHEMA_VERSION = 2;
+const PASTORAL_SCHEMA_VERSION = 1;
 const PASTORAL_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function prefixForChurch(churchId: string): string {
-  return `${CACHE_PREFIX}:v${SCHEMA_VERSION}:${encodeURIComponent(churchId)}:`;
+  return `${CACHE_PREFIX}:v${OVERVIEW_SCHEMA_VERSION}:${encodeURIComponent(churchId)}:`;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -86,10 +87,12 @@ function isSettings(value: unknown): boolean {
 }
 
 function isOverview(value: unknown): value is EngagementOverviewDto {
-  if (!isRecord(value) || value.schemaVersion !== SCHEMA_VERSION || !isString(value.churchId)
+  if (!isRecord(value) || value.schemaVersion !== OVERVIEW_SCHEMA_VERSION
+      || 'movement' in value || !isString(value.churchId)
       || !isRecord(value.window) || !isSettings(value.settings)
       || !isRecord(value.setup) || !isRecord(value.population)
-      || !isRecord(value.primaryDistribution) || !isRecord(value.movement)
+      || !isRecord(value.baseline) || !isRecord(value.primaryDistribution)
+      || !isRecord(value.tierMovement)
       || !isRecord(value.matrix) || !isRecord(value.trend)
       || !isRecord(value.visitorJourney) || !isRecord(value.coverage)) return false;
 
@@ -99,6 +102,8 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
       || !isBoolean(value.setup.hasStandardPrimaryRole)
       || !isBoolean(value.setup.hasPrimaryAssignments)
       || !isNumber(value.population.activeRegulars)) return false;
+  if (!isBoolean(value.baseline.pending)
+      || !isNonNegativeInteger(value.baseline.pendingAxes)) return false;
 
   const distribution = value.primaryDistribution;
   if (!isRecord(distribution.classified) || !isNumber(distribution.classified.denominator)
@@ -109,9 +114,11 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
       || !isCountDrilldown(distribution.establishing)
       || !isCountDrilldown(distribution.notAssigned)) return false;
 
-  const movement = value.movement;
-  if (!isNumber(movement.denominator) || !isRecord(movement.categories)
-      || !['higher', 'same', 'lower', 'nonComparable'].every((key) => isCountDrilldown(movement.categories[key]))) return false;
+  const movement = value.tierMovement;
+  if (movement.recentWindowWeeks !== 13 || !isRecord(movement.axes)
+      || !['primary', 'community'].every((axis) => isRecord(movement.axes[axis])
+        && ['confirmingHigher', 'confirmingLower', 'confirmedRecently']
+          .every((key) => isCountDrilldown(movement.axes[axis][key])))) return false;
 
   const matrix = value.matrix;
   if (!isNumber(matrix.classifiedOnBothAxes) || !Array.isArray(matrix.cells)
@@ -236,7 +243,7 @@ function isPastoralInsight(value: unknown): boolean {
 
 function isPastoralInsights(value: unknown): value is PastoralInsightsDto {
   return isRecord(value)
-    && value.schemaVersion === SCHEMA_VERSION
+    && value.schemaVersion === PASTORAL_SCHEMA_VERSION
     && isString(value.churchId)
     && isRecord(value.window)
     && isCanonicalDate(value.window.completedWeekEnd)
@@ -299,7 +306,7 @@ export function clearEngagementOverviewCache(churchId: string): void {
 }
 
 function pastoralCacheKey(churchId: string): string {
-  return `${PASTORAL_CACHE_PREFIX}:v${SCHEMA_VERSION}:${encodeURIComponent(churchId)}`;
+  return `${PASTORAL_CACHE_PREFIX}:v${PASTORAL_SCHEMA_VERSION}:${encodeURIComponent(churchId)}`;
 }
 
 export function readPastoralInsightsCache(churchId: string): PastoralInsightsDto | null {

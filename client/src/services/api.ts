@@ -112,9 +112,23 @@ export interface EngagementRateFact {
 }
 export type EngagementTrendRole = 'primary' | 'community' | 'other' | 'unclassified';
 export type EngagementAttendanceType = 'standard' | 'headcount';
+export type EngagementAxis = 'primary' | 'community';
+export type EngagementStatusSource = 'established' | 'calculated_fallback';
+export interface EngagementReportedAxisStatus {
+  status: EngagementTierKey | 'establishing' | 'not_assigned';
+  attended: number;
+  opportunities: number;
+  rate: number | null;
+  statusSource: EngagementStatusSource;
+}
+export interface EngagementMovementAxisDto {
+  confirmingHigher: EngagementCountDrilldown;
+  confirmingLower: EngagementCountDrilldown;
+  confirmedRecently: EngagementCountDrilldown;
+}
 
 export interface EngagementOverviewDto {
-  schemaVersion: 1;
+  schemaVersion: 2;
   churchId: string;
   window: {
     completedWeekEnd: string;
@@ -131,6 +145,7 @@ export interface EngagementOverviewDto {
     hasStandardPrimaryRole: boolean;
     hasPrimaryAssignments: boolean;
   };
+  baseline: { pending: boolean; pendingAxes: number };
   population: { activeRegulars: number };
   primaryDistribution: {
     classified: {
@@ -145,9 +160,9 @@ export interface EngagementOverviewDto {
     establishing: EngagementCountDrilldown;
     notAssigned: EngagementCountDrilldown;
   };
-  movement: {
-    denominator: number;
-    categories: Record<'higher' | 'same' | 'lower' | 'nonComparable', EngagementCountDrilldown>;
+  tierMovement: {
+    recentWindowWeeks: 13;
+    axes: Record<EngagementAxis, EngagementMovementAxisDto>;
   };
   matrix: {
     classifiedOnBothAxes: number;
@@ -214,9 +229,44 @@ export interface EngagementProfileDrilldownRow {
   firstName: string;
   lastName: string;
   familyId: number | null;
-  primary: EngagementAxisStatus;
-  previousPrimary?: EngagementAxisStatus;
-  community: EngagementAxisStatus;
+  primary: EngagementReportedAxisStatus;
+  community: EngagementReportedAxisStatus;
+}
+export interface EngagementConfirmationDrilldownRow {
+  rowType: 'engagement_confirmation';
+  individualId: number;
+  firstName: string;
+  lastName: string;
+  familyId: number | null;
+  axis: EngagementAxis;
+  direction: 'higher' | 'lower';
+  establishedTier: EngagementTierKey;
+  candidateTier: EngagementTierKey;
+  observedOpportunities: number;
+  attended: number;
+  rate: number | null;
+  candidateStartedWeekEnd: string;
+  candidateFinalWeekEnd: string;
+  currentWeek: number;
+}
+export interface EngagementTransitionEvidenceDto {
+  attended: number;
+  opportunities: number;
+  rate: number;
+}
+export interface EngagementTransitionDrilldownRow {
+  rowType: 'engagement_transition';
+  individualId: number;
+  firstName: string;
+  lastName: string;
+  familyId: number | null;
+  axis: EngagementAxis;
+  fromTier: EngagementTierKey;
+  toTier: EngagementTierKey;
+  candidateStartedWeekEnd: string;
+  confirmedWeekEnd: string;
+  longTermEvidence: EngagementTransitionEvidenceDto;
+  confirmationEvidence: EngagementTransitionEvidenceDto;
 }
 export interface EngagementAttendancePersonDrilldownRow {
   rowType: 'attendance_person';
@@ -239,6 +289,8 @@ export interface EngagementVisitorDrilldownRow {
 }
 export type EngagementPersonDrilldownRow =
   | EngagementProfileDrilldownRow
+  | EngagementConfirmationDrilldownRow
+  | EngagementTransitionDrilldownRow
   | EngagementAttendancePersonDrilldownRow
   | EngagementVisitorDrilldownRow;
 

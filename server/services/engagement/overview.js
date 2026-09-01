@@ -15,8 +15,10 @@ const {
 
 const TIER_KEYS = Object.freeze(['core', 'casual', 'irregular']);
 const CLASSIFIED = new Set(TIER_KEYS);
-const TIER_RANK = Object.freeze({ irregular: 0, casual: 1, core: 2 });
+const ENGAGEMENT_AXES = Object.freeze(['primary', 'community']);
 const TREND_ROLES = Object.freeze(['primary', 'community', 'other', 'unclassified']);
+const RECENT_TRANSITION_WEEKS = 13;
+const RECENT_TRANSITION_DAYS = 84;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const TOKEN_LIFETIME_MS = 60 * 60 * 1000;
@@ -55,7 +57,8 @@ function countProfiles(profiles, predicate) {
 function summarizeEngagementProfiles({
   churchId,
   current,
-  comparison,
+  tierStates = [],
+  recentTransitions = [],
   coverage,
   window,
   settings,
@@ -93,26 +96,31 @@ function summarizeEngagementProfiles({
     };
   });
 
-  const movementIds = {
-    higher: [], same: [], lower: [], nonComparable: [],
-  };
-  for (const [individualId, profile] of current) {
-    const previous = comparison.get(individualId);
-    if (!previous || !classified(profile.primary.status) || !classified(previous.primary.status)) {
-      movementIds.nonComparable.push(individualId);
-    } else if (TIER_RANK[profile.primary.status] > TIER_RANK[previous.primary.status]) {
-      movementIds.higher.push(individualId);
-    } else if (TIER_RANK[profile.primary.status] < TIER_RANK[previous.primary.status]) {
-      movementIds.lower.push(individualId);
-    } else {
-      movementIds.same.push(individualId);
-    }
-  }
-  const movementCategories = Object.fromEntries(
-    Object.entries(movementIds).map(([key, ids]) => [key, {
-      count: ids.length,
-      peopleToken: peopleToken({ type: 'movement', direction: key }),
-    }]),
+  const currentIds = new Set(current.keys());
+  const movementAxes = Object.fromEntries(ENGAGEMENT_AXES.map((axis) => {
+    const activeStates = tierStates.filter((state) => state.axis === axis
+      && currentIds.has(state.individualId));
+    const confirmation = (direction) => ({
+      count: activeStates.filter((state) => state.candidateDirection === direction).length,
+      peopleToken: peopleToken({ type: 'confirmation', axis, direction }),
+    });
+    return [axis, {
+      confirmingHigher: confirmation('higher'),
+      confirmingLower: confirmation('lower'),
+      confirmedRecently: {
+        count: recentTransitions.filter((transition) => transition.axis === axis
+          && currentIds.has(transition.individualId)).length,
+        peopleToken: peopleToken({
+          type: 'transition', axis, recentWeeks: RECENT_TRANSITION_WEEKS,
+        }),
+      },
+    }];
+  }));
+  const pendingAxes = [...current.values()].reduce(
+    (count, profile) => count + ENGAGEMENT_AXES.filter(
+      (axis) => profile[axis].statusSource === 'calculated_fallback',
+    ).length,
+    0,
   );
 
   const matrixCells = [];
@@ -139,6 +147,7 @@ function summarizeEngagementProfiles({
 
   return {
     population: { activeRegulars: population },
+    baseline: { pending: pendingAxes > 0, pendingAxes },
     primaryDistribution: {
       classified: { denominator: classifiedPrimary, tiers },
       establishing: {
@@ -150,9 +159,9 @@ function summarizeEngagementProfiles({
         peopleToken: peopleToken({ type: 'primary_status', status: 'not_assigned' }),
       },
     },
-    movement: {
-      denominator: population,
-      categories: movementCategories,
+    tierMovement: {
+      recentWindowWeeks: RECENT_TRANSITION_WEEKS,
+      axes: movementAxes,
     },
     matrix: {
       classifiedOnBothAxes,
@@ -505,6 +514,112 @@ async function loadOverviewSource(churchId, window) {
   return { gatherings, people, assignments, sessions, records, headcounts, visitorRows };
 }
 
+async function loadTierActivity(churchId, rulesVersion, completedWeekEnd) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT 'state' AS rowKind,
+            NULL AS activityId,
+            individual_id AS individualId,
+            axis,
+            rules_version AS rulesVersion,
+            established_tier AS establishedTier,
+            candidate_tier AS candidateTier,
+            candidate_direction AS candidateDirection,
+            candidate_started_week_end AS candidateStartedWeekEnd,
+            candidate_final_week_end AS candidateFinalWeekEnd,
+            last_evaluated_week_end AS lastEvaluatedWeekEnd,
+            NULL AS fromTier,
+            NULL AS toTier,
+            NULL AS confirmedWeekEnd,
+            NULL AS longTermAttended,
+            NULL AS longTermOpportunities,
+            NULL AS longTermRate,
+            NULL AS confirmationAttended,
+            NULL AS confirmationOpportunities,
+            NULL AS confirmationRate
+     FROM engagement_tier_state
+     WHERE church_id = ?
+       AND rules_version = ?
+     UNION ALL
+     SELECT 'transition' AS rowKind,
+            id AS activityId,
+            individual_id AS individualId,
+            axis,
+            rules_version AS rulesVersion,
+            NULL AS establishedTier,
+            NULL AS candidateTier,
+            NULL AS candidateDirection,
+            candidate_started_week_end AS candidateStartedWeekEnd,
+            NULL AS candidateFinalWeekEnd,
+            NULL AS lastEvaluatedWeekEnd,
+            from_tier AS fromTier,
+            to_tier AS toTier,
+            confirmed_week_end AS confirmedWeekEnd,
+            long_term_attended AS longTermAttended,
+            long_term_opportunities AS longTermOpportunities,
+            long_term_rate AS longTermRate,
+            confirmation_attended AS confirmationAttended,
+            confirmation_opportunities AS confirmationOpportunities,
+            confirmation_rate AS confirmationRate
+     FROM engagement_tier_transitions
+     WHERE church_id = ?
+       AND rules_version = ?
+       AND confirmed_week_end >= ?
+       AND confirmed_week_end <= ?
+     ORDER BY individualId, axis, rowKind, confirmedWeekEnd, activityId`,
+    [
+      churchId,
+      rulesVersion,
+      churchId,
+      rulesVersion,
+      addDateOnly(completedWeekEnd, { days: -RECENT_TRANSITION_DAYS }),
+      completedWeekEnd,
+    ],
+  );
+  return {
+    tierStates: rows.filter((row) => row.rowKind === 'state'),
+    recentTransitions: rows.filter((row) => row.rowKind === 'transition'),
+  };
+}
+
+function tierStateKey(individualId, axis) {
+  return `${individualId}:${axis}`;
+}
+
+function buildEstablishedProfiles(calculatedProfiles, tierStates) {
+  const stateByKey = new Map(tierStates.map(
+    (state) => [tierStateKey(state.individualId, state.axis), state],
+  ));
+  const establishedProfiles = new Map();
+  for (const [individualId, calculated] of calculatedProfiles) {
+    const profile = { ...calculated };
+    for (const axis of ENGAGEMENT_AXES) {
+      const state = stateByKey.get(tierStateKey(individualId, axis));
+      profile[axis] = {
+        ...calculated[axis],
+        status: state && classified(state.establishedTier)
+          ? state.establishedTier
+          : calculated[axis].status,
+        statusSource: state ? 'established' : 'calculated_fallback',
+      };
+    }
+    establishedProfiles.set(individualId, profile);
+  }
+  return establishedProfiles;
+}
+
+function groupDatedOpportunities(datedOpportunities) {
+  const grouped = { primary: new Map(), community: new Map() };
+  for (const axis of ENGAGEMENT_AXES) {
+    for (const opportunity of datedOpportunities[axis] || []) {
+      const facts = grouped[axis].get(opportunity.individualId) || [];
+      facts.push(opportunity);
+      grouped[axis].set(opportunity.individualId, facts);
+    }
+  }
+  return grouped;
+}
+
 async function buildState(churchId, options = {}) {
   if (!churchId) throw new Error('A church ID is required to build an engagement overview.');
   const [timeZone, settings] = await Promise.all([
@@ -519,7 +634,10 @@ async function buildState(churchId, options = {}) {
   if (options.completedWeekEnd && window.completedWeekEnd !== options.completedWeekEnd) {
     throw new DrilldownTokenError();
   }
-  const overviewSource = await loadOverviewSource(churchId, window);
+  const [overviewSource, tierActivity] = await Promise.all([
+    loadOverviewSource(churchId, window),
+    loadTierActivity(churchId, settings.calculationRulesVersion, window.completedWeekEnd),
+  ]);
   const opportunitySource = {
     people: overviewSource.people,
     assignments: overviewSource.assignments,
@@ -528,8 +646,23 @@ async function buildState(churchId, options = {}) {
     headcounts: overviewSource.headcounts,
   };
   const profiles = buildOpportunityProfiles(opportunitySource, settings, window);
+  const establishedProfiles = buildEstablishedProfiles(
+    profiles.current,
+    tierActivity.tierStates,
+  );
+  const datedOpportunities = groupDatedOpportunities(profiles.datedOpportunities);
   const cohorts = visitorCohorts(overviewSource.visitorRows, window);
-  return { window, settings, profiles, overviewSource, cohorts };
+  return {
+    window,
+    settings,
+    profiles,
+    establishedProfiles,
+    datedOpportunities,
+    tierStates: tierActivity.tierStates,
+    recentTransitions: tierActivity.recentTransitions,
+    overviewSource,
+    cohorts,
+  };
 }
 
 async function buildEngagementOverview(churchId, options = {}) {
@@ -537,8 +670,9 @@ async function buildEngagementOverview(churchId, options = {}) {
   const expiresAt = tokenExpiry();
   const profileSummary = summarizeEngagementProfiles({
     churchId,
-    current: state.profiles.current,
-    comparison: state.profiles.comparison,
+    current: state.establishedProfiles,
+    tierStates: state.tierStates,
+    recentTransitions: state.recentTransitions,
     coverage: state.profiles.coverage,
     window: state.window,
     settings: state.settings,
@@ -547,7 +681,7 @@ async function buildEngagementOverview(churchId, options = {}) {
   const activePrimary = state.overviewSource.gatherings.filter((gathering) => Number(gathering.isActive) === 1
     && gathering.engagementRole === 'primary');
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     churchId,
     window: state.window,
     settings: state.settings,
@@ -591,10 +725,14 @@ function selectorEquals(left, right) {
 }
 
 function personSortKey(person) {
+  const sortDetail = person.sortDetail ?? (person.rowType === 'engagement_transition'
+    ? `${person.confirmedWeekEnd}:${person.fromTier}:${person.toTier}`
+    : '');
   return {
     sortLast: String(person.lastName || '').toLocaleLowerCase('en'),
     sortFirst: String(person.firstName || '').toLocaleLowerCase('en'),
     individualId: Number(person.individualId),
+    sortDetail,
   };
 }
 
@@ -603,7 +741,8 @@ function comparePerson(left, right) {
   const rightKey = personSortKey(right);
   return leftKey.sortLast.localeCompare(rightKey.sortLast, 'en')
     || leftKey.sortFirst.localeCompare(rightKey.sortFirst, 'en')
-    || leftKey.individualId - rightKey.individualId;
+    || leftKey.individualId - rightKey.individualId
+    || leftKey.sortDetail.localeCompare(rightKey.sortDetail, 'en');
 }
 
 function afterPerson(person, after) {
@@ -611,27 +750,19 @@ function afterPerson(person, after) {
     individualId: after.individualId,
     firstName: after.sortFirst,
     lastName: after.sortLast,
+    sortDetail: after.sortDetail,
   }) > 0;
 }
 
-function movementDirection(current, comparison) {
-  if (!comparison || !classified(current.primary.status) || !classified(comparison.primary.status)) {
-    return 'nonComparable';
-  }
-  if (TIER_RANK[current.primary.status] > TIER_RANK[comparison.primary.status]) return 'higher';
-  if (TIER_RANK[current.primary.status] < TIER_RANK[comparison.primary.status]) return 'lower';
-  return 'same';
-}
-
 function engagementRows(state, selector) {
+  if (selector.type !== 'primary_status' && selector.type !== 'matrix') {
+    throw new DrilldownTokenError();
+  }
   const rows = [];
-  for (const profile of state.profiles.current.values()) {
-    const comparison = state.profiles.comparison.get(profile.individualId);
+  for (const profile of state.establishedProfiles.values()) {
     let include = false;
     if (selector.type === 'primary_status') include = profile.primary.status === selector.status;
-    else if (selector.type === 'movement') {
-      include = movementDirection(profile, comparison) === selector.direction;
-    } else if (selector.type === 'matrix') {
+    else if (selector.type === 'matrix') {
       include = profile.primary.status === selector.primaryTier
         && profile.community.status === selector.communityTier;
     }
@@ -639,14 +770,91 @@ function engagementRows(state, selector) {
       rows.push({
         rowType: 'engagement_profile',
         ...profile,
-        ...(selector.type === 'movement'
-          && (selector.direction === 'higher' || selector.direction === 'lower')
-          ? { previousPrimary: comparison.primary }
-          : {}),
       });
     }
   }
   return rows;
+}
+
+function validConfirmationSelector(selector) {
+  return selector?.type === 'confirmation'
+    && ENGAGEMENT_AXES.includes(selector.axis)
+    && (selector.direction === 'higher' || selector.direction === 'lower');
+}
+
+function confirmationRows(state, selector) {
+  if (!validConfirmationSelector(selector)) throw new DrilldownTokenError();
+  const rows = [];
+  for (const tierState of state.tierStates) {
+    if (tierState.axis !== selector.axis
+        || tierState.candidateDirection !== selector.direction
+        || !tierState.candidateTier) continue;
+    const profile = state.establishedProfiles.get(tierState.individualId);
+    if (!profile) continue;
+    const facts = (state.datedOpportunities[selector.axis].get(tierState.individualId) || [])
+      .filter((fact) => fact.date > tierState.candidateStartedWeekEnd
+        && fact.date <= state.window.completedWeekEnd);
+    const attended = facts.filter((fact) => fact.attended).length;
+    const elapsedMs = Date.parse(`${state.window.completedWeekEnd}T00:00:00.000Z`)
+      - Date.parse(`${tierState.candidateStartedWeekEnd}T00:00:00.000Z`);
+    const currentWeek = Math.max(0, Math.min(
+      RECENT_TRANSITION_WEEKS,
+      Math.floor(elapsedMs / (7 * 24 * 60 * 60 * 1000)),
+    ));
+    rows.push({
+      rowType: 'engagement_confirmation',
+      individualId: profile.individualId,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      familyId: profile.familyId,
+      axis: tierState.axis,
+      direction: tierState.candidateDirection,
+      establishedTier: tierState.establishedTier,
+      candidateTier: tierState.candidateTier,
+      observedOpportunities: facts.length,
+      attended,
+      rate: facts.length === 0 ? null : attended / facts.length,
+      candidateStartedWeekEnd: tierState.candidateStartedWeekEnd,
+      candidateFinalWeekEnd: tierState.candidateFinalWeekEnd,
+      currentWeek,
+    });
+  }
+  return rows;
+}
+
+function transitionRows(state, selector) {
+  if (selector?.type !== 'transition'
+      || !ENGAGEMENT_AXES.includes(selector.axis)
+      || selector.recentWeeks !== RECENT_TRANSITION_WEEKS) {
+    throw new DrilldownTokenError();
+  }
+  return state.recentTransitions.flatMap((transition) => {
+    if (transition.axis !== selector.axis) return [];
+    const profile = state.establishedProfiles.get(transition.individualId);
+    if (!profile) return [];
+    return [{
+      rowType: 'engagement_transition',
+      individualId: profile.individualId,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      familyId: profile.familyId,
+      axis: transition.axis,
+      fromTier: transition.fromTier,
+      toTier: transition.toTier,
+      candidateStartedWeekEnd: transition.candidateStartedWeekEnd,
+      confirmedWeekEnd: transition.confirmedWeekEnd,
+      longTermEvidence: {
+        attended: transition.longTermAttended,
+        opportunities: transition.longTermOpportunities,
+        rate: transition.longTermRate,
+      },
+      confirmationEvidence: {
+        attended: transition.confirmationAttended,
+        opportunities: transition.confirmationOpportunities,
+        rate: transition.confirmationRate,
+      },
+    }];
+  });
 }
 
 function trendAttendeeRows(state, selector) {
@@ -688,8 +896,12 @@ async function listEngagementPeople(churchId, { segment, cursor, limit } = {}) {
   const state = await buildState(churchId, { completedWeekEnd: segmentPayload.completedWeekEnd });
   const selector = segmentPayload.selector;
   let rows;
-  if (selector.type === 'primary_status' || selector.type === 'movement' || selector.type === 'matrix') {
+  if (selector.type === 'primary_status' || selector.type === 'matrix') {
     rows = engagementRows(state, selector);
+  } else if (selector.type === 'confirmation') {
+    rows = confirmationRows(state, selector);
+  } else if (selector.type === 'transition') {
+    rows = transitionRows(state, selector);
   } else if (selector.type === 'trend_attendees') {
     rows = trendAttendeeRows(state, selector);
   } else if (selector.type === 'visitor_journey') {

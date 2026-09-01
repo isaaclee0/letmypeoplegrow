@@ -67,8 +67,10 @@ test('admin and coordinator can view the overview while attendance takers are de
         const response = await app.request('/overview');
         assert.equal(response.status, expectedStatus);
         if (expectedStatus === 200) {
-          assert.equal(response.body.schemaVersion, 1);
+          assert.equal(response.body.schemaVersion, 2);
           assert.equal(response.body.churchId, churchId);
+          assert.deepEqual(response.body.baseline, { pending: false, pendingAxes: 0 });
+          assert.equal(response.body.movement, undefined);
         }
       } finally {
         await app.close();
@@ -181,13 +183,26 @@ test('drilldowns enforce max 100, reject tampering, and paginate with stable opa
       const wrongChurch = createDrilldownToken({
         churchId: 'another_church',
         kind: 'people',
-        selector: { type: 'primary_status', status: 'core' },
+        selector: { type: 'confirmation', axis: 'primary', direction: 'higher' },
         completedWeekEnd: overview.body.window.completedWeekEnd,
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       });
       const isolated = await app.request(`/people?segment=${encodeURIComponent(wrongChurch)}`);
       assert.equal(isolated.status, 400);
       assert.equal(isolated.body.code, 'INVALID_DRILLDOWN_TOKEN');
+
+      const retiredMovement = createDrilldownToken({
+        churchId,
+        kind: 'people',
+        selector: { type: 'movement', direction: 'same' },
+        completedWeekEnd: overview.body.window.completedWeekEnd,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      const retired = await app.request(
+        `/people?segment=${encodeURIComponent(retiredMovement)}`,
+      );
+      assert.equal(retired.status, 400);
+      assert.equal(retired.body.code, 'INVALID_DRILLDOWN_TOKEN');
     } finally {
       await app.close();
     }

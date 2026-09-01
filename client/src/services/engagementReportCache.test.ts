@@ -7,7 +7,7 @@ import {
 } from './engagementReportCache';
 
 const overview = (churchId = 'church-a', completedWeekEnd = '2026-08-16'): EngagementOverviewDto => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   churchId,
   window: {
     completedWeekEnd,
@@ -27,16 +27,28 @@ const overview = (churchId = 'church-a', completedWeekEnd = '2026-08-16'): Engag
     assignmentPreview: { primaryAssigned: 1, communityAssigned: 0, primaryNotAssigned: 0 },
   },
   setup: { hasPrimaryRole: true, hasStandardPrimaryRole: true, hasPrimaryAssignments: true },
+  baseline: { pending: false, pendingAxes: 0 },
   population: { activeRegulars: 1 },
   primaryDistribution: {
     classified: { denominator: 1, tiers: [{ tier: 'core', label: 'Core', colour: '#16A34A', count: 1, rate: 1, peopleToken: 'core' }] },
     establishing: { count: 0, peopleToken: 'establishing' },
     notAssigned: { count: 0, peopleToken: 'not-assigned' },
   },
-  movement: { denominator: 1, categories: {
-    higher: { count: 0, peopleToken: 'higher' }, same: { count: 1, peopleToken: 'same' },
-    lower: { count: 0, peopleToken: 'lower' }, nonComparable: { count: 0, peopleToken: 'non-comparable' },
-  } },
+  tierMovement: {
+    recentWindowWeeks: 13,
+    axes: {
+      primary: {
+        confirmingHigher: { count: 1, peopleToken: 'primary-higher' },
+        confirmingLower: { count: 0, peopleToken: 'primary-lower' },
+        confirmedRecently: { count: 1, peopleToken: 'primary-recent' },
+      },
+      community: {
+        confirmingHigher: { count: 0, peopleToken: 'community-higher' },
+        confirmingLower: { count: 1, peopleToken: 'community-lower' },
+        confirmedRecently: { count: 1, peopleToken: 'community-recent' },
+      },
+    },
+  },
   matrix: {
     classifiedOnBothAxes: 0,
     cells: [{ primaryTier: 'core', communityTier: 'core', primaryLabel: 'Core', communityLabel: 'Core', count: 0, peopleToken: 'matrix' }],
@@ -98,13 +110,24 @@ describe('engagement report cache', () => {
 
     expect(readEngagementOverviewCache('church-a')?.window.completedWeekEnd).toBe('2026-08-16');
     expect(readEngagementOverviewCache('church-b')?.churchId).toBe('church-b');
-    expect(Object.keys(localStorage).every((key) => key.includes(':v1:'))).toBe(true);
+    expect(Object.keys(localStorage).every((key) => key.includes(':v2:'))).toBe(true);
+  });
+
+  it('ignores schema-v1 overview entries without migrating them', () => {
+    const legacy = { ...overview(), schemaVersion: 1 };
+    localStorage.setItem(
+      'engagement-overview:v1:church-a:2026-08-16',
+      JSON.stringify(legacy),
+    );
+
+    expect(readEngagementOverviewCache('church-a')).toBeNull();
+    expect(localStorage.getItem('engagement-overview:v1:church-a:2026-08-16')).not.toBeNull();
   });
 
   it('rejects malformed cached JSON and clears entries whose embedded church differs', () => {
-    localStorage.setItem('engagement-overview:v1:church-a:2026-08-16', '{bad json');
+    localStorage.setItem('engagement-overview:v2:church-a:2026-08-16', '{bad json');
     localStorage.setItem(
-      'engagement-overview:v1:church-a:2026-08-09',
+      'engagement-overview:v2:church-a:2026-08-09',
       JSON.stringify(overview('church-b', '2026-08-09')),
     );
 
@@ -127,7 +150,10 @@ describe('engagement report cache', () => {
       (candidate) => { delete candidate.settings.tiers.core.label; },
       (candidate) => { delete candidate.settings.gatheringRoles[0].attendanceType; },
       (candidate) => { candidate.primaryDistribution.classified.tiers[0].peopleToken = null; },
-      (candidate) => { delete candidate.movement.categories.lower.count; },
+      (candidate) => { delete candidate.baseline.pendingAxes; },
+      (candidate) => { delete candidate.tierMovement.axes.primary.confirmingLower.count; },
+      (candidate) => { candidate.tierMovement.recentWindowWeeks = 12; },
+      (candidate) => { candidate.movement = { categories: {} }; },
       (candidate) => { delete candidate.matrix.outside.communityNotAssigned; },
       (candidate) => { candidate.trend.buckets[0].series[0].uniquePeople = 'one'; },
       (candidate) => { delete candidate.visitorJourney.local.currentRegular.peopleToken; },
@@ -138,7 +164,7 @@ describe('engagement report cache', () => {
       localStorage.clear();
       const candidate = structuredClone(overview());
       corrupt(candidate);
-      localStorage.setItem('engagement-overview:v1:church-a:2026-08-16', JSON.stringify(candidate));
+      localStorage.setItem('engagement-overview:v2:church-a:2026-08-16', JSON.stringify(candidate));
       expect(readEngagementOverviewCache('church-a')).toBeNull();
       expect(localStorage.length).toBe(0);
     }
@@ -151,7 +177,7 @@ describe('engagement report cache', () => {
   ])('rejects cached overviews with an invalid %s', (_name, corrupt) => {
     const candidate = structuredClone(overview());
     corrupt(candidate);
-    const key = `engagement-overview:v1:church-a:${candidate.window.completedWeekEnd}`;
+    const key = `engagement-overview:v2:church-a:${candidate.window.completedWeekEnd}`;
     localStorage.setItem(key, JSON.stringify(candidate));
 
     expect(readEngagementOverviewCache('church-a')).toBeNull();
