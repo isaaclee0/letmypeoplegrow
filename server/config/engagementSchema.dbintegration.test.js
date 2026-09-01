@@ -29,6 +29,24 @@ function indexColumnSets(db, table) {
   );
 }
 
+function primaryKeyColumns(db, table) {
+  return db.prepare(`PRAGMA table_info("${table}")`).all()
+    .filter((column) => column.pk > 0)
+    .sort((left, right) => left.pk - right.pk)
+    .map((column) => column.name);
+}
+
+function hasUniqueIndex(db, table, columns) {
+  return db.prepare(`PRAGMA index_list("${table}")`).all()
+    .filter((index) => index.unique)
+    .some((index) => {
+      const indexColumns = db.prepare(`PRAGMA index_info("${index.name}")`).all()
+        .map((column) => column.name);
+      return indexColumns.length === columns.length
+        && columns.every((column, position) => indexColumns[position] === column);
+    });
+}
+
 function hasIndexBeginningWith(db, table, prefix) {
   return indexColumnSets(db, table).some(
     (columns) => prefix.every((column, index) => columns[index] === column),
@@ -228,7 +246,20 @@ function assertEngagementTables(db) {
       'id', 'church_id', 'individual_id', 'family_at_detection_id', 'from_tier',
       'to_tier', 'effective_week_end', 'rules_version', 'detected_at', 'recovered_at',
       'primary_attended_at_detection', 'primary_opportunities_at_detection',
-      'primary_rate_at_detection',
+      'primary_rate_at_detection', 'confirmation_attended_at_detection',
+      'confirmation_opportunities_at_detection', 'confirmation_rate_at_detection',
+    ],
+    engagement_tier_state: [
+      'church_id', 'individual_id', 'axis', 'rules_version', 'established_tier',
+      'candidate_tier', 'candidate_direction', 'candidate_started_week_end',
+      'candidate_final_week_end', 'last_evaluated_week_end', 'created_at', 'updated_at',
+    ],
+    engagement_tier_transitions: [
+      'id', 'church_id', 'individual_id', 'axis', 'from_tier', 'to_tier',
+      'candidate_started_week_end', 'confirmed_week_end', 'rules_version',
+      'long_term_attended', 'long_term_opportunities', 'long_term_rate',
+      'confirmation_attended', 'confirmation_opportunities', 'confirmation_rate',
+      'pastoral_processed_at', 'decline_event_id', 'created_at',
     ],
     engagement_evaluation_state: [
       'church_id', 'individual_id', 'rules_version', 'last_evaluated_week_end',
@@ -309,6 +340,16 @@ function assertChecksAndUniqueKeys(db, ids) {
     VALUES (?, ?, ?, 'core', 'casual', '2026-08-09', 1)`)
     .run(CHURCH_ID, ids.individualId, ids.familyId).lastInsertRowid);
   assert.throws(
+    () => db.prepare(`UPDATE engagement_decline_events
+      SET confirmation_attended_at_detection = -1 WHERE id = ?`).run(eventId),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => db.prepare(`UPDATE engagement_decline_events
+      SET confirmation_rate_at_detection = 1.1 WHERE id = ?`).run(eventId),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
     () => db.prepare(`INSERT INTO engagement_decline_events
       (church_id, individual_id, from_tier, to_tier, effective_week_end, rules_version)
       VALUES (?, ?, 'core', 'casual', '2026-08-09', 1)`)
@@ -337,6 +378,75 @@ function assertChecksAndUniqueKeys(db, ids) {
   assert.throws(
     () => db.prepare(`UPDATE engagement_evaluation_state
       SET baseline_suppressed = 3 WHERE church_id = ? AND individual_id = ?`)
+      .run(CHURCH_ID, ids.individualId),
+    /CHECK constraint failed/,
+  );
+
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_state
+      (church_id, individual_id, axis, rules_version, last_evaluated_week_end,
+       candidate_tier, candidate_direction, candidate_started_week_end)
+      VALUES (?, ?, 'other', 1, '2026-08-16', 'casual', 'higher', '2026-08-09')`)
+      .run(CHURCH_ID, ids.individualId),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_state
+      (church_id, individual_id, axis, rules_version, last_evaluated_week_end,
+       candidate_tier, candidate_direction, candidate_started_week_end,
+       candidate_final_week_end)
+      VALUES (?, ?, 'primary', 1, '2026-08-16', 'casual', 'higher', '2026-08-09', NULL)`)
+      .run(CHURCH_ID, ids.individualId),
+    /CHECK constraint failed/,
+  );
+
+  db.prepare(`INSERT INTO engagement_tier_state
+    (church_id, individual_id, axis, rules_version, established_tier,
+     last_evaluated_week_end)
+    VALUES (?, ?, 'primary', 1, 'casual', '2026-08-09')`)
+    .run(CHURCH_ID, ids.individualId);
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_state
+      (church_id, individual_id, axis, rules_version, last_evaluated_week_end)
+      VALUES (?, ?, 'primary', 1, '2026-08-16')`).run(CHURCH_ID, ids.individualId),
+    /UNIQUE constraint failed/,
+  );
+
+  db.prepare(`INSERT INTO engagement_tier_transitions
+    (church_id, individual_id, axis, from_tier, to_tier, candidate_started_week_end,
+     confirmed_week_end, rules_version, long_term_attended, long_term_opportunities,
+     long_term_rate, confirmation_attended, confirmation_opportunities, confirmation_rate,
+     decline_event_id)
+    VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-10', '2026-08-09', 1,
+      8, 13, 0.615, 4, 8, 0.5, NULL)`)
+    .run(CHURCH_ID, ids.individualId);
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_transitions
+      (church_id, individual_id, axis, from_tier, to_tier, candidate_started_week_end,
+       confirmed_week_end, rules_version, long_term_attended, long_term_opportunities,
+       long_term_rate, confirmation_attended, confirmation_opportunities, confirmation_rate)
+      VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-10', '2026-08-09', 1,
+        8, 13, 0.615, 4, 8, 0.5)`)
+      .run(CHURCH_ID, ids.individualId),
+    /UNIQUE constraint failed/,
+  );
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_transitions
+      (church_id, individual_id, axis, from_tier, to_tier, candidate_started_week_end,
+       confirmed_week_end, rules_version, long_term_attended, long_term_opportunities,
+       long_term_rate, confirmation_attended, confirmation_opportunities, confirmation_rate)
+      VALUES (?, ?, 'other', 'core', 'casual', '2026-05-10', '2026-08-16', 1,
+        8, 13, 0.615, 4, 8, 0.5)`)
+      .run(CHURCH_ID, ids.individualId),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_transitions
+      (church_id, individual_id, axis, from_tier, to_tier, candidate_started_week_end,
+       confirmed_week_end, rules_version, long_term_attended, long_term_opportunities,
+       long_term_rate, confirmation_attended, confirmation_opportunities, confirmation_rate)
+      VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-10', '2026-08-16', 1,
+        8, 13, 1.1, 4, 8, 0.5)`)
       .run(CHURCH_ID, ids.individualId),
     /CHECK constraint failed/,
   );
@@ -414,6 +524,28 @@ function assertForeignKeysAndIndexes(db) {
       onDelete: foreignKey(db, 'pastoral_insight_states', 'subject_id')?.on_delete },
     { table: 'individuals', onDelete: 'RESTRICT' },
   );
+  assert.deepEqual(
+    { table: foreignKey(db, 'engagement_tier_state', 'individual_id')?.table,
+      onDelete: foreignKey(db, 'engagement_tier_state', 'individual_id')?.on_delete },
+    { table: 'individuals', onDelete: 'CASCADE' },
+  );
+  assert.deepEqual(
+    { table: foreignKey(db, 'engagement_tier_transitions', 'individual_id')?.table,
+      onDelete: foreignKey(db, 'engagement_tier_transitions', 'individual_id')?.on_delete },
+    { table: 'individuals', onDelete: 'CASCADE' },
+  );
+  assert.deepEqual(
+    { table: foreignKey(db, 'engagement_tier_transitions', 'decline_event_id')?.table,
+      onDelete: foreignKey(db, 'engagement_tier_transitions', 'decline_event_id')?.on_delete },
+    { table: 'engagement_decline_events', onDelete: 'SET NULL' },
+  );
+  assert.deepEqual(primaryKeyColumns(db, 'engagement_tier_state'), [
+    'church_id', 'individual_id', 'axis',
+  ]);
+  assert.equal(hasUniqueIndex(db, 'engagement_tier_transitions', [
+    'church_id', 'individual_id', 'axis', 'from_tier', 'to_tier',
+    'confirmed_week_end', 'rules_version',
+  ]), true);
 
   const requiredIndexPrefixes = {
     gathering_types: [['church_id', 'engagement_role']],
@@ -438,6 +570,12 @@ function assertForeignKeysAndIndexes(db) {
     engagement_evaluation_state: [
       ['church_id', 'individual_id'],
       ['church_id', 'last_evaluated_week_end'],
+    ],
+    engagement_tier_state: [['church_id', 'individual_id']],
+    engagement_tier_transitions: [
+      ['church_id', 'individual_id', 'axis'],
+      ['church_id', 'confirmed_week_end'],
+      ['church_id', 'axis', 'pastoral_processed_at', 'confirmed_week_end'],
     ],
     engagement_decline_deliveries: [
       ['church_id', 'event_id'],

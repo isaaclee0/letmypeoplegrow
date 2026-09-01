@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS engagement_decline_events (
     CHECK(primary_opportunities_at_detection IS NULL OR primary_opportunities_at_detection >= 0),
   primary_rate_at_detection REAL
     CHECK(primary_rate_at_detection IS NULL OR primary_rate_at_detection BETWEEN 0 AND 1),
+  confirmation_attended_at_detection INTEGER
+    CHECK(confirmation_attended_at_detection IS NULL OR confirmation_attended_at_detection >= 0),
+  confirmation_opportunities_at_detection INTEGER
+    CHECK(confirmation_opportunities_at_detection IS NULL OR confirmation_opportunities_at_detection >= 0),
+  confirmation_rate_at_detection REAL
+    CHECK(confirmation_rate_at_detection IS NULL OR confirmation_rate_at_detection BETWEEN 0 AND 1),
   UNIQUE(church_id, individual_id, to_tier, effective_week_end, rules_version)
 );
 CREATE INDEX IF NOT EXISTS idx_engagement_decline_events_person
@@ -77,6 +83,54 @@ CREATE INDEX IF NOT EXISTS idx_engagement_evaluation_state_week
   ON engagement_evaluation_state(church_id, last_evaluated_week_end);
 CREATE INDEX IF NOT EXISTS idx_engagement_evaluation_state_tier
   ON engagement_evaluation_state(church_id, current_tier, individual_id);
+
+CREATE TABLE IF NOT EXISTS engagement_tier_state (
+  church_id TEXT NOT NULL,
+  individual_id INTEGER NOT NULL REFERENCES individuals(id) ON DELETE CASCADE,
+  axis TEXT NOT NULL CHECK(axis IN ('primary','community')),
+  rules_version INTEGER NOT NULL CHECK(rules_version >= 1),
+  established_tier TEXT CHECK(established_tier IN ('core','casual','irregular')),
+  candidate_tier TEXT CHECK(candidate_tier IN ('core','casual','irregular')),
+  candidate_direction TEXT CHECK(candidate_direction IN ('higher','lower')),
+  candidate_started_week_end TEXT,
+  candidate_final_week_end TEXT,
+  last_evaluated_week_end TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY(church_id, individual_id, axis),
+  CHECK((candidate_tier IS NULL AND candidate_direction IS NULL
+         AND candidate_started_week_end IS NULL AND candidate_final_week_end IS NULL)
+     OR (candidate_tier IS NOT NULL AND candidate_direction IS NOT NULL
+         AND candidate_started_week_end IS NOT NULL AND candidate_final_week_end IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS engagement_tier_transitions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  individual_id INTEGER NOT NULL REFERENCES individuals(id) ON DELETE CASCADE,
+  axis TEXT NOT NULL CHECK(axis IN ('primary','community')),
+  from_tier TEXT NOT NULL CHECK(from_tier IN ('core','casual','irregular')),
+  to_tier TEXT NOT NULL CHECK(to_tier IN ('core','casual','irregular')),
+  candidate_started_week_end TEXT NOT NULL,
+  confirmed_week_end TEXT NOT NULL,
+  rules_version INTEGER NOT NULL CHECK(rules_version >= 1),
+  long_term_attended INTEGER NOT NULL CHECK(long_term_attended >= 0),
+  long_term_opportunities INTEGER NOT NULL CHECK(long_term_opportunities >= 0),
+  long_term_rate REAL NOT NULL CHECK(long_term_rate BETWEEN 0 AND 1),
+  confirmation_attended INTEGER NOT NULL CHECK(confirmation_attended >= 0),
+  confirmation_opportunities INTEGER NOT NULL CHECK(confirmation_opportunities >= 0),
+  confirmation_rate REAL NOT NULL CHECK(confirmation_rate BETWEEN 0 AND 1),
+  pastoral_processed_at TEXT,
+  decline_event_id INTEGER REFERENCES engagement_decline_events(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, individual_id, axis, from_tier, to_tier, confirmed_week_end, rules_version)
+);
+CREATE INDEX IF NOT EXISTS idx_engagement_tier_transitions_person
+  ON engagement_tier_transitions(church_id, individual_id, axis, confirmed_week_end);
+CREATE INDEX IF NOT EXISTS idx_engagement_tier_transitions_recent
+  ON engagement_tier_transitions(church_id, confirmed_week_end);
+CREATE INDEX IF NOT EXISTS idx_engagement_tier_transitions_unprocessed
+  ON engagement_tier_transitions(church_id, axis, pastoral_processed_at, confirmed_week_end);
 
 CREATE TABLE IF NOT EXISTS engagement_decline_deliveries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,6 +278,12 @@ function ensureEngagementSchema(db, churchId) {
         'INTEGER CHECK(primary_opportunities_at_detection IS NULL OR primary_opportunities_at_detection >= 0)'],
       ['primary_rate_at_detection',
         'REAL CHECK(primary_rate_at_detection IS NULL OR primary_rate_at_detection BETWEEN 0 AND 1)'],
+      ['confirmation_attended_at_detection',
+        'INTEGER CHECK(confirmation_attended_at_detection IS NULL OR confirmation_attended_at_detection >= 0)'],
+      ['confirmation_opportunities_at_detection',
+        'INTEGER CHECK(confirmation_opportunities_at_detection IS NULL OR confirmation_opportunities_at_detection >= 0)'],
+      ['confirmation_rate_at_detection',
+        'REAL CHECK(confirmation_rate_at_detection IS NULL OR confirmation_rate_at_detection BETWEEN 0 AND 1)'],
     ]);
     ensurePastoralSubjectForeignKey(db);
     // Recreate the named indexes if the pastoral table was rebuilt above.
