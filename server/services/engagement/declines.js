@@ -121,6 +121,51 @@ async function createEligibleDeliveryRowsWithConnection(conn, {
   return creation;
 }
 
+async function loadCurrentRulesVersion(conn, churchId) {
+  const rows = await conn.query(
+    `SELECT calculation_rules_version AS rulesVersion
+     FROM engagement_settings
+     WHERE church_id = ?
+     LIMIT 1`,
+    [churchId],
+  );
+  return rows[0]?.rulesVersion ?? 1;
+}
+
+async function retireSupersededRulesWithConnection(conn, churchId, rulesVersion) {
+  await conn.query(
+    `UPDATE pastoral_insight_states
+     SET workflow_state = 'resolved',
+         snoozed_until = NULL,
+         resolved_at = COALESCE(resolved_at, datetime('now')),
+         updated_at = datetime('now')
+     WHERE church_id = ?
+       AND workflow_state <> 'resolved'
+       AND decline_event_id IN (
+         SELECT id
+         FROM engagement_decline_events
+         WHERE church_id = ?
+           AND rules_version <> ?
+       )`,
+    [churchId, churchId, rulesVersion],
+  );
+  await conn.query(
+    `UPDATE engagement_decline_deliveries
+     SET state = 'cancelled',
+         cancellation_reason = 'rules_version_retired',
+         updated_at = datetime('now')
+     WHERE church_id = ?
+       AND state = 'pending'
+       AND event_id IN (
+         SELECT id
+         FROM engagement_decline_events
+         WHERE church_id = ?
+           AND rules_version <> ?
+       )`,
+    [churchId, churchId, rulesVersion],
+  );
+}
+
 async function loadUnprocessedPrimaryTransitions(conn, churchId, throughWeekEnd) {
   const weekFilter = throughWeekEnd == null ? '' : 'AND transition.confirmed_week_end <= ?';
   const params = [churchId, churchId];
@@ -248,6 +293,8 @@ async function processConfirmedPrimaryTransitions(churchId, { throughWeekEnd } =
   if (!churchId) throw new Error('A church ID is required to process confirmed tier transitions.');
 
   return Database.transactionForChurch(churchId, async (conn) => {
+    const rulesVersion = await loadCurrentRulesVersion(conn, churchId);
+    await retireSupersededRulesWithConnection(conn, churchId, rulesVersion);
     const transitions = await loadUnprocessedPrimaryTransitions(conn, churchId, throughWeekEnd);
     const summary = {
       transitionsProcessed: 0,

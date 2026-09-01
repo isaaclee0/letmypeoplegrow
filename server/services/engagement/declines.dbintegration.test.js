@@ -347,7 +347,7 @@ test('a deeper decline after recovery creates a distinct next pastoral episode',
   });
 });
 
-test('a failed pastoral transaction retries once and freezes its detection-time recipients', async () => {
+test('recipient snapshot begins only when retry successfully creates the decline event', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedChurch(churchId);
     const familyId = await seedFamily(churchId, 'Retry');
@@ -375,28 +375,175 @@ test('a failed pastoral transaction retries once and freezes its detection-time 
     }
 
     assert.equal((await events(churchId)).length, 0);
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count
+       FROM engagement_decline_deliveries
+       WHERE church_id = ?`,
+      [churchId],
+    ))[0].count, 0);
     assert.deepEqual(await transitionState(churchId, transitionId), {
       pastoralProcessedAt: null, declineEventId: null,
+    });
+    const retryCaregiver = await assignUser(churchId, familyId, {
+      firstName: 'Before successful retry',
     });
     assert.deepEqual(await declines.processConfirmedPrimaryTransitions(churchId), {
       transitionsProcessed: 1,
       eventsCreated: 1,
       eventsRecovered: 0,
-      deliveriesCreated: 1,
+      deliveriesCreated: 2,
     });
     const event = (await events(churchId))[0];
     const processed = await transitionState(churchId, transitionId);
     assert.equal(processed.pastoralProcessedAt != null, true);
     assert.equal(processed.declineEventId, event.id);
 
-    await assignUser(churchId, familyId, { firstName: 'Late' });
+    await assignUser(churchId, familyId, { firstName: 'After event creation' });
     assert.equal((await declines.processConfirmedPrimaryTransitions(churchId)).transitionsProcessed, 0);
+    assert.deepEqual(await Database.transactionForChurch(churchId, (conn) =>
+      createEligibleDeliveryRowsWithConnection(
+        conn,
+        detectionInput(churchId, individualId, familyId),
+      )), {
+      eventId: null,
+      eventCreated: 0,
+      deliveriesCreated: 0,
+    });
     assert.deepEqual(await Database.query(
       `SELECT recipient_id AS recipientId
        FROM engagement_decline_deliveries
-       WHERE church_id = ? AND event_id = ?`,
+       WHERE church_id = ? AND event_id = ?
+       ORDER BY recipient_id`,
       [churchId, event.id],
-    ), [{ recipientId: originalCaregiver.recipientId }]);
+    ), [
+      { recipientId: originalCaregiver.recipientId },
+      { recipientId: retryCaregiver.recipientId },
+    ]);
+  });
+});
+
+test('rules-version rollover retires only this church old-rule pastoral and delivery work', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const familyId = await seedFamily(churchId, 'Rules rollover');
+    const individualId = await seedPerson(churchId, fixture, { familyId });
+    const caregiver = await assignUser(churchId, familyId);
+    const oldEvent = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at)
+       VALUES (?, ?, ?, 'core', 'casual', '2026-08-09', 1, '2026-08-10 08:00:00')`,
+      [churchId, individualId, familyId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_decline_deliveries
+         (church_id, event_id, recipient_type, recipient_id, family_caregiver_id)
+       VALUES (?, ?, 'user', ?, ?)`,
+      [churchId, oldEvent.insertId, caregiver.recipientId, caregiver.assignmentId],
+    );
+    await Database.query(
+      `INSERT INTO pastoral_insight_states
+         (church_id, insight_type, subject_id, episode_key, decline_event_id,
+          workflow_state, snoozed_until)
+       VALUES (?, 'primary_decline', ?, ?, ?, 'snoozed', '2026-09-30')`,
+      [
+        churchId,
+        individualId,
+        `primary_decline:event:${oldEvent.insertId}`,
+        oldEvent.insertId,
+      ],
+    );
+
+    const otherChurchId = `${churchId}-other`;
+    const otherEvent = await Database.query(
+      `INSERT INTO engagement_decline_events
+         (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+          effective_week_end, rules_version, detected_at)
+       VALUES (?, ?, ?, 'core', 'casual', '2026-08-09', 1, '2026-08-10 08:00:00')`,
+      [otherChurchId, individualId, familyId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_decline_deliveries
+         (church_id, event_id, recipient_type, recipient_id, family_caregiver_id)
+       VALUES (?, ?, 'user', ?, ?)`,
+      [otherChurchId, otherEvent.insertId, caregiver.recipientId, caregiver.assignmentId],
+    );
+    await Database.query(
+      `INSERT INTO pastoral_insight_states
+         (church_id, insight_type, subject_id, episode_key, decline_event_id, workflow_state)
+       VALUES (?, 'primary_decline', ?, ?, ?, 'open')`,
+      [
+        otherChurchId,
+        individualId,
+        `primary_decline:event:${otherEvent.insertId}`,
+        otherEvent.insertId,
+      ],
+    );
+    await Database.query(
+      `INSERT INTO engagement_settings (church_id, calculation_rules_version)
+       VALUES (?, 2)
+       ON CONFLICT(church_id) DO UPDATE SET calculation_rules_version = 2`,
+      [churchId],
+    );
+
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count
+       FROM engagement_evaluation_state
+       WHERE church_id = ?`,
+      [churchId],
+    ))[0].count, 0);
+    await declines.processConfirmedPrimaryTransitions(churchId);
+    const afterFirstRun = await Database.query(
+      `SELECT event.church_id AS churchId,
+              event.recovered_at AS recoveredAt,
+              state.workflow_state AS workflowState,
+              state.snoozed_until AS snoozedUntil,
+              state.resolved_at AS resolvedAt,
+              delivery.state AS deliveryState,
+              delivery.cancellation_reason AS cancellationReason
+       FROM engagement_decline_events event
+       JOIN pastoral_insight_states state ON state.decline_event_id = event.id
+       JOIN engagement_decline_deliveries delivery ON delivery.event_id = event.id
+       WHERE event.id IN (?, ?)
+       ORDER BY event.id`,
+      [oldEvent.insertId, otherEvent.insertId],
+    );
+    assert.equal(afterFirstRun[0].churchId, churchId);
+    assert.equal(afterFirstRun[0].recoveredAt, null);
+    assert.equal(afterFirstRun[0].workflowState, 'resolved');
+    assert.equal(afterFirstRun[0].snoozedUntil, null);
+    assert.equal(afterFirstRun[0].resolvedAt != null, true);
+    assert.equal(afterFirstRun[0].deliveryState, 'cancelled');
+    assert.equal(afterFirstRun[0].cancellationReason, 'rules_version_retired');
+    assert.deepEqual(afterFirstRun[1], {
+      churchId: otherChurchId,
+      recoveredAt: null,
+      workflowState: 'open',
+      snoozedUntil: null,
+      resolvedAt: null,
+      deliveryState: 'pending',
+      cancellationReason: null,
+    });
+
+    await declines.processConfirmedPrimaryTransitions(churchId);
+    assert.deepEqual(await Database.query(
+      `SELECT workflow_state AS workflowState,
+              snoozed_until AS snoozedUntil,
+              resolved_at AS resolvedAt
+       FROM pastoral_insight_states
+       WHERE church_id = ? AND decline_event_id = ?`,
+      [churchId, oldEvent.insertId],
+    ), [{
+      workflowState: 'resolved',
+      snoozedUntil: null,
+      resolvedAt: afterFirstRun[0].resolvedAt,
+    }]);
+    assert.deepEqual(await Database.query(
+      `SELECT state, cancellation_reason AS cancellationReason
+       FROM engagement_decline_deliveries
+       WHERE church_id = ? AND event_id = ?`,
+      [churchId, oldEvent.insertId],
+    ), [{ state: 'cancelled', cancellationReason: 'rules_version_retired' }]);
   });
 });
 
