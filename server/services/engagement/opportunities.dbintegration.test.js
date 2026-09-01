@@ -222,6 +222,41 @@ test('reduces reliable opportunities with axis-specific denominators, provenance
   assert.deepEqual(result.current.get(1).community, {
     status: 'not_assigned', attended: 0, opportunities: 0, rate: null,
   });
+  assert.deepEqual(
+    result.datedOpportunities.primary.filter((opportunity) => opportunity.individualId === 1),
+    [
+      { individualId: 1, date: '2026-06-08', attended: true },
+      { individualId: 1, date: '2026-06-15', attended: false },
+      { individualId: 1, date: '2026-06-22', attended: false },
+      { individualId: 1, date: '2026-06-29', attended: false },
+      { individualId: 1, date: '2026-07-06', attended: false },
+      { individualId: 1, date: '2026-07-13', attended: true },
+      { individualId: 1, date: '2026-07-20', attended: true },
+      { individualId: 1, date: '2026-07-27', attended: true },
+      { individualId: 1, date: '2026-08-03', attended: true },
+      { individualId: 1, date: '2026-08-10', attended: true },
+    ],
+    'alternative Primary services produce one fact for a person and week',
+  );
+  assert.deepEqual(
+    result.datedOpportunities.community.filter((opportunity) => opportunity.individualId === 8),
+    [
+      { individualId: 8, date: '2026-06-08', attended: true },
+      { individualId: 8, date: '2026-06-08', attended: false },
+      { individualId: 8, date: '2026-06-15', attended: true },
+      { individualId: 8, date: '2026-06-15', attended: false },
+      { individualId: 8, date: '2026-06-22', attended: true },
+      { individualId: 8, date: '2026-06-22', attended: false },
+      { individualId: 8, date: '2026-06-29', attended: true },
+      { individualId: 8, date: '2026-06-29', attended: false },
+    ],
+    'Other participation commitments remain distinct dated facts',
+  );
+  assert.deepEqual(
+    result.datedOpportunities.primary.filter((opportunity) => opportunity.individualId === 9),
+    [{ individualId: 9, date: '2026-08-10', attended: true }],
+    'open, cancelled, excluded, headcount, and unknown-provenance sessions produce no facts',
+  );
   assert.deepEqual(result.coverage, {
     eligibleHeldSessions: 22,
     explicitProvenanceSessions: 21,

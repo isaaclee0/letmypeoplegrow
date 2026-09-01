@@ -3,8 +3,8 @@
 const Database = require('../../config/database');
 const { getChurchDate, getZonedParts, addDateOnly, loadChurchTimeZone } = require('../../utils/churchTime');
 const { getEngagementSettings, DEFAULT_ENGAGEMENT_SETTINGS } = require('./settings');
+const { MINIMUM_CLASSIFIED_OPPORTUNITIES, classifyEvidence } = require('./tiers');
 
-const MINIMUM_CLASSIFIED_OPPORTUNITIES = 8;
 const PERSON_LEVEL_ROLES = new Set(['primary', 'community']);
 
 function getEngagementWindow(asOf = new Date(), timeZone = 'UTC') {
@@ -187,24 +187,6 @@ function evidenceForWindow(opportunities, start, end) {
   return evidenceByPerson;
 }
 
-function axisResult(assigned, evidence, settings) {
-  if (!assigned) {
-    return { status: 'not_assigned', attended: 0, opportunities: 0, rate: null };
-  }
-
-  const attended = evidence?.attended || 0;
-  const opportunities = evidence?.opportunities || 0;
-  const rate = opportunities === 0 ? null : attended / opportunities;
-  if (opportunities < MINIMUM_CLASSIFIED_OPPORTUNITIES) {
-    return { status: 'establishing', attended, opportunities, rate };
-  }
-
-  const coreMinimum = (settings.coreMinimum ?? DEFAULT_ENGAGEMENT_SETTINGS.coreMinimum) / 100;
-  const casualMinimum = (settings.casualMinimum ?? DEFAULT_ENGAGEMENT_SETTINGS.casualMinimum) / 100;
-  const status = rate >= coreMinimum ? 'core' : rate >= casualMinimum ? 'casual' : 'irregular';
-  return { status, attended, opportunities, rate };
-}
-
 function profileMap(people, assignedByRole, primaryEvidence, communityEvidence, settings) {
   const profiles = new Map();
   for (const person of people) {
@@ -214,8 +196,14 @@ function profileMap(people, assignedByRole, primaryEvidence, communityEvidence, 
       firstName: person.firstName,
       lastName: person.lastName,
       familyId: person.familyId ?? null,
-      primary: axisResult(roles.has('primary'), primaryEvidence.get(person.id), settings),
-      community: axisResult(roles.has('community'), communityEvidence.get(person.id), settings),
+      primary: classifyEvidence({
+        assigned: roles.has('primary'),
+        ...(primaryEvidence.get(person.id) || emptyEvidence()),
+      }, settings),
+      community: classifyEvidence({
+        assigned: roles.has('community'),
+        ...(communityEvidence.get(person.id) || emptyEvidence()),
+      }, settings),
     });
   }
   return profiles;
@@ -327,6 +315,10 @@ function buildOpportunityProfiles(source, settings = DEFAULT_ENGAGEMENT_SETTINGS
       legacyProvenanceShare: eligibleHeldSessions === 0
         ? 0
         : legacyProvenanceSessions / eligibleHeldSessions,
+    },
+    datedOpportunities: {
+      primary: primaryOpportunities,
+      community: communityOpportunityList,
     },
   };
 }
