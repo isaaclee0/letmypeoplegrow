@@ -10,6 +10,13 @@ function stateKey(individualId, axis) {
   return `${individualId}:${axis}`;
 }
 
+function hasNewerStateVersion(previousState, rulesVersion, completedWeekEnd) {
+  if (!previousState) return false;
+  if (previousState.rulesVersion > rulesVersion) return true;
+  return previousState.rulesVersion === rulesVersion
+    && previousState.lastEvaluatedWeekEnd > completedWeekEnd;
+}
+
 function groupDatedOpportunities(datedOpportunities) {
   const grouped = {
     primary: new Map(),
@@ -25,9 +32,8 @@ function groupDatedOpportunities(datedOpportunities) {
   return grouped;
 }
 
-async function loadTierStates(churchId) {
-  return Database.queryForChurch(
-    churchId,
+async function loadTierStates(conn, churchId) {
+  return conn.query(
     `SELECT individual_id AS individualId,
             axis,
             rules_version AS rulesVersion,
@@ -134,65 +140,64 @@ async function evaluateEngagementTierConfirmations(churchId, {
   const completedWeekEnd = profiles.window.completedWeekEnd;
   const rulesVersion = profiles.settings.calculationRulesVersion;
   const groupedFacts = groupDatedOpportunities(profiles.datedOpportunities);
-  const previousRows = await loadTierStates(churchId);
-  const previousByKey = new Map(
-    previousRows.map((state) => [stateKey(state.individualId, state.axis), state]),
-  );
-
-  const states = [];
-  const transitions = [];
-  const outcomes = {
-    baselined: 0,
-    candidatesStarted: 0,
-    candidatesCancelled: 0,
-    candidatesExpired: 0,
-  };
-
-  for (const [individualId, profile] of profiles.current) {
-    for (const axis of AXES) {
-      const calculatedEvidence = profile[axis];
-      const result = evaluateTierConfirmation({
-        completedWeekEnd,
-        rulesVersion,
-        calculatedStatus: calculatedEvidence.status,
-        calculatedEvidence,
-        previousState: baselineOnly
-          ? null
-          : previousByKey.get(stateKey(individualId, axis)) || null,
-        datedOpportunities: groupedFacts[axis].get(individualId) || [],
-        settings: profiles.settings,
-      });
-      states.push({ individualId, axis, ...result.nextState });
-
-      if (result.outcome === 'baseline') outcomes.baselined += 1;
-      else if (result.outcome === 'started') outcomes.candidatesStarted += 1;
-      else if (result.outcome === 'cancelled') outcomes.candidatesCancelled += 1;
-      else if (result.outcome === 'expired') outcomes.candidatesExpired += 1;
-
-      if (result.transition) {
-        transitions.push(persistedTransition(
-          individualId,
-          axis,
-          rulesVersion,
-          result.transition,
-        ));
-      }
-    }
-  }
-
-  const transitionsConfirmed = await Database.transactionForChurch(
+  const persisted = await Database.transactionForChurch(
     churchId,
     async (conn) => {
+      const previousRows = await loadTierStates(conn, churchId);
+      const previousByKey = new Map(
+        previousRows.map((state) => [stateKey(state.individualId, state.axis), state]),
+      );
+      const states = [];
+      const transitions = [];
+      const outcomes = {
+        baselined: 0,
+        candidatesStarted: 0,
+        candidatesCancelled: 0,
+        candidatesExpired: 0,
+      };
+
+      for (const [individualId, profile] of profiles.current) {
+        for (const axis of AXES) {
+          const calculatedEvidence = profile[axis];
+          const previousState = previousByKey.get(stateKey(individualId, axis)) || null;
+          const result = hasNewerStateVersion(previousState, rulesVersion, completedWeekEnd)
+            ? { nextState: previousState, transition: null, outcome: 'unchanged' }
+            : evaluateTierConfirmation({
+              completedWeekEnd,
+              rulesVersion,
+              calculatedStatus: calculatedEvidence.status,
+              calculatedEvidence,
+              previousState: baselineOnly ? null : previousState,
+              datedOpportunities: groupedFacts[axis].get(individualId) || [],
+              settings: profiles.settings,
+            });
+          states.push({ individualId, axis, ...result.nextState });
+
+          if (result.outcome === 'baseline') outcomes.baselined += 1;
+          else if (result.outcome === 'started') outcomes.candidatesStarted += 1;
+          else if (result.outcome === 'cancelled') outcomes.candidatesCancelled += 1;
+          else if (result.outcome === 'expired') outcomes.candidatesExpired += 1;
+
+          if (result.transition) {
+            transitions.push(persistedTransition(
+              individualId,
+              axis,
+              rulesVersion,
+              result.transition,
+            ));
+          }
+        }
+      }
+
       await upsertTierStates(conn, churchId, states);
       const inserted = await insertTransitions(conn, churchId, transitions);
-      return inserted.affectedRows;
+      return { ...outcomes, transitionsConfirmed: inserted.affectedRows };
     },
   );
 
   return {
     completedWeekEnd,
-    ...outcomes,
-    transitionsConfirmed,
+    ...persisted,
   };
 }
 

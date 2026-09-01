@@ -180,6 +180,42 @@ async function loadTransitions(churchId) {
   );
 }
 
+function pauseFirstChurchTransaction({ afterBegin = false } = {}) {
+  const originalTransactionForChurch = Database.transactionForChurch;
+  let transactionCalls = 0;
+  let markFirstReached;
+  let markSecondReached;
+  let releaseFirst;
+  const firstReached = new Promise((resolve) => { markFirstReached = resolve; });
+  const secondReached = new Promise((resolve) => { markSecondReached = resolve; });
+  const firstReleased = new Promise((resolve) => { releaseFirst = resolve; });
+
+  Database.transactionForChurch = async (churchId, callback) => {
+    transactionCalls += 1;
+    if (transactionCalls === 1) {
+      if (afterBegin) {
+        return originalTransactionForChurch.call(Database, churchId, async (conn) => {
+          markFirstReached();
+          await firstReleased;
+          return callback(conn);
+        });
+      }
+      markFirstReached();
+      await firstReleased;
+      return originalTransactionForChurch.call(Database, churchId, callback);
+    }
+    if (transactionCalls === 2) markSecondReached();
+    return originalTransactionForChurch.call(Database, churchId, callback);
+  };
+
+  return {
+    firstReached,
+    secondReached,
+    release: () => releaseFirst(),
+    restore: () => { Database.transactionForChurch = originalTransactionForChurch; },
+  };
+}
+
 test('first run baselines both axes for active regulars and persists nullable ineligible axes', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedRoster(churchId, [
@@ -274,6 +310,163 @@ test('weekly runs advance once, ignore same-week reruns, and cancel after correc
     assert.equal(primary.establishedTier, 'casual');
     assert.equal(primary.candidateTier, null);
     assert.equal(primary.lastEvaluatedWeekEnd, '2026-08-30');
+  });
+});
+
+test('overlapping same-week evaluations progress a candidate only once', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedRoster(churchId, [
+      { primary: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
+    ]);
+    await seedState(churchId, fixture.people[0].individualId, 'primary');
+    const pause = pauseFirstChurchTransaction({ afterBegin: true });
+    let first;
+    let second;
+    try {
+      const firstRun = evaluateEngagementTierConfirmations(churchId, { asOf: AS_OF });
+      await pause.firstReached;
+      const secondRun = evaluateEngagementTierConfirmations(churchId, { asOf: AS_OF });
+      await pause.secondReached;
+      pause.release();
+      [first, second] = await Promise.all([firstRun, secondRun]);
+    } finally {
+      pause.release();
+      pause.restore();
+    }
+
+    assert.deepEqual(
+      [first.candidatesStarted, second.candidatesStarted].sort(),
+      [0, 1],
+    );
+    const primary = (await loadStates(churchId)).find((row) => row.axis === 'primary');
+    assert.equal(primary.candidateStartedWeekEnd, '2026-08-16');
+    assert.equal(primary.lastEvaluatedWeekEnd, '2026-08-16');
+  });
+});
+
+test('an older evaluation committing last cannot move confirmed state backward', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedRoster(churchId, [
+      { primary: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
+    ]);
+    await seedState(churchId, fixture.people[0].individualId, 'primary');
+    const pause = pauseFirstChurchTransaction();
+    let older;
+    let newer;
+    try {
+      const olderRun = evaluateEngagementTierConfirmations(churchId, { asOf: AS_OF });
+      await pause.firstReached;
+      const newerRun = evaluateEngagementTierConfirmations(churchId, { asOf: NEXT_WEEK });
+      await pause.secondReached;
+      newer = await newerRun;
+      pause.release();
+      older = await olderRun;
+    } finally {
+      pause.release();
+      pause.restore();
+    }
+
+    assert.equal(newer.candidatesStarted, 1);
+    assert.equal(older.candidatesStarted, 0);
+    const primary = (await loadStates(churchId)).find((row) => row.axis === 'primary');
+    assert.equal(primary.candidateStartedWeekEnd, '2026-08-23');
+    assert.equal(primary.lastEvaluatedWeekEnd, '2026-08-23');
+  });
+});
+
+test('an older forced-baseline run cannot bypass the committed state version', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedRoster(churchId, [
+      { primary: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
+    ]);
+    await seedState(churchId, fixture.people[0].individualId, 'primary');
+    const pause = pauseFirstChurchTransaction();
+    let older;
+    try {
+      const olderRun = evaluateEngagementTierConfirmations(churchId, {
+        asOf: AS_OF,
+        baselineOnly: true,
+      });
+      await pause.firstReached;
+      const newerRun = evaluateEngagementTierConfirmations(churchId, { asOf: NEXT_WEEK });
+      await pause.secondReached;
+      await newerRun;
+      pause.release();
+      older = await olderRun;
+    } finally {
+      pause.release();
+      pause.restore();
+    }
+
+    assert.equal(older.baselined, 0);
+    const primary = (await loadStates(churchId)).find((row) => row.axis === 'primary');
+    assert.equal(primary.candidateStartedWeekEnd, '2026-08-23');
+    assert.equal(primary.lastEvaluatedWeekEnd, '2026-08-23');
+  });
+});
+
+test('a stale transition is not inserted when its associated state progression loses', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedRoster(churchId, [{
+      primary: [1, 0, 1, 1, 1, 1, 1, 0, 0, 0],
+    }]);
+    const individualId = fixture.people[0].individualId;
+    await seedState(churchId, individualId, 'primary', {
+      candidateTier: 'core', candidateDirection: 'higher',
+      candidateStartedWeekEnd: '2026-06-21', candidateFinalWeekEnd: '2026-09-20',
+      lastEvaluatedWeekEnd: '2026-06-21',
+    });
+    const pause = pauseFirstChurchTransaction();
+    let older;
+    let newer;
+    try {
+      const olderRun = evaluateEngagementTierConfirmations(churchId, { asOf: AS_OF });
+      await pause.firstReached;
+      const newerRun = evaluateEngagementTierConfirmations(churchId, { asOf: NEXT_WEEK });
+      await pause.secondReached;
+      newer = await newerRun;
+      pause.release();
+      older = await olderRun;
+    } finally {
+      pause.release();
+      pause.restore();
+    }
+
+    assert.equal(newer.transitionsConfirmed, 1);
+    assert.equal(older.transitionsConfirmed, 0);
+    const primary = (await loadStates(churchId)).find((row) => row.axis === 'primary');
+    assert.equal(primary.establishedTier, 'core');
+    assert.equal(primary.lastEvaluatedWeekEnd, '2026-08-23');
+    const transitions = await loadTransitions(churchId);
+    assert.equal(transitions.length, 1);
+    assert.equal(transitions[0].confirmedWeekEnd, '2026-08-23');
+  });
+});
+
+test('cancelling contributing sessions recomputes evidence and cancels an active candidate', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedRoster(churchId, [
+      { primary: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
+    ]);
+    const individualId = fixture.people[0].individualId;
+    await seedState(churchId, individualId, 'primary');
+    const started = await evaluateEngagementTierConfirmations(churchId, { asOf: AS_OF });
+    assert.equal(started.candidatesStarted, 1);
+
+    await scopedQuery(churchId)(
+      `UPDATE attendance_sessions
+       SET session_status = 'cancelled'
+       WHERE church_id = ? AND id IN (?, ?)`,
+      [churchId, fixture.sessions.primary[0], fixture.sessions.primary[1]],
+    );
+    const cancelled = await evaluateEngagementTierConfirmations(churchId, { asOf: NEXT_WEEK });
+
+    assert.equal(cancelled.candidatesCancelled, 1);
+    const primary = (await loadStates(churchId)).find((row) => row.axis === 'primary');
+    assert.equal(primary.establishedTier, 'casual');
+    assert.equal(primary.candidateTier, null);
+    assert.equal(primary.lastEvaluatedWeekEnd, '2026-08-23');
+    assert.deepEqual(await loadTransitions(churchId), []);
   });
 });
 
