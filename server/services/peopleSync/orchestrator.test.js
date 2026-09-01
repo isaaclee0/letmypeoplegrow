@@ -1439,11 +1439,65 @@ test('unattended sync holds an unmatched persisted identity for review without c
     candidateIndividualIds: [],
     reason: 'review_deferred',
   }]);
+  assert.deepEqual(applied[0].selections.identityDecisions, {
+    'held-unmatched': { outcome: 'defer' },
+  });
   assert.equal(finished[0].status, 'review_required');
   assert.deepEqual(notifications, [{
     churchId: 'church-a', provider: 'elvanto', runId: 1,
     counts: { archive: 0, ambiguousPeople: 1, familyConflicts: 0, renameFamily: 0, unmatchedLocalRegulars: 0 },
   }]);
+});
+
+test('unattended sync accepts a single confident identity match', async () => {
+  const { deps, applied, finished } = makeDeps({
+    batches: [batch({ gatheringTypeId: 25 })],
+    localIndividuals: [localPerson(7, 'Ada', 'Lovelace', { familyId: 20 })],
+    localFamilies: [{ id: 20, familyName: 'Lovelace Household' }],
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
+      people: [person('new-list-member', { familyId: 'household-1' })],
+      memberExternalIds: ['new-list-member'],
+      families: [{
+        id: 'household-1', name: 'Lovelace Household',
+        memberExternalIds: ['new-list-member'], primaryContactExternalId: 'new-list-member',
+      }],
+    }),
+  });
+
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+
+  assert.deepEqual(applied[0].plan.linkPeople.map(({ externalPersonId, individualId }) => ({
+    externalPersonId, individualId,
+  })), [{ externalPersonId: 'new-list-member', individualId: 7 }]);
+  assert.deepEqual(applied[0].selections.identityDecisions, {
+    'new-list-member': { outcome: 'accept' },
+  });
+  assert.deepEqual(applied[0].plan.linkFamilies.map(({ externalFamilyId, familyId }) => ({
+    externalFamilyId, familyId,
+  })), [{ externalFamilyId: 'household-1', familyId: 20 }]);
+  assert.deepEqual(applied[0].plan.addToGathering.map(({ gatheringTypeId, individualId }) => ({
+    gatheringTypeId, individualId,
+  })), [{ gatheringTypeId: 25, individualId: 7 }]);
+  assert.deepEqual(applied[0].plan.familyConflicts, []);
+  assert.equal(finished[0].status, 'applied');
+});
+
+test('unattended sync creates a completely unmatched list member', async () => {
+  const { deps, applied } = makeDeps({
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
+      people: [person('new-list-member')],
+      memberExternalIds: ['new-list-member'],
+    }),
+  });
+
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+
+  assert.deepEqual(applied[0].plan.addPeople.map(({ externalPersonId }) => externalPersonId), [
+    'new-list-member',
+  ]);
+  assert.deepEqual(applied[0].selections.identityDecisions, {
+    'new-list-member': { outcome: 'create' },
+  });
 });
 
 test('an unlinked lifecycle-ineligible member cannot match or act', async () => {

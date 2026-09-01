@@ -871,13 +871,22 @@ function correctionScopeExternalIds(eligibleByBatch, batchId) {
   return new Set();
 }
 
-function decisionScopeExternalIds(eligibleByBatch, { batchId = null, authoritySwitch = false, unattended = false } = {}) {
-  if (unattended) return new Set();
+function decisionScopeExternalIds(eligibleByBatch, { batchId = null, authoritySwitch = false } = {}) {
   if (authoritySwitch || batchId === null || batchId === undefined) {
     const entries = eligibleByBatch instanceof Map ? eligibleByBatch.values() : Object.values(eligibleByBatch || {});
     return new Set([...entries].flatMap((ids) => [...(ids instanceof Set ? ids : ids || [])].map(String)));
   }
   return correctionScopeExternalIds(eligibleByBatch, batchId);
+}
+
+function unattendedIdentityDecisions(plan) {
+  const linkedExternalIds = new Set((plan.linkPeople || []).map((action) => String(action.externalPersonId)));
+  const addedExternalIds = new Set((plan.addPeople || []).map((action) => String(action.externalPersonId)));
+  return Object.fromEntries(Object.keys(plan.reviewContext?.identities || {}).sort().map((externalPersonId) => {
+    if (linkedExternalIds.has(externalPersonId)) return [externalPersonId, { outcome: 'accept' }];
+    if (addedExternalIds.has(externalPersonId)) return [externalPersonId, { outcome: 'create' }];
+    return [externalPersonId, { outcome: 'defer' }];
+  }));
 }
 
 function applyCorrectionReviewState(matchReviewState, correction) {
@@ -974,7 +983,6 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   const sourceExternalIds = decisionScopeExternalIds(acquired.eligibleByBatch, {
     batchId: acquired.batchId,
     authoritySwitch: acquired.trigger === 'authority_switch',
-    unattended: acquired.trigger === 'scheduled',
   });
   plan.reviewContext = buildReviewContext({
     plan,
@@ -1003,7 +1011,6 @@ function projectPipelineLinkCorrections(acquired, linkCorrections = {}) {
     sourceExternalIds: decisionScopeExternalIds(acquired.eligibleByBatch, {
       batchId: acquired.batchId,
       authoritySwitch: acquired.trigger === 'authority_switch',
-      unattended: acquired.trigger === 'scheduled',
     }),
     localIndividualIds: new Set(acquired.individuals.map(({ id }) => Number(id))),
   });
@@ -1498,12 +1505,13 @@ async function applyReviewed({
 //
 // Permitted only when `provider` is the church's current active authority.
 // Applies deterministic links, additions, managed updates, reactivations,
-// and provenance-safe gathering changes by calling applyPeopleSyncPlan with
-// NO selections. Archive proposals, ambiguousPeople/familyConflicts/
+// and provenance-safe gathering changes. It accepts only deterministic
+// identity suggestions and signed creations; ambiguous or previously held
+// identities are explicitly deferred. Archive proposals, familyConflicts/
 // renameFamily/unmatchedLocalRegulars are never mutated by apply.js regardless of
-// selections, so "stripping" them is a matter of how this run's outcome is
+// selections, so holding them is a matter of how this run's outcome is
 // CLASSIFIED and reported, not of altering what apply.js does: whenever any
-// of those five buckets is non-empty, the run is marked review_required
+// held-review bucket is non-empty, the run is marked review_required
 // (with its pending counts) instead of applied, and notifyReviewRequired is
 // called so admins learn about it later (a scheduled run has nobody
 // watching in real time — unlike buildReview/applyReviewed, which are
@@ -1572,12 +1580,15 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
       null, batchConfigurationExpectation,
     );
 
-    // 8. apply safe unattended actions (no selections — archive/ambiguous/
-    // conflict/rename/unmatched-local buckets are never mutated by apply.js off an
-    // empty selection set regardless).
+    // 8. Apply safe unattended actions. Deterministic matches and signed
+    // additions are accepted; ambiguous/held identities are deferred, and
+    // destructive review buckets remain unselected.
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan,
-      selections: { decisionContractVersion: 2, identityDecisions: {} }, userId: null,
+      selections: {
+        decisionContractVersion: 2,
+        identityDecisions: unattendedIdentityDecisions(body.plan),
+      }, userId: null,
       pendingIdentityObservations: body.pendingIdentityObservations,
       authorityExpectation, sourceExpectations,
       batchConfigurationExpectation,
