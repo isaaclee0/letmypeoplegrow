@@ -157,19 +157,23 @@ function seed() {
   }
 
   // --- Clear old seed data ---
-  db.exec(`
-    DELETE FROM pastoral_insight_states;
-    DELETE FROM engagement_decline_deliveries;
-    DELETE FROM engagement_decline_events;
-    DELETE FROM engagement_evaluation_state;
-    DELETE FROM attendance_records;
-    DELETE FROM headcount_records;
-    DELETE FROM attendance_sessions;
-    DELETE FROM gathering_lists;
-    DELETE FROM individuals;
-    DELETE FROM families;
-    DELETE FROM gathering_types;
-  `);
+  for (const table of [
+    'pastoral_insight_states',
+    'engagement_decline_deliveries',
+    'engagement_tier_transitions',
+    'engagement_decline_events',
+    'engagement_evaluation_state',
+    'engagement_tier_state',
+    'attendance_records',
+    'headcount_records',
+    'attendance_sessions',
+    'gathering_lists',
+    'individuals',
+    'families',
+    'gathering_types',
+  ]) {
+    db.prepare(`DELETE FROM ${table} WHERE church_id = ?`).run(CHURCH_ID);
+  }
   console.log('Cleared old seed data');
 
   // --- Gathering types ---

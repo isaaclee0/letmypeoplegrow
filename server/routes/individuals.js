@@ -112,6 +112,16 @@ function eventDedupeKey(event) {
   return [event.toTier, event.effectiveWeekEnd, event.rulesVersion].join(':');
 }
 
+function tierTransitionDedupeKey(transition) {
+  return [
+    transition.axis,
+    transition.fromTier,
+    transition.toTier,
+    transition.confirmedWeekEnd,
+    transition.rulesVersion,
+  ].join(':');
+}
+
 function laterTimestamp(left, right) {
   if (!left) return right || null;
   if (!right) return left;
@@ -261,6 +271,100 @@ async function rehomePastoralStates(conn, churchId, keepId, deleteIds, eventMapp
   }
 }
 
+async function rehomeTierTransitions(conn, churchId, keepId, deleteIds, eventMappings) {
+  const transitions = await conn.query(
+    `SELECT id, individual_id AS individualId, axis,
+            from_tier AS fromTier, to_tier AS toTier,
+            candidate_started_week_end AS candidateStartedWeekEnd,
+            confirmed_week_end AS confirmedWeekEnd, rules_version AS rulesVersion,
+            long_term_attended AS longTermAttended,
+            long_term_opportunities AS longTermOpportunities,
+            long_term_rate AS longTermRate,
+            confirmation_attended AS confirmationAttended,
+            confirmation_opportunities AS confirmationOpportunities,
+            confirmation_rate AS confirmationRate,
+            pastoral_processed_at AS pastoralProcessedAt,
+            decline_event_id AS declineEventId, created_at AS createdAt
+     FROM engagement_tier_transitions
+     WHERE church_id = ? AND individual_id IN (?)
+     ORDER BY id`,
+    [churchId, [keepId, ...deleteIds]],
+  );
+  const mappedDeclineEventId = (transition) => transition.declineEventId == null
+    ? null
+    : (eventMappings.get(Number(transition.declineEventId)) || transition.declineEventId);
+  const canonicalByKey = new Map();
+
+  for (const transition of transitions.filter(
+    (row) => Number(row.individualId) === Number(keepId),
+  )) {
+    const declineEventId = mappedDeclineEventId(transition);
+    if (declineEventId !== transition.declineEventId) {
+      await conn.query(
+        `UPDATE engagement_tier_transitions SET decline_event_id = ?
+         WHERE church_id = ? AND id = ?`,
+        [declineEventId, churchId, transition.id],
+      );
+      transition.declineEventId = declineEventId;
+    }
+    canonicalByKey.set(tierTransitionDedupeKey(transition), transition);
+  }
+
+  for (const transition of transitions.filter(
+    (row) => Number(row.individualId) !== Number(keepId),
+  )) {
+    transition.declineEventId = mappedDeclineEventId(transition);
+    const key = tierTransitionDedupeKey(transition);
+    const canonical = canonicalByKey.get(key);
+    if (!canonical) {
+      await conn.query(
+        `UPDATE engagement_tier_transitions
+         SET individual_id = ?, decline_event_id = ?
+         WHERE church_id = ? AND id = ?`,
+        [keepId, transition.declineEventId, churchId, transition.id],
+      );
+      canonicalByKey.set(key, { ...transition, individualId: keepId });
+      continue;
+    }
+
+    const adoptLinkedEvidence = canonical.declineEventId == null
+      && transition.declineEventId != null;
+    const evidence = adoptLinkedEvidence ? transition : canonical;
+    const declineEventId = canonical.declineEventId ?? transition.declineEventId;
+    await conn.query(
+      `UPDATE engagement_tier_transitions
+       SET candidate_started_week_end = ?,
+           long_term_attended = ?, long_term_opportunities = ?, long_term_rate = ?,
+           confirmation_attended = ?, confirmation_opportunities = ?, confirmation_rate = ?,
+           pastoral_processed_at = ?, decline_event_id = ?, created_at = ?
+       WHERE church_id = ? AND id = ?`,
+      [
+        evidence.candidateStartedWeekEnd,
+        evidence.longTermAttended,
+        evidence.longTermOpportunities,
+        evidence.longTermRate,
+        evidence.confirmationAttended,
+        evidence.confirmationOpportunities,
+        evidence.confirmationRate,
+        laterTimestamp(canonical.pastoralProcessedAt, transition.pastoralProcessedAt),
+        declineEventId,
+        earlierTimestamp(canonical.createdAt, transition.createdAt),
+        churchId,
+        canonical.id,
+      ],
+    );
+    canonical.declineEventId = declineEventId;
+    canonical.pastoralProcessedAt = laterTimestamp(
+      canonical.pastoralProcessedAt,
+      transition.pastoralProcessedAt,
+    );
+    await conn.query(
+      `DELETE FROM engagement_tier_transitions WHERE church_id = ? AND id = ?`,
+      [churchId, transition.id],
+    );
+  }
+}
+
 async function rehomeEngagementHistoryWithConnection(conn, {
   churchId,
   keepId,
@@ -273,7 +377,10 @@ async function rehomeEngagementHistoryWithConnection(conn, {
             detected_at AS detectedAt, recovered_at AS recoveredAt,
             primary_attended_at_detection AS primaryAttended,
             primary_opportunities_at_detection AS primaryOpportunities,
-            primary_rate_at_detection AS primaryRate
+            primary_rate_at_detection AS primaryRate,
+            confirmation_attended_at_detection AS confirmationAttended,
+            confirmation_opportunities_at_detection AS confirmationOpportunities,
+            confirmation_rate_at_detection AS confirmationRate
      FROM engagement_decline_events
      WHERE church_id = ? AND individual_id IN (?) ORDER BY id`,
     [churchId, [keepId, ...deleteIds]],
@@ -302,12 +409,26 @@ async function rehomeEngagementHistoryWithConnection(conn, {
         canonical.primaryOpportunities = event.primaryOpportunities;
         canonical.primaryRate = event.primaryRate;
       }
+      const canonicalHasConfirmationEvidence = canonical.confirmationAttended != null
+        && canonical.confirmationOpportunities != null
+        && canonical.confirmationRate != null;
+      const duplicateHasConfirmationEvidence = event.confirmationAttended != null
+        && event.confirmationOpportunities != null
+        && event.confirmationRate != null;
+      if (!canonicalHasConfirmationEvidence && duplicateHasConfirmationEvidence) {
+        canonical.confirmationAttended = event.confirmationAttended;
+        canonical.confirmationOpportunities = event.confirmationOpportunities;
+        canonical.confirmationRate = event.confirmationRate;
+      }
       await conn.query(
         `UPDATE engagement_decline_events
          SET family_at_detection_id = ?, detected_at = ?, recovered_at = ?,
              primary_attended_at_detection = ?,
              primary_opportunities_at_detection = ?,
-             primary_rate_at_detection = ?
+             primary_rate_at_detection = ?,
+             confirmation_attended_at_detection = ?,
+             confirmation_opportunities_at_detection = ?,
+             confirmation_rate_at_detection = ?
          WHERE church_id = ? AND id = ?`,
         [
           canonical.familyAtDetectionId,
@@ -316,6 +437,9 @@ async function rehomeEngagementHistoryWithConnection(conn, {
           canonical.primaryAttended,
           canonical.primaryOpportunities,
           canonical.primaryRate,
+          canonical.confirmationAttended,
+          canonical.confirmationOpportunities,
+          canonical.confirmationRate,
           churchId,
           canonical.id,
         ],
@@ -331,12 +455,18 @@ async function rehomeEngagementHistoryWithConnection(conn, {
     }
   }
   await rehomePastoralStates(conn, churchId, keepId, deleteIds, eventMappings);
+  await rehomeTierTransitions(conn, churchId, keepId, deleteIds, eventMappings);
   for (const duplicateEventId of eventMappings.keys()) {
     await conn.query(
       `DELETE FROM engagement_decline_events WHERE church_id = ? AND id = ?`,
       [churchId, duplicateEventId],
     );
   }
+  await conn.query(
+    `DELETE FROM engagement_tier_state
+     WHERE church_id = ? AND individual_id IN (?)`,
+    [churchId, deleteIds],
+  );
   await conn.query(
     `DELETE FROM engagement_evaluation_state
      WHERE church_id = ? AND individual_id IN (?)`,
@@ -818,8 +948,18 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
          ) OR EXISTS(
            SELECT 1 FROM pastoral_insight_states
            WHERE church_id = ? AND subject_id = ?
+         ) OR EXISTS(
+           SELECT 1 FROM engagement_tier_transitions
+           WHERE church_id = ? AND individual_id = ?
          ) AS hasHistory`,
-        [req.user.church_id, id, req.user.church_id, id],
+        [
+          req.user.church_id,
+          id,
+          req.user.church_id,
+          id,
+          req.user.church_id,
+          id,
+        ],
       );
       if (Number(history.hasHistory) === 1) {
         throw Object.assign(

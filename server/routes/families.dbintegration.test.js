@@ -3,6 +3,9 @@ const assert = require('node:assert');
 const http = require('node:http');
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const logger = require('../config/logger');
+logger.exceptions?.unhandle();
+logger.rejections?.unhandle();
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const { consolidateGatheringAssignments } = require('./families');
@@ -664,6 +667,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
   await withRouteChurchDb(async (churchId) => {
     const keepId = await seedIndividual(churchId);
     const deleteId = await seedIndividual(churchId);
+    const otherChurchId = `${churchId}_other`;
     const recipientId = await seedUser(churchId);
     const detectedFamilyId = await seedFamily(churchId, 'Historical family');
     const keepEvent = await Database.query(
@@ -678,9 +682,11 @@ test('individual deduplication re-homes engagement history and canonicalises eve
          (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
           effective_week_end, rules_version, detected_at, recovered_at,
           primary_attended_at_detection, primary_opportunities_at_detection,
-          primary_rate_at_detection)
+          primary_rate_at_detection, confirmation_attended_at_detection,
+          confirmation_opportunities_at_detection, confirmation_rate_at_detection)
        VALUES (?, ?, ?, 'core', 'casual', '2026-08-09', 1,
-               '2026-08-10 08:00:00', '2026-08-18 07:00:00', 3, 8, 0.375)`,
+               '2026-08-10 08:00:00', '2026-08-18 07:00:00', 3, 8, 0.375,
+               2, 8, 0.25)`,
       [churchId, deleteId, detectedFamilyId],
     );
     const uniqueEvent = await Database.query(
@@ -726,6 +732,83 @@ test('individual deduplication re-homes engagement history and canonicalises eve
         [churchId, individualId],
       );
     }
+    await Database.query(
+      `INSERT INTO engagement_tier_state
+         (church_id, individual_id, axis, rules_version, established_tier,
+          last_evaluated_week_end)
+       VALUES (?, ?, 'primary', 2, 'core', '2026-08-16')`,
+      [churchId, keepId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_tier_state
+         (church_id, individual_id, axis, rules_version, established_tier,
+          candidate_tier, candidate_direction, candidate_started_week_end,
+          candidate_final_week_end, last_evaluated_week_end)
+       VALUES (?, ?, 'primary', 2, 'casual', 'core', 'higher',
+               '2026-08-09', '2026-11-01', '2026-08-16')`,
+      [churchId, deleteId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_tier_state
+         (church_id, individual_id, axis, rules_version, established_tier,
+          candidate_tier, candidate_direction, candidate_started_week_end,
+          candidate_final_week_end, last_evaluated_week_end)
+       VALUES (?, ?, 'primary', 9, 'irregular', 'casual', 'higher',
+               '2026-08-02', '2026-10-25', '2026-08-16')`,
+      [otherChurchId, keepId],
+    );
+    const keepTransition = await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate)
+       VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-10', '2026-08-09', 1,
+               7, 13, ?, 3, 8, 0.375)`,
+      [churchId, keepId, 7 / 13],
+    );
+    await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate,
+          pastoral_processed_at, decline_event_id)
+       VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-17', '2026-08-09', 1,
+               6, 13, ?, 2, 8, 0.25, '2026-08-18 09:00:00', ?)`,
+      [churchId, deleteId, 6 / 13, duplicateEvent.insertId],
+    );
+    const uniqueTransition = await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate,
+          decline_event_id)
+       VALUES (?, ?, 'primary', 'casual', 'irregular', '2026-05-24', '2026-08-16', 1,
+               4, 13, ?, 1, 8, 0.125, ?)`,
+      [churchId, deleteId, 4 / 13, uniqueEvent.insertId],
+    );
+    const communityTransition = await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate)
+       VALUES (?, ?, 'community', 'casual', 'core', '2026-05-24', '2026-08-16', 1,
+               9, 13, ?, 6, 8, 0.75)`,
+      [churchId, deleteId, 9 / 13],
+    );
+    const otherChurchTransition = await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate)
+       VALUES (?, ?, 'primary', 'irregular', 'casual', '2026-05-24', '2026-08-16', 9,
+               5, 13, ?, 4, 8, 0.5)`,
+      [otherChurchId, keepId, 5 / 13],
+    );
     const app = await startPeopleRouteApp(churchId);
     try {
       const response = await app.request('/api/individuals/deduplicate', {
@@ -740,7 +823,10 @@ test('individual deduplication re-homes engagement history and canonicalises eve
                 detected_at AS detectedAt, recovered_at AS recoveredAt,
                 primary_attended_at_detection AS attended,
                 primary_opportunities_at_detection AS opportunities,
-                primary_rate_at_detection AS rate
+                primary_rate_at_detection AS rate,
+                confirmation_attended_at_detection AS confirmationAttended,
+                confirmation_opportunities_at_detection AS confirmationOpportunities,
+                confirmation_rate_at_detection AS confirmationRate
          FROM engagement_decline_events WHERE church_id = ? ORDER BY id`,
         [churchId],
       ), [
@@ -754,6 +840,9 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           attended: 3,
           opportunities: 8,
           rate: 0.375,
+          confirmationAttended: 2,
+          confirmationOpportunities: 8,
+          confirmationRate: 0.25,
         },
         {
           id: uniqueEvent.insertId,
@@ -765,8 +854,105 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           attended: null,
           opportunities: null,
           rate: null,
+          confirmationAttended: null,
+          confirmationOpportunities: null,
+          confirmationRate: null,
         },
       ]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT id, individual_id AS individualId, axis,
+                from_tier AS fromTier, to_tier AS toTier,
+                candidate_started_week_end AS candidateStartedWeekEnd,
+                confirmed_week_end AS confirmedWeekEnd, rules_version AS rulesVersion,
+                long_term_attended AS longTermAttended,
+                long_term_opportunities AS longTermOpportunities,
+                long_term_rate AS longTermRate,
+                confirmation_attended AS confirmationAttended,
+                confirmation_opportunities AS confirmationOpportunities,
+                confirmation_rate AS confirmationRate,
+                pastoral_processed_at AS pastoralProcessedAt,
+                decline_event_id AS declineEventId
+         FROM engagement_tier_transitions WHERE church_id = ? ORDER BY id`,
+        [churchId],
+      ), [
+        {
+          id: keepTransition.insertId,
+          individualId: keepId,
+          axis: 'primary',
+          fromTier: 'core',
+          toTier: 'casual',
+          candidateStartedWeekEnd: '2026-05-17',
+          confirmedWeekEnd: '2026-08-09',
+          rulesVersion: 1,
+          longTermAttended: 6,
+          longTermOpportunities: 13,
+          longTermRate: 6 / 13,
+          confirmationAttended: 2,
+          confirmationOpportunities: 8,
+          confirmationRate: 0.25,
+          pastoralProcessedAt: '2026-08-18 09:00:00',
+          declineEventId: keepEvent.insertId,
+        },
+        {
+          id: uniqueTransition.insertId,
+          individualId: keepId,
+          axis: 'primary',
+          fromTier: 'casual',
+          toTier: 'irregular',
+          candidateStartedWeekEnd: '2026-05-24',
+          confirmedWeekEnd: '2026-08-16',
+          rulesVersion: 1,
+          longTermAttended: 4,
+          longTermOpportunities: 13,
+          longTermRate: 4 / 13,
+          confirmationAttended: 1,
+          confirmationOpportunities: 8,
+          confirmationRate: 0.125,
+          pastoralProcessedAt: null,
+          declineEventId: uniqueEvent.insertId,
+        },
+        {
+          id: communityTransition.insertId,
+          individualId: keepId,
+          axis: 'community',
+          fromTier: 'casual',
+          toTier: 'core',
+          candidateStartedWeekEnd: '2026-05-24',
+          confirmedWeekEnd: '2026-08-16',
+          rulesVersion: 1,
+          longTermAttended: 9,
+          longTermOpportunities: 13,
+          longTermRate: 9 / 13,
+          confirmationAttended: 6,
+          confirmationOpportunities: 8,
+          confirmationRate: 0.75,
+          pastoralProcessedAt: null,
+          declineEventId: null,
+        },
+      ]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT individual_id AS individualId, axis, rules_version AS rulesVersion,
+                established_tier AS establishedTier, candidate_tier AS candidateTier
+         FROM engagement_tier_state WHERE church_id = ? ORDER BY individual_id, axis`,
+        [churchId],
+      ), [{
+        individualId: keepId,
+        axis: 'primary',
+        rulesVersion: 2,
+        establishedTier: 'core',
+        candidateTier: null,
+      }]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT rules_version AS rulesVersion, established_tier AS establishedTier,
+                candidate_tier AS candidateTier
+         FROM engagement_tier_state WHERE church_id = ? AND individual_id = ?`,
+        [otherChurchId, keepId],
+      ), [{ rulesVersion: 9, establishedTier: 'irregular', candidateTier: 'casual' }]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT id, individual_id AS individualId, rules_version AS rulesVersion
+         FROM engagement_tier_transitions WHERE church_id = ?`,
+        [otherChurchId],
+      ), [{ id: otherChurchTransition.insertId, individualId: keepId, rulesVersion: 9 }]);
       assert.deepStrictEqual(await Database.query(
         `SELECT event_id AS eventId, recipient_id AS recipientId, attempts
          FROM engagement_decline_deliveries WHERE church_id = ? ORDER BY id`,
@@ -837,6 +1023,42 @@ test('permanent deletion with engagement history returns an archive-only conflic
          WHERE church_id = ? AND subject_id = ?`,
         [churchId, individualId],
       ))[0].count, 1);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('permanent deletion preserves tier-transition history that has no decline event', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const transition = await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate)
+       VALUES (?, ?, 'community', 'casual', 'core', '2026-05-10', '2026-08-09', 1,
+               9, 13, ?, 6, 8, 0.75)`,
+      [churchId, individualId, 9 / 13],
+    );
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request(`/api/individuals/${individualId}/permanent`, {
+        method: 'DELETE',
+      });
+
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(response.body.code, 'ENGAGEMENT_HISTORY_REQUIRES_ARCHIVE');
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
+        [churchId, individualId],
+      ))[0].count, 1);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT id, individual_id AS individualId
+         FROM engagement_tier_transitions WHERE church_id = ?`,
+        [churchId],
+      ), [{ id: transition.insertId, individualId }]);
     } finally {
       await app.close();
     }

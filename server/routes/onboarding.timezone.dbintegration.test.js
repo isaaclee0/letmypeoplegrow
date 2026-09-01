@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
 const jwt = require('jsonwebtoken');
+const logger = require('../config/logger');
+logger.exceptions?.unhandle();
+logger.rejections?.unhandle();
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const onboardingRouter = require('./onboarding');
@@ -112,6 +115,46 @@ test('clear sample data removes engagement history before deleting people', asyn
          VALUES (?, ?, 1, '2026-08-09', 'casual', 'casual')`,
         [churchId, person.insertId],
       );
+      await Database.query(
+        `INSERT INTO engagement_tier_state
+           (church_id, individual_id, axis, rules_version, established_tier,
+            candidate_tier, candidate_direction, candidate_started_week_end,
+            candidate_final_week_end, last_evaluated_week_end)
+         VALUES (?, ?, 'primary', 1, 'core', 'casual', 'lower',
+                 '2026-08-09', '2026-11-01', '2026-08-16')`,
+        [churchId, person.insertId],
+      );
+      await Database.query(
+        `INSERT INTO engagement_tier_transitions
+           (church_id, individual_id, axis, from_tier, to_tier,
+            candidate_started_week_end, confirmed_week_end, rules_version,
+            long_term_attended, long_term_opportunities, long_term_rate,
+            confirmation_attended, confirmation_opportunities, confirmation_rate,
+            decline_event_id)
+         VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-10', '2026-08-09', 1,
+                 7, 13, ?, 3, 8, 0.375, ?)`,
+        [churchId, person.insertId, 7 / 13, event.insertId],
+      );
+      Database.getChurchDb(churchId).exec(`
+        CREATE TRIGGER assert_transition_cleanup_before_decline_event
+        BEFORE DELETE ON engagement_decline_events
+        WHEN EXISTS (
+          SELECT 1 FROM engagement_tier_transitions
+          WHERE church_id = OLD.church_id AND decline_event_id = OLD.id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'transition history must be cleared before decline events');
+        END;
+        CREATE TRIGGER assert_tier_state_cleanup_before_individual
+        BEFORE DELETE ON individuals
+        WHEN EXISTS (
+          SELECT 1 FROM engagement_tier_state
+          WHERE church_id = OLD.church_id AND individual_id = OLD.id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'tier state must be cleared before individuals');
+        END;
+      `);
 
       const response = await app.clearSampleData();
 
@@ -121,6 +164,8 @@ test('clear sample data removes engagement history before deleting people', asyn
         'engagement_decline_deliveries',
         'engagement_decline_events',
         'engagement_evaluation_state',
+        'engagement_tier_transitions',
+        'engagement_tier_state',
         'individuals',
       ]) {
         assert.equal((await Database.query(

@@ -149,6 +149,7 @@ async function evaluateEngagementTierConfirmations(churchId, {
       );
       const states = [];
       const transitions = [];
+      const evaluatedKeys = new Set();
       const outcomes = {
         baselined: 0,
         candidatesStarted: 0,
@@ -158,6 +159,7 @@ async function evaluateEngagementTierConfirmations(churchId, {
 
       for (const [individualId, profile] of profiles.current) {
         for (const axis of AXES) {
+          evaluatedKeys.add(stateKey(individualId, axis));
           const calculatedEvidence = profile[axis];
           const previousState = previousByKey.get(stateKey(individualId, axis)) || null;
           const result = hasNewerStateVersion(previousState, rulesVersion, completedWeekEnd)
@@ -187,6 +189,31 @@ async function evaluateEngagementTierConfirmations(churchId, {
             ));
           }
         }
+      }
+
+      for (const previousState of previousRows) {
+        if (evaluatedKeys.has(stateKey(previousState.individualId, previousState.axis))) continue;
+        const result = hasNewerStateVersion(previousState, rulesVersion, completedWeekEnd)
+          ? { nextState: previousState }
+          : evaluateTierConfirmation({
+            completedWeekEnd,
+            rulesVersion,
+            calculatedStatus: 'not_assigned',
+            calculatedEvidence: {
+              status: 'not_assigned',
+              attended: 0,
+              opportunities: 0,
+              rate: null,
+            },
+            previousState: baselineOnly ? null : previousState,
+            datedOpportunities: [],
+            settings: profiles.settings,
+          });
+        states.push({
+          individualId: previousState.individualId,
+          axis: previousState.axis,
+          ...result.nextState,
+        });
       }
 
       await upsertTierStates(conn, churchId, states);

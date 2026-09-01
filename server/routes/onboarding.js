@@ -928,10 +928,16 @@ router.post('/clear-sample-data',
           DELETE FROM engagement_decline_deliveries WHERE church_id = ?
         `, [churchId]);
         await conn.query(`
+          DELETE FROM engagement_tier_transitions WHERE church_id = ?
+        `, [churchId]);
+        await conn.query(`
           DELETE FROM engagement_decline_events WHERE church_id = ?
         `, [churchId]);
         await conn.query(`
           DELETE FROM engagement_evaluation_state WHERE church_id = ?
+        `, [churchId]);
+        await conn.query(`
+          DELETE FROM engagement_tier_state WHERE church_id = ?
         `, [churchId]);
 
         // 1. Attendance records

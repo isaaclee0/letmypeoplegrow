@@ -262,6 +262,79 @@ test('first run baselines both axes for active regulars and persists nullable in
   });
 });
 
+test('inactive evaluation clears current tier eligibility without deleting transition history', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedRoster(churchId, [
+      { primary: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
+    ]);
+    const individualId = fixture.people[0].individualId;
+    await seedState(churchId, individualId, 'primary', {
+      establishedTier: 'casual',
+      candidateTier: 'core',
+      candidateDirection: 'higher',
+      candidateStartedWeekEnd: '2026-08-09',
+      candidateFinalWeekEnd: '2026-11-08',
+    });
+    await seedState(churchId, individualId, 'community', {
+      establishedTier: 'casual',
+    });
+    const transition = await scopedQuery(churchId)(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate)
+       VALUES (?, ?, 'community', 'irregular', 'casual', '2026-04-26', '2026-08-02', 1,
+               5, 13, ?, 4, 8, 0.5)`,
+      [churchId, individualId, 5 / 13],
+    );
+    await scopedQuery(churchId)(
+      `UPDATE individuals SET is_active = 0 WHERE church_id = ? AND id = ?`,
+      [churchId, individualId],
+    );
+
+    const result = await evaluateEngagementTierConfirmations(churchId, { asOf: AS_OF });
+
+    assert.deepEqual(result, {
+      completedWeekEnd: '2026-08-16',
+      baselined: 0,
+      candidatesStarted: 0,
+      candidatesCancelled: 0,
+      candidatesExpired: 0,
+      transitionsConfirmed: 0,
+    });
+    assert.deepEqual(await loadStates(churchId), [
+      {
+        individualId,
+        axis: 'community',
+        rulesVersion: 1,
+        establishedTier: null,
+        candidateTier: null,
+        candidateDirection: null,
+        candidateStartedWeekEnd: null,
+        candidateFinalWeekEnd: null,
+        lastEvaluatedWeekEnd: '2026-08-16',
+      },
+      {
+        individualId,
+        axis: 'primary',
+        rulesVersion: 1,
+        establishedTier: null,
+        candidateTier: null,
+        candidateDirection: null,
+        candidateStartedWeekEnd: null,
+        candidateFinalWeekEnd: null,
+        lastEvaluatedWeekEnd: '2026-08-16',
+      },
+    ]);
+    assert.deepEqual(await scopedQuery(churchId)(
+      `SELECT id, individual_id AS individualId
+       FROM engagement_tier_transitions WHERE church_id = ?`,
+      [churchId],
+    ), [{ id: transition.insertId, individualId }]);
+  });
+});
+
 test('weekly runs advance once, ignore same-week reruns, and cancel after corrected evidence', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedRoster(churchId, [

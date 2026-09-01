@@ -33,8 +33,10 @@ async function main() {
 
       await conn.query('DELETE FROM pastoral_insight_states WHERE church_id = ?', [churchId]);
       await conn.query('DELETE FROM engagement_decline_deliveries WHERE church_id = ?', [churchId]);
+      await conn.query('DELETE FROM engagement_tier_transitions WHERE church_id = ?', [churchId]);
       await conn.query('DELETE FROM engagement_decline_events WHERE church_id = ?', [churchId]);
       await conn.query('DELETE FROM engagement_evaluation_state WHERE church_id = ?', [churchId]);
+      await conn.query('DELETE FROM engagement_tier_state WHERE church_id = ?', [churchId]);
 
       // Delete individuals after their protected audit history.
       const delInd = await conn.query(
@@ -60,4 +62,3 @@ async function main() {
 }
 
 main();
-
