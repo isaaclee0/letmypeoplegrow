@@ -116,6 +116,25 @@ function createLegacyDb() {
       church_id TEXT NOT NULL,
       UNIQUE(session_id, updated_by)
     );
+    CREATE TABLE engagement_decline_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      church_id TEXT NOT NULL,
+      individual_id INTEGER NOT NULL REFERENCES individuals(id) ON DELETE RESTRICT,
+      family_at_detection_id INTEGER REFERENCES families(id) ON DELETE SET NULL,
+      from_tier TEXT NOT NULL CHECK(from_tier IN ('core','casual','irregular')),
+      to_tier TEXT NOT NULL CHECK(to_tier IN ('core','casual','irregular')),
+      effective_week_end TEXT NOT NULL,
+      rules_version INTEGER NOT NULL CHECK(rules_version >= 1),
+      detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      recovered_at TEXT,
+      primary_attended_at_detection INTEGER
+        CHECK(primary_attended_at_detection IS NULL OR primary_attended_at_detection >= 0),
+      primary_opportunities_at_detection INTEGER
+        CHECK(primary_opportunities_at_detection IS NULL OR primary_opportunities_at_detection >= 0),
+      primary_rate_at_detection REAL
+        CHECK(primary_rate_at_detection IS NULL OR primary_rate_at_detection BETWEEN 0 AND 1),
+      UNIQUE(church_id, individual_id, to_tier, effective_week_end, rules_version)
+    );
     CREATE TABLE pastoral_insight_states (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       church_id TEXT NOT NULL,
@@ -175,12 +194,21 @@ function seedLegacySessions(db) {
   db.prepare(`INSERT INTO attendance_records
     (session_id, individual_id, present, church_id) VALUES (?, ?, 1, ?)`)
     .run(attendanceActivitySessionId, secondIndividualId, CHURCH_ID);
+  const legacyEventId = Number(db.prepare(`INSERT INTO engagement_decline_events
+    (church_id, individual_id, family_at_detection_id, from_tier, to_tier,
+     effective_week_end, rules_version, detected_at, recovered_at,
+     primary_attended_at_detection, primary_opportunities_at_detection,
+     primary_rate_at_detection)
+    VALUES (?, ?, ?, 'core', 'casual', '2026-07-26', 1, '2026-07-27 10:00:00', NULL,
+      5, 9, 0.5555)`)
+    .run(CHURCH_ID, individualId, familyId).lastInsertRowid);
 
   return {
     userId,
     familyId,
     individualId,
     caregiverId,
+    legacyEventId,
     zeroHeadcountSessionId,
     snapshottedAbsentSessionId,
     attendanceActivitySessionId,
@@ -450,6 +478,16 @@ function assertChecksAndUniqueKeys(db, ids) {
       .run(CHURCH_ID, ids.individualId),
     /CHECK constraint failed/,
   );
+  assert.throws(
+    () => db.prepare(`INSERT INTO engagement_tier_transitions
+      (church_id, individual_id, axis, from_tier, to_tier, candidate_started_week_end,
+       confirmed_week_end, rules_version, long_term_attended, long_term_opportunities,
+       long_term_rate, confirmation_attended, confirmation_opportunities, confirmation_rate)
+      VALUES (?, ?, 'primary', 'casual', 'casual', '2026-08-16', '2026-11-15', 1,
+        8, 13, 0.615, 4, 8, 0.5)`)
+      .run(CHURCH_ID, ids.individualId),
+    /CHECK constraint failed/,
+  );
 
   db.prepare(`INSERT INTO engagement_decline_deliveries
     (church_id, event_id, recipient_type, recipient_id, family_caregiver_id)
@@ -602,8 +640,38 @@ function assertForeignKeysAndIndexes(db) {
 test('ensureEngagementSchema upgrades a legacy database and backfills only evidenced sessions', () => {
   const db = createLegacyDb();
   const ids = seedLegacySessions(db);
+  const legacyEventBefore = db.prepare(`SELECT church_id, individual_id, family_at_detection_id,
+      from_tier, to_tier, effective_week_end, rules_version, detected_at, recovered_at,
+      primary_attended_at_detection, primary_opportunities_at_detection,
+      primary_rate_at_detection
+    FROM engagement_decline_events WHERE id = ?`).get(ids.legacyEventId);
 
   ensureEngagementSchema(db, CHURCH_ID);
+
+  assert.deepEqual(
+    db.prepare(`SELECT church_id, individual_id, family_at_detection_id,
+        from_tier, to_tier, effective_week_end, rules_version, detected_at, recovered_at,
+        primary_attended_at_detection, primary_opportunities_at_detection,
+        primary_rate_at_detection
+      FROM engagement_decline_events WHERE id = ?`).get(ids.legacyEventId),
+    legacyEventBefore,
+    'legacy decline event values remain unchanged after upgrade',
+  );
+  assert.deepEqual(
+    db.prepare(`SELECT confirmation_attended_at_detection,
+        confirmation_opportunities_at_detection, confirmation_rate_at_detection
+      FROM engagement_decline_events WHERE id = ?`).get(ids.legacyEventId),
+    {
+      confirmation_attended_at_detection: null,
+      confirmation_opportunities_at_detection: null,
+      confirmation_rate_at_detection: null,
+    },
+  );
+  assert.throws(
+    () => db.prepare(`UPDATE engagement_decline_events
+      SET confirmation_attended_at_detection = -1 WHERE id = ?`).run(ids.legacyEventId),
+    /CHECK constraint failed/,
+  );
 
   assertEngagementColumns(db);
   assertEngagementTables(db);
@@ -617,6 +685,15 @@ test('ensureEngagementSchema upgrades a legacy database and backfills only evide
   db.prepare("UPDATE attendance_sessions SET session_status = 'cancelled' WHERE id = ?")
     .run(ids.zeroHeadcountSessionId);
   ensureEngagementSchema(db, CHURCH_ID);
+  assert.deepEqual(
+    db.prepare(`SELECT church_id, individual_id, family_at_detection_id,
+        from_tier, to_tier, effective_week_end, rules_version, detected_at, recovered_at,
+        primary_attended_at_detection, primary_opportunities_at_detection,
+        primary_rate_at_detection
+      FROM engagement_decline_events WHERE id = ?`).get(ids.legacyEventId),
+    legacyEventBefore,
+    'legacy decline event values remain unchanged after repeat upgrade',
+  );
   assert.equal(statusFor(db, ids.zeroHeadcountSessionId), 'cancelled');
   assert.equal(statusFor(db, ids.untouchedSessionId), 'open');
 

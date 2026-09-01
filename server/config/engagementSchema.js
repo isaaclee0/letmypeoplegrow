@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS engagement_tier_transitions (
   pastoral_processed_at TEXT,
   decline_event_id INTEGER REFERENCES engagement_decline_events(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
+  CHECK(from_tier <> to_tier),
   UNIQUE(church_id, individual_id, axis, from_tier, to_tier, confirmed_week_end, rules_version)
 );
 CREATE INDEX IF NOT EXISTS idx_engagement_tier_transitions_person
