@@ -7,7 +7,7 @@ import { writeEngagementOverviewCache } from '../../services/engagementReportCac
 import LongTermHealthReport from './LongTermHealthReport';
 
 vi.mock('react-chartjs-2', () => ({
-  Doughnut: () => <div aria-label="Primary tier distribution chart" />,
+  Doughnut: ({ options }: { options?: { plugins?: { legend?: { labels?: { color?: string } } } } }) => <div aria-label="Primary tier distribution chart" data-legend-color={options?.plugins?.legend?.labels?.color} />,
   Line: () => <div aria-label="Attendance trend chart" />,
 }));
 
@@ -142,7 +142,7 @@ describe('LongTermHealthReport', () => {
       ...settings, coreMinimum: 65, calculationRulesVersion: 3,
     } } } as never);
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Configure engagement' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
     fireEvent.change(screen.getByLabelText('Core minimum'), { target: { value: '65' } });
     vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
       throw new DOMException('Storage is blocked', 'SecurityError');
@@ -162,9 +162,66 @@ describe('LongTermHealthReport', () => {
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
 
-    expect(await screen.findByRole('heading', { name: 'Choose a Primary gathering' })).toBeInTheDocument();
+    const setupHeading = await screen.findByRole('heading', { name: 'Choose your Primary gatherings' });
+    expect(setupHeading).toBeInTheDocument();
+    expect(setupHeading.closest('section')).toHaveClass('dark:border-blue-800', 'dark:bg-blue-950/50');
     expect(screen.queryByLabelText('Primary tier distribution chart')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Configure engagement' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Settings' })).toHaveClass('dark:border-indigo-300', 'dark:bg-indigo-400', 'dark:text-gray-950');
+  });
+
+  it('uses a high-contrast chart legend in dark mode', async () => {
+    document.documentElement.classList.add('dark');
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+
+    expect(await screen.findByLabelText('Primary tier distribution chart')).toHaveAttribute('data-legend-color', '#e5e7eb');
+    await act(async () => { document.documentElement.classList.remove('dark'); });
+  });
+
+  it('lets an administrator choose active standard Primary gatherings from setup', async () => {
+    const unconfiguredSettings = {
+      ...settings,
+      gatheringRoles: [
+        { gatheringTypeId: 1, name: 'Sunday', attendanceType: 'standard' as const, isActive: true, role: 'other' as const },
+        { gatheringTypeId: 2, name: 'Youth', attendanceType: 'standard' as const, isActive: false, role: 'community' as const },
+        { gatheringTypeId: 3, name: 'Conference', attendanceType: 'headcount' as const, isActive: true, role: 'other' as const },
+      ],
+    };
+    vi.mocked(reportsAPI.getEngagementOverview)
+      .mockResolvedValueOnce({ data: overview({
+        settings: unconfiguredSettings,
+        setup: { hasPrimaryRole: false, hasStandardPrimaryRole: false, hasPrimaryAssignments: false },
+      }) } as never)
+      .mockResolvedValueOnce({ data: overview({
+        settings: { ...unconfiguredSettings, gatheringRoles: [
+          { ...unconfiguredSettings.gatheringRoles[0], role: 'primary' as const },
+          unconfiguredSettings.gatheringRoles[1],
+          unconfiguredSettings.gatheringRoles[2],
+        ] },
+        setup: { hasPrimaryRole: true, hasStandardPrimaryRole: true, hasPrimaryAssignments: false },
+      }) } as never);
+    vi.mocked(settingsAPI.updateEngagementSettings).mockResolvedValue({ data: { settings: unconfiguredSettings } } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+
+    expect(await screen.findByText(/main services used to calculate each person's long-term engagement/i)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Sunday' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Conference' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Sunday' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Primary gatherings' }));
+
+    await waitFor(() => expect(settingsAPI.updateEngagementSettings).toHaveBeenCalledWith({
+      coreMinimum: 60,
+      casualMinimum: 20,
+      tiers: settings.tiers,
+      gatheringRoles: [
+        { gatheringTypeId: 1, role: 'primary' },
+        { gatheringTypeId: 2, role: 'community' },
+        { gatheringTypeId: 3, role: 'other' },
+      ],
+    }));
+    expect(await screen.findByText(/No active regulars have a Primary assignment/)).toBeInTheDocument();
   });
 
   it('warns when nobody has an active Primary assignment', async () => {
@@ -210,7 +267,7 @@ describe('LongTermHealthReport', () => {
     writeEngagementOverviewCache(overview());
     vi.mocked(reportsAPI.getEngagementOverview).mockReturnValue(new Promise(() => {}) as never);
     const { rerender } = render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    const configure = screen.getByRole('button', { name: 'Configure engagement' });
+    const configure = screen.getByRole('button', { name: 'Settings' });
     configure.focus();
     fireEvent.click(configure);
     expect(screen.getByRole('dialog', { name: 'Configure engagement' })).toBeInTheDocument();
@@ -269,7 +326,10 @@ describe('LongTermHealthReport', () => {
     expect(screen.getByText(/15 of 45 reliable sessions use legacy roster evidence \(33%\)/)).toBeInTheDocument();
     expect(screen.getByText(/Colour is a visual aid; every tier is also identified by name/)).toBeInTheDocument();
     expect(screen.getByText(/Active rules: Committed ≥ 60%; Connected 20–59%; Occasional < 20%/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Configure engagement' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Thirteen four-week buckets/)).toHaveClass('dark:text-gray-400');
+    expect(screen.getByRole('button', { name: /Primary standard — average 30/ })).toHaveClass('dark:text-indigo-300');
+    expect(screen.getByText(/held sessions were excluded/)).toHaveClass('dark:bg-amber-950/50', 'dark:text-amber-200');
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
   });
 
   it('opens token-based drilldowns and appends cursor-paginated rows', async () => {
@@ -283,20 +343,68 @@ describe('LongTermHealthReport', () => {
       .mockResolvedValueOnce({ data: { rows: [{
         rowType: 'engagement_profile', individualId: 2, firstName: 'Blair', lastName: 'Baker', familyId: null,
         primary: { status: 'not_assigned', attended: 0, opportunities: 0, rate: null },
-        community: { status: 'irregular', attended: 1, opportunities: 10, rate: .1 },
+        community: { status: 'not_assigned', attended: 0, opportunities: 0, rate: null },
       }], nextCursor: null } } as never);
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
     fireEvent.click(await screen.findByRole('button', { name: /Committed: 4 of 7/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Committed people' });
-    expect(within(dialog).getByText('31 of 46 opportunities (67%)')).toBeInTheDocument();
-    expect(within(dialog).getByText('Establishing')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Load more' }));
-    expect(await within(dialog).findByText('Blair Baker')).toBeInTheDocument();
-    expect(within(dialog).getAllByText('Not assigned')).toHaveLength(2);
+    expect(screen.queryByRole('dialog', { name: 'Committed people' })).not.toBeInTheDocument();
+    const panel = await screen.findByRole('region', { name: 'Committed people' });
+    expect(within(panel).getByText('31 of 46 opportunities (67%)')).toBeInTheDocument();
+    expect(within(panel).getByText('Establishing')).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Load more' }));
+    expect(await within(panel).findByText('Blair Baker')).toBeInTheDocument();
+    expect(within(panel).getByRole('columnheader', { name: 'Community' })).toBeInTheDocument();
+    expect(within(panel).getAllByText('Not assigned')).toHaveLength(2);
     expect(reportsAPI.getEngagementPeople).toHaveBeenNthCalledWith(2, {
       segment: 'core-token', cursor: 'next-page', limit: 50,
     });
+  });
+
+  it('sorts an inline people list by surname and Primary attendance', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [
+      {
+        rowType: 'engagement_profile', individualId: 1, firstName: 'Jane', lastName: 'Zebra', familyId: null,
+        primary: { status: 'core', attended: 9, opportunities: 10, rate: .9 },
+        community: { status: 'not_assigned', attended: 0, opportunities: 0, rate: null },
+      },
+      {
+        rowType: 'engagement_profile', individualId: 2, firstName: 'Alex', lastName: 'Able', familyId: null,
+        primary: { status: 'casual', attended: 4, opportunities: 10, rate: .4 },
+        community: { status: 'not_assigned', attended: 0, opportunities: 0, rate: null },
+      },
+    ], nextCursor: null } } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    fireEvent.click(await screen.findByRole('button', { name: /Committed: 4 of 7/ }));
+    const panel = await screen.findByRole('region', { name: 'Committed people' });
+
+    expect(within(panel).getAllByRole('rowheader').map((row) => row.textContent)).toEqual(['Alex Able', 'Jane Zebra']);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sort by surname descending' }));
+    expect(within(panel).getAllByRole('rowheader').map((row) => row.textContent)).toEqual(['Jane Zebra', 'Alex Able']);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sort by Primary attendance descending' }));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sort by Primary attendance ascending' }));
+    expect(within(panel).getAllByRole('rowheader').map((row) => row.textContent)).toEqual(['Alex Able', 'Jane Zebra']);
+  });
+
+  it('shows the previous Primary tier and four-week change window for Lower movement', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [{
+      rowType: 'engagement_profile', individualId: 1, firstName: 'Alex', lastName: 'Able', familyId: null,
+      primary: { status: 'casual', attended: 4, opportunities: 10, rate: .4 },
+      previousPrimary: { status: 'core', attended: 8, opportunities: 10, rate: .8 },
+      community: { status: 'not_assigned', attended: 0, opportunities: 0, rate: null },
+    }], nextCursor: null } } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+    fireEvent.click(await screen.findByRole('button', { name: '1 Lower' }));
+    const panel = await screen.findByRole('region', { name: 'Lower movement' });
+
+    expect(within(panel).getByRole('columnheader', { name: '52 weeks ending 16 Aug 2026' })).toBeInTheDocument();
+    expect(within(panel).getByRole('columnheader', { name: '52 weeks ending 19 July 2026' })).toBeInTheDocument();
+    expect(within(panel).getByText('Committed')).toBeInTheDocument();
+    expect(within(panel).queryByText('Primary tier changed within the last 4 completed weeks.')).not.toBeInTheDocument();
   });
 
   it('clears old rules and drilldown tokens after save before refreshing, and fails closed if refresh fails', async () => {
@@ -307,7 +415,7 @@ describe('LongTermHealthReport', () => {
       ...settings, coreMinimum: 65, calculationRulesVersion: 3,
     } } } as never);
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Configure engagement' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
     fireEvent.change(screen.getByLabelText('Core minimum'), { target: { value: '65' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save engagement settings' }));
 
@@ -317,10 +425,10 @@ describe('LongTermHealthReport', () => {
     expect(screen.queryByText(/showing saved data/i)).not.toBeInTheDocument();
   });
 
-  it('traps focus in settings, closes on Escape, and restores the Configure engagement trigger', async () => {
+  it('traps focus in settings, closes on Escape, and restores the Settings trigger', async () => {
     vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    const trigger = await screen.findByRole('button', { name: 'Configure engagement' });
+    const trigger = await screen.findByRole('button', { name: 'Settings' });
     trigger.focus();
     fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Configure engagement' });
@@ -334,21 +442,21 @@ describe('LongTermHealthReport', () => {
     expect(trigger).toHaveFocus();
   });
 
-  it('traps focus in a drilldown, closes on Escape, and restores its segment trigger', async () => {
+  it('traps focus in a session drilldown, closes on Escape, and restores its trigger', async () => {
     vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
-    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
+    vi.mocked(reportsAPI.getEngagementSessions).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    const trigger = await screen.findByRole('button', { name: /Committed: 4 of 7/ });
+    const trigger = await screen.findByRole('button', { name: /Primary standard — average 30/ });
     trigger.focus();
     fireEvent.click(trigger);
-    const dialog = screen.getByRole('dialog', { name: 'Committed people' });
+    const dialog = await screen.findByRole('dialog', { name: 'Primary standard sessions' });
     const close = within(dialog).getByRole('button', { name: 'Close details' });
     await waitFor(() => expect(close).toHaveFocus());
 
     fireEvent.keyDown(dialog, { key: 'Tab' });
     expect(close).toHaveFocus();
     fireEvent.keyDown(dialog, { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Committed people' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Primary standard sessions' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 });

@@ -14,6 +14,7 @@ const { readDrilldownToken } = require('./drilldownTokens');
 const {
   summarizeEngagementProfiles,
   buildEngagementOverview,
+  engagementRows,
   listEngagementPeople,
   listEngagementSessions,
 } = require('./overview');
@@ -140,6 +141,22 @@ test('summarizes classified-only distribution, four-way movement, and the establ
     kind: 'people',
     now: '2026-08-17T01:00:00.000Z',
   }).selector, { type: 'primary_status', status: 'core' });
+});
+
+test('includes the previous Primary tier for Higher and Lower people lists', () => {
+  const current = new Map([
+    [1, profile(1, axis('casual', 4, 8), axis('not_assigned'))],
+  ]);
+  const comparison = new Map([
+    [1, profile(1, axis('core', 8, 8), axis('not_assigned'))],
+  ]);
+
+  const rows = engagementRows({ profiles: { current, comparison } }, {
+    type: 'movement', direction: 'lower',
+  });
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].previousPrimary, axis('core', 8, 8));
 });
 
 async function insertPerson(churchId, firstName, lastName, peopleType = 'regular') {

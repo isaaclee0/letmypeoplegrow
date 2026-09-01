@@ -626,16 +626,25 @@ function movementDirection(current, comparison) {
 function engagementRows(state, selector) {
   const rows = [];
   for (const profile of state.profiles.current.values()) {
+    const comparison = state.profiles.comparison.get(profile.individualId);
     let include = false;
     if (selector.type === 'primary_status') include = profile.primary.status === selector.status;
     else if (selector.type === 'movement') {
-      include = movementDirection(profile, state.profiles.comparison.get(profile.individualId))
-        === selector.direction;
+      include = movementDirection(profile, comparison) === selector.direction;
     } else if (selector.type === 'matrix') {
       include = profile.primary.status === selector.primaryTier
         && profile.community.status === selector.communityTier;
     }
-    if (include) rows.push({ rowType: 'engagement_profile', ...profile });
+    if (include) {
+      rows.push({
+        rowType: 'engagement_profile',
+        ...profile,
+        ...(selector.type === 'movement'
+          && (selector.direction === 'higher' || selector.direction === 'lower')
+          ? { previousPrimary: comparison.primary }
+          : {}),
+      });
+    }
   }
   return rows;
 }
@@ -797,6 +806,7 @@ async function listEngagementSessions(churchId, { series, cursor, limit } = {}) 
 module.exports = {
   MAX_LIMIT,
   summarizeEngagementProfiles,
+  engagementRows,
   buildEngagementOverview,
   listEngagementPeople,
   listEngagementSessions,

@@ -229,6 +229,7 @@ describe('ReportsPage selected period workspace', () => {
     fireEvent.click(longTermTab);
 
     expect(longTermTab).toHaveAttribute('aria-selected', 'true');
+    expect(longTermTab).toHaveClass('dark:bg-primary-500/10');
     expect(selectedPeriodPanel).toHaveAttribute('hidden');
     expect(longTermPanel).not.toHaveAttribute('hidden');
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load long-term health');

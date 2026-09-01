@@ -69,7 +69,7 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
           ))}
         </ul>
         {settings.gatheringRoles.some(({ attendanceType }) => attendanceType === 'headcount') && (
-          <p className="mt-2 text-xs text-amber-700">Headcount gatherings do not create person-level tiers; their role affects aggregate trends only.</p>
+          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Headcount gatherings do not create person-level tiers; their role affects aggregate trends only.</p>
         )}
       </section>
     );
@@ -112,31 +112,31 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
     <section className="space-y-6" aria-labelledby="configure-engagement-heading">
       <div>
         <h2 id="configure-engagement-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Configure engagement</h2>
-        <p className="mt-1 text-sm text-gray-500">Changes to thresholds and roles are saved together and reports refresh under the new rules.</p>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Changes to thresholds and roles are saved together and reports refresh under the new rules.</p>
       </div>
       <fieldset>
-        <legend className="font-semibold">Tier rules</legend>
+        <legend className="font-semibold text-gray-900 dark:text-gray-100">Tier rules</legend>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <label className="text-sm">Core minimum
-            <input aria-label="Core minimum" type="number" min="0" max="100" value={form.coreMinimum} onChange={(event) => setForm({ ...form, coreMinimum: Number(event.target.value) })} className="mt-1 block w-full rounded border border-gray-300 p-2 dark:bg-gray-900" />
+          <label className="text-sm text-gray-900 dark:text-gray-100">Core minimum
+            <input aria-label="Core minimum" type="number" min="0" max="100" value={form.coreMinimum} onChange={(event) => setForm({ ...form, coreMinimum: Number(event.target.value) })} className="mt-1 block w-full rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
           </label>
-          <label className="text-sm">Casual minimum
-            <input aria-label="Casual minimum" type="number" min="0" max="100" value={form.casualMinimum} onChange={(event) => setForm({ ...form, casualMinimum: Number(event.target.value) })} className="mt-1 block w-full rounded border border-gray-300 p-2 dark:bg-gray-900" />
+          <label className="text-sm text-gray-900 dark:text-gray-100">Casual minimum
+            <input aria-label="Casual minimum" type="number" min="0" max="100" value={form.casualMinimum} onChange={(event) => setForm({ ...form, casualMinimum: Number(event.target.value) })} className="mt-1 block w-full rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
           </label>
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           {TIER_KEYS.map((tier) => (
             <div key={tier} className="rounded border border-gray-200 p-3 dark:border-gray-700">
-              <label className="text-sm">{tier[0].toUpperCase() + tier.slice(1)} label
-                <input aria-label={`${tier[0].toUpperCase() + tier.slice(1)} label`} value={form.tiers[tier].label} onChange={(event) => updateTier(tier, 'label', event.target.value)} className="mt-1 block w-full rounded border border-gray-300 p-2 dark:bg-gray-900" />
+              <label className="text-sm text-gray-900 dark:text-gray-100">{tier[0].toUpperCase() + tier.slice(1)} label
+                <input aria-label={`${tier[0].toUpperCase() + tier.slice(1)} label`} value={form.tiers[tier].label} onChange={(event) => updateTier(tier, 'label', event.target.value)} className="mt-1 block w-full rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
               </label>
-              <label className="mt-3 block text-sm">{tier[0].toUpperCase() + tier.slice(1)} colour
+              <label className="mt-3 block text-sm text-gray-900 dark:text-gray-100">{tier[0].toUpperCase() + tier.slice(1)} colour
                 <input aria-label={`${tier[0].toUpperCase() + tier.slice(1)} colour`} type="color" value={form.tiers[tier].colour} onChange={(event) => updateTier(tier, 'colour', event.target.value)} className="mt-1 h-10 w-full" />
               </label>
             </div>
           ))}
         </div>
-        <div className="mt-4 rounded bg-gray-50 p-3 text-sm dark:bg-gray-900">
+        <div className="mt-4 rounded bg-gray-50 p-3 text-sm text-gray-700 dark:bg-gray-900 dark:text-gray-300">
           <p>The exact opportunity percentage is used; monthly counts are examples only.</p>
           <ul className="mt-2 list-disc pl-5">
             <li>Weekly: 31 of 52 is 60%</li>
@@ -146,7 +146,7 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
         </div>
       </fieldset>
       <fieldset>
-        <legend className="font-semibold">Gathering roles</legend>
+        <legend className="font-semibold text-gray-900 dark:text-gray-100">Gathering roles</legend>
         <div className="mt-2 space-y-1 text-sm text-gray-600 dark:text-gray-300">
           <p>Primary combines alternative services into one opportunity per person each week.</p>
           <p>Community treats each eligible session as a separate opportunity.</p>
@@ -157,13 +157,13 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
             const gathering = gatheringById.get(assignment.gatheringTypeId);
             const name = gathering?.name || `Gathering ${assignment.gatheringTypeId}`;
             return (
-              <div key={assignment.gatheringTypeId} className="rounded border border-gray-200 p-3 dark:border-gray-700 sm:flex sm:items-center sm:justify-between sm:gap-4">
+              <div key={assignment.gatheringTypeId} className="rounded border border-gray-200 p-3 text-gray-900 dark:border-gray-700 dark:text-gray-100 sm:flex sm:items-center sm:justify-between sm:gap-4">
                 <div>
                   <span className="font-medium">{name}</span>{' '}
-                  {gathering && !gathering.isActive && <span className="rounded bg-gray-100 px-2 py-0.5 text-xs">Inactive</span>}
-                  {gathering?.attendanceType === 'headcount' && <p className="mt-1 text-xs text-amber-700">Headcount gatherings cannot create person-level tiers; their role affects aggregate trends only.</p>}
+                  {gathering && !gathering.isActive && <span className="rounded bg-gray-100 px-2 py-0.5 text-xs dark:bg-gray-700 dark:text-gray-200">Inactive</span>}
+                  {gathering?.attendanceType === 'headcount' && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Headcount gatherings cannot create person-level tiers; their role affects aggregate trends only.</p>}
                 </div>
-                <select aria-label={`Role for ${name}`} value={assignment.role || ''} onChange={(event) => updateRole(assignment.gatheringTypeId, (event.target.value || null) as EngagementGatheringRole)} className="mt-2 rounded border border-gray-300 p-2 dark:bg-gray-900 sm:mt-0">
+                <select aria-label={`Role for ${name}`} value={assignment.role || ''} onChange={(event) => updateRole(assignment.gatheringTypeId, (event.target.value || null) as EngagementGatheringRole)} className="mt-2 rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 sm:mt-0">
                   <option value="">Unclassified</option><option value="primary">Primary</option><option value="community">Community</option><option value="other">Other</option>
                 </select>
               </div>
@@ -171,13 +171,13 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
           })}
         </div>
       </fieldset>
-      <div className="flex flex-wrap gap-3 text-sm">
+      <div className="flex flex-wrap gap-3 text-sm text-gray-700 dark:text-gray-300">
         <span>{settings.assignmentPreview.primaryAssigned} Primary assigned</span>
         <span>{settings.assignmentPreview.communityAssigned} Community assigned</span>
         <span>{settings.assignmentPreview.primaryNotAssigned} Primary not assigned</span>
       </div>
-      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-      {saved && <p role="status" className="text-sm text-green-700">Settings saved. Long-term health has been refreshed.</p>}
+      {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{error}</p>}
+      {saved && <p role="status" className="text-sm text-green-700 dark:text-green-300">Settings saved. Long-term health has been refreshed.</p>}
       <button type="button" disabled={saving} onClick={() => void save()} className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
         {saving ? 'Saving…' : 'Save engagement settings'}
       </button>

@@ -215,6 +215,7 @@ export interface EngagementProfileDrilldownRow {
   lastName: string;
   familyId: number | null;
   primary: EngagementAxisStatus;
+  previousPrimary?: EngagementAxisStatus;
   community: EngagementAxisStatus;
 }
 export interface EngagementAttendancePersonDrilldownRow {

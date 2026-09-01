@@ -50,7 +50,7 @@ const ReportTabs: React.FC<ReportTabsProps> = ({ activeTab, onChange }) => {
             onKeyDown={(event) => handleKeyDown(event, index)}
             className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
               selected
-                ? 'border-primary-600 text-primary-700 dark:border-primary-400 dark:text-primary-300'
+                ? 'border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-500/10 dark:text-primary-200'
                 : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-200'
             }`}
           >
