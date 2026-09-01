@@ -239,6 +239,29 @@ test('expires an unsupported candidate at its thirteenth eligible completed week
   assert.deepEqual(result.nextState, state({ lastEvaluatedWeekEnd: '2026-09-06' }));
 });
 
+test('expires a missed-boundary candidate without using late facts to confirm it', () => {
+  const result = evaluate({
+    completedWeekEnd: '2026-09-13', calculatedStatus: 'core', calculatedEvidence: evidence(6, 10),
+    previousState: state({ candidateTier: 'core', candidateDirection: 'higher', candidateStartedWeekEnd: '2026-06-07', candidateFinalWeekEnd: '2026-09-06' }),
+    datedOpportunities: Array.from({ length: 8 }, () => fact('2026-09-08', true)),
+  });
+
+  assert.equal(result.outcome, 'expired');
+  assert.equal(result.transition, null);
+  assert.deepEqual(result.nextState, state({ lastEvaluatedWeekEnd: '2026-09-13' }));
+});
+
+test('expires a missed-boundary candidate before a target change can restart it', () => {
+  const result = evaluate({
+    completedWeekEnd: '2026-09-13', calculatedStatus: 'irregular', calculatedEvidence: evidence(1, 10),
+    previousState: state({ candidateTier: 'core', candidateDirection: 'higher', candidateStartedWeekEnd: '2026-06-07', candidateFinalWeekEnd: '2026-09-06' }),
+  });
+
+  assert.equal(result.outcome, 'expired');
+  assert.equal(result.transition, null);
+  assert.deepEqual(result.nextState, state({ lastEvaluatedWeekEnd: '2026-09-13' }));
+});
+
 test('allows a later completed week to restart after expiry', () => {
   const result = evaluate({
     completedWeekEnd: '2026-09-13', calculatedStatus: 'core', calculatedEvidence: evidence(6, 10),

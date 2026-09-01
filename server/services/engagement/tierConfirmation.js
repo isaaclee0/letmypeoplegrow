@@ -128,6 +128,18 @@ function evaluateTierConfirmation({
     };
   }
 
+  if (completedWeekEnd > previousState.candidateFinalWeekEnd) {
+    return {
+      nextState: nextState({
+        rulesVersion,
+        establishedTier: previousState.establishedTier,
+        completedWeekEnd,
+      }),
+      transition: null,
+      outcome: 'expired',
+    };
+  }
+
   if (calculatedTier === previousState.establishedTier) {
     return {
       nextState: nextState({
