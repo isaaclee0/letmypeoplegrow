@@ -19,6 +19,7 @@ import {
 } from '../../services/engagementReportCache';
 import EngagementDrilldown from './EngagementDrilldown';
 import EngagementMatrix from './EngagementMatrix';
+import EngagementMovementPanel from './EngagementMovementPanel';
 import EngagementPeoplePanel from './EngagementPeoplePanel';
 import EngagementSettings from './EngagementSettings';
 import { percentage } from './EngagementEvidence';
@@ -40,7 +41,7 @@ interface OpenDrilldown {
 interface OpenPeoplePanel {
   token: string;
   title: string;
-  placement: 'distribution' | 'movement' | 'matrix' | 'visitors';
+  placement: 'distribution' | 'matrix' | 'visitors';
 }
 
 function formatDate(date: string): string {
@@ -53,7 +54,13 @@ function people(count: number): string {
 }
 
 function seriesName(role: string, attendanceType: string): string {
-  return `${role[0].toUpperCase()}${role.slice(1)} ${attendanceType}`;
+  const labels: Record<string, string> = {
+    primary: 'Primary',
+    community: 'Other participation',
+    other: 'Excluded',
+    unclassified: 'Unclassified',
+  };
+  return `${labels[role] || role} ${attendanceType}`;
 }
 
 function darkModeIsActive(): boolean {
@@ -114,6 +121,10 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
 
   const openPeople = (token: string, title: string, placement: OpenPeoplePanel['placement']) => setPeoplePanel({ token, title, placement });
   const openSessions = (token: string, title: string) => setSessionDrilldown({ kind: 'sessions', token, title });
+  const loadMovementPeople = useCallback(async (token: string, cursor?: string) => {
+    const response = await reportsAPI.getEngagementPeople({ segment: token, cursor, limit: 50 });
+    return response.data;
+  }, []);
 
   const distributionData = useMemo(() => overview ? ({
     labels: overview.primaryDistribution.classified.tiers.map((tier) => tier.label),
@@ -189,10 +200,6 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
         key={peoplePanel.token}
         {...peoplePanel}
         settings={settings}
-        movementWindow={placement === 'movement' ? {
-          currentEnd: formatDate(overview.window.currentEnd),
-          previousEnd: formatDate(overview.window.comparisonEnd),
-        } : undefined}
         onClose={() => setPeoplePanel(null)}
       />
     : null;
@@ -247,6 +254,13 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
         <>
           {!overview.setup.hasPrimaryAssignments && <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">No active regulars have a Primary assignment. Assign people to an active standard Primary gathering to build profiles.</p>}
 
+          {overview.baseline.pending && (
+            <aside className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100" aria-label="Engagement baseline pending">
+              <p className="font-semibold">Engagement baseline is being established.</p>
+              <p className="mt-1">Calculated tiers are shown temporarily. No movement is inferred from this recalculation; movement will appear after the baseline is established.</p>
+            </aside>
+          )}
+
           <section className="rounded-lg bg-white p-5 shadow dark:bg-gray-800" aria-labelledby="primary-distribution-heading">
             <h2 id="primary-distribution-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Primary tier distribution</h2>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Among {denominator} classified active regulars.</p>
@@ -265,16 +279,7 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
             {renderPeoplePanel('distribution')}
           </section>
 
-          <section className="rounded-lg bg-white p-5 shadow dark:bg-gray-800" aria-labelledby="movement-heading">
-            <h2 id="movement-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Recent Primary movement</h2>
-            <div className="mt-3 grid gap-3 sm:grid-cols-4">
-              {Object.entries(overview.movement.categories).map(([key, category]) => {
-                const labels: Record<string, string> = { higher: 'Higher', same: 'Unchanged', lower: 'Lower', nonComparable: 'Not comparable' };
-                return <button key={key} type="button" onClick={() => openPeople(category.peopleToken, `${labels[key]} movement`, 'movement')} className="rounded border border-gray-200 p-3 text-left text-gray-900 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700"><span className="block text-2xl font-semibold">{category.count}</span>{labels[key]}</button>;
-              })}
-            </div>
-            {renderPeoplePanel('movement')}
-          </section>
+          <EngagementMovementPanel movement={overview.tierMovement} settings={settings} loadPeople={loadMovementPeople} />
 
           <EngagementMatrix matrix={overview.matrix} labels={{ core: settings.tiers.core.label, casual: settings.tiers.casual.label, irregular: settings.tiers.irregular.label }} onOpen={(token, title) => openPeople(token, title, 'matrix')} panel={renderPeoplePanel('matrix')} />
 

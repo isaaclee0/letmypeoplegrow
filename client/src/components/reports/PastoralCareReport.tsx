@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS: EngagementSettingsDto = {
 
 const INSIGHT_LABELS: Record<PastoralInsightDto['type'], string> = {
   primary_decline: 'Recent Primary tier decline',
-  community_primary_gap: 'Community-connected, Primary-irregular',
+  community_primary_gap: 'Other participation-connected, Primary-irregular',
   visitor_next_step: 'Visitor next step',
   re_engagement: 'Re-engagement',
 };
@@ -75,7 +75,7 @@ function factualSummary(insight: PastoralInsightDto, settings: EngagementSetting
     return `Primary changed from ${tierLabel(evidenceString(insight, 'fromTier'), settings)} to ${tierLabel(evidenceString(insight, 'toTier'), settings)}`;
   }
   if (insight.type === 'community_primary_gap') {
-    return `Community is ${tierLabel(evidenceString(insight, 'communityTier'), settings)} while Primary is ${tierLabel(evidenceString(insight, 'primaryTier'), settings)}`;
+    return `Other participation is ${tierLabel(evidenceString(insight, 'communityTier'), settings)} while Primary is ${tierLabel(evidenceString(insight, 'primaryTier'), settings)}`;
   }
   if (insight.type === 'visitor_next_step') {
     const date = evidenceString(insight, 'firstPrimaryAttendanceDate');
@@ -266,7 +266,7 @@ const PastoralCareReport: React.FC<PastoralCareReportProps> = ({ churchId }) => 
                 <dl className="mt-4 grid gap-3 sm:grid-cols-2">
                   {(['primary', 'community'] as const).map((axis) => (
                     <div key={axis} className="rounded-lg bg-stone-50 p-3 dark:bg-gray-900">
-                      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{axis === 'primary' ? 'Primary' : 'Community'}</dt>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{axis === 'primary' ? 'Primary' : 'Other participation'}</dt>
                       <dd className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
                         <EngagementTierBadge status={insight.profiles[axis]} settings={settings} />
                         <EngagementEvidence status={insight.profiles[axis]} />

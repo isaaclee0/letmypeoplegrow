@@ -46,7 +46,7 @@ const settings = {
 };
 
 const overview = (overrides: Partial<EngagementOverviewDto> = {}): EngagementOverviewDto => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   churchId: 'church-a',
   window: {
     completedWeekEnd: '2026-08-16', sourceStart: '2025-07-21', sourceEnd: '2026-08-16',
@@ -55,6 +55,7 @@ const overview = (overrides: Partial<EngagementOverviewDto> = {}): EngagementOve
   },
   settings,
   setup: { hasPrimaryRole: true, hasStandardPrimaryRole: true, hasPrimaryAssignments: true },
+  baseline: { pending: false, pendingAxes: 0 },
   population: { activeRegulars: 10 },
   primaryDistribution: {
     classified: { denominator: 7, tiers: [
@@ -65,9 +66,17 @@ const overview = (overrides: Partial<EngagementOverviewDto> = {}): EngagementOve
     establishing: { count: 1, peopleToken: 'establishing-token' },
     notAssigned: { count: 2, peopleToken: 'unassigned-token' },
   },
-  movement: { denominator: 10, categories: {
-    higher: { count: 2, peopleToken: 'higher-token' }, same: { count: 5, peopleToken: 'same-token' },
-    lower: { count: 1, peopleToken: 'lower-token' }, nonComparable: { count: 2, peopleToken: 'nc-token' },
+  tierMovement: { recentWindowWeeks: 13, axes: {
+    primary: {
+      confirmingHigher: { count: 2, peopleToken: 'primary-higher' },
+      confirmingLower: { count: 1, peopleToken: 'primary-lower' },
+      confirmedRecently: { count: 3, peopleToken: 'primary-confirmed' },
+    },
+    community: {
+      confirmingHigher: { count: 4, peopleToken: 'other-higher' },
+      confirmingLower: { count: 5, peopleToken: 'other-lower' },
+      confirmedRecently: { count: 6, peopleToken: 'other-confirmed' },
+    },
   } },
   matrix: {
     classifiedOnBothAxes: 5,
@@ -317,9 +326,9 @@ describe('LongTermHealthReport', () => {
     expect(screen.getByRole('button', { name: /Committed: 4 of 7 classified people \(57%\)/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Establishing: 1 person' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not assigned: 2 people' })).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: /Occasional Primary, Committed Community: 2 people/ })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: /Occasional Primary, Committed Other participation: 2 people/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /18 Aug 2025 – 14 Sept 2025: Primary standard — average 30 across 4 held sessions; 42 unique people/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Community headcount — average 18 across 2 held sessions; unique reach is unavailable/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Other participation headcount — average 18 across 2 held sessions; unique reach is unavailable/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'First attended as a local visitor: 6 people' })).toBeInTheDocument();
     expect(screen.getByText(/exact historical conversion date is not known/i)).toBeInTheDocument();
     expect(screen.getByText(/45 of 50 held sessions had reliable person-level coverage \(90%\)/)).toBeInTheDocument();
@@ -354,7 +363,7 @@ describe('LongTermHealthReport', () => {
     expect(within(panel).getByText('Establishing')).toBeInTheDocument();
     fireEvent.click(within(panel).getByRole('button', { name: 'Load more' }));
     expect(await within(panel).findByText('Blair Baker')).toBeInTheDocument();
-    expect(within(panel).getByRole('columnheader', { name: 'Community' })).toBeInTheDocument();
+    expect(within(panel).getByRole('columnheader', { name: 'Other participation' })).toBeInTheDocument();
     expect(within(panel).getAllByText('Not assigned')).toHaveLength(2);
     expect(reportsAPI.getEngagementPeople).toHaveBeenNthCalledWith(2, {
       segment: 'core-token', cursor: 'next-page', limit: 50,
@@ -388,23 +397,36 @@ describe('LongTermHealthReport', () => {
     expect(within(panel).getAllByRole('rowheader').map((row) => row.textContent)).toEqual(['Alex Able', 'Jane Zebra']);
   });
 
-  it('shows the previous Primary tier and four-week change window for Lower movement', async () => {
+  it('loads inline confirmation evidence from the selected v2 movement token', async () => {
     vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
     vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [{
-      rowType: 'engagement_profile', individualId: 1, firstName: 'Alex', lastName: 'Able', familyId: null,
-      primary: { status: 'casual', attended: 4, opportunities: 10, rate: .4 },
-      previousPrimary: { status: 'core', attended: 8, opportunities: 10, rate: .8 },
-      community: { status: 'not_assigned', attended: 0, opportunities: 0, rate: null },
+      rowType: 'engagement_confirmation', individualId: 1, firstName: 'Alex', lastName: 'Able', familyId: null,
+      axis: 'primary', direction: 'higher', establishedTier: 'casual', candidateTier: 'core',
+      observedOpportunities: 6, attended: 4, rate: 4 / 6,
+      candidateStartedWeekEnd: '2026-06-28', candidateFinalWeekEnd: '2026-09-27', currentWeek: 7,
     }], nextCursor: null } } as never);
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    fireEvent.click(await screen.findByRole('button', { name: '1 Lower' }));
-    const panel = await screen.findByRole('region', { name: 'Lower movement' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirming higher, 2 people' }));
+    const panel = await screen.findByRole('region', { name: 'Primary — Confirming higher' });
 
-    expect(within(panel).getByRole('columnheader', { name: '52 weeks ending 16 Aug 2026' })).toBeInTheDocument();
-    expect(within(panel).getByRole('columnheader', { name: '52 weeks ending 19 July 2026' })).toBeInTheDocument();
-    expect(within(panel).getByText('Committed')).toBeInTheDocument();
-    expect(within(panel).queryByText('Primary tier changed within the last 4 completed weeks.')).not.toBeInTheDocument();
+    expect(within(panel).getByText('Connected → Committed')).toBeInTheDocument();
+    expect(within(panel).getByText('6/8 opportunities observed')).toBeInTheDocument();
+    expect(reportsAPI.getEngagementPeople).toHaveBeenCalledWith({
+      segment: 'primary-higher', cursor: undefined, limit: 50,
+    });
+  });
+
+  it('labels calculated tiers as temporary while a baseline is pending without claiming movement', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview({
+      baseline: { pending: true, pendingAxes: 3 },
+    }) } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+
+    expect(await screen.findByText(/calculated tiers are shown temporarily/i)).toBeInTheDocument();
+    expect(screen.getByText(/movement will appear after the baseline is established/i)).toBeInTheDocument();
+    expect(screen.queryByText(/people moved|tiers changed/i)).not.toBeInTheDocument();
   });
 
   it('clears old rules and drilldown tokens after save before refreshing, and fails closed if refresh fails', async () => {

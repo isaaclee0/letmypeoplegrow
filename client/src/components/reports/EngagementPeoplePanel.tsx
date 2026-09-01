@@ -8,7 +8,6 @@ interface EngagementPeoplePanelProps {
   token: string;
   title: string;
   settings: EngagementSettingsDto;
-  movementWindow?: { currentEnd: string; previousEnd: string };
   onClose: () => void;
 }
 
@@ -24,7 +23,7 @@ function primaryRate(row: EngagementPersonDrilldownRow): number | null {
   return row.rowType === 'engagement_profile' ? row.primary.rate : null;
 }
 
-const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, title, settings, movementWindow, onClose }) => {
+const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, title, settings, onClose }) => {
   const [rows, setRows] = useState<EngagementPersonDrilldownRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,7 +48,6 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
   useEffect(() => { void load(); }, [load]);
 
   const showCommunity = useMemo(() => rows.some((row) => row.rowType === 'engagement_profile' && row.community.status !== 'not_assigned'), [rows]);
-  const showPreviousPrimary = useMemo(() => rows.some((row) => row.rowType === 'engagement_profile' && row.previousPrimary), [rows]);
   const sortedRows = useMemo(() => [...rows].sort((left, right) => {
     if (sortKey === 'surname') return surnameCompare(left, right) * (sortDirection === 'ascending' ? 1 : -1);
     const leftRate = primaryRate(left);
@@ -84,9 +82,8 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
           <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-600 dark:bg-gray-900/60 dark:text-gray-400">
             <tr>
               <th scope="col" aria-sort={sortKey === 'surname' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('surname')} aria-label={`Sort by surname ${nextDirection('surname')}`} className="font-medium hover:underline">Surname</button></th>
-              <th scope="col" aria-sort={sortKey === 'attendance' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('attendance')} aria-label={`Sort by Primary attendance ${nextDirection('attendance')}`} className="font-medium hover:underline">{showPreviousPrimary && movementWindow ? `52 weeks ending ${movementWindow.currentEnd}` : 'Primary attendance'}</button></th>
-              {showPreviousPrimary && <th scope="col" className="px-4 py-2 font-medium">{movementWindow ? `52 weeks ending ${movementWindow.previousEnd}` : 'Previous Primary'}</th>}
-              {showCommunity && <th scope="col" className="px-4 py-2 font-medium">Community</th>}
+              <th scope="col" aria-sort={sortKey === 'attendance' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('attendance')} aria-label={`Sort by Primary attendance ${nextDirection('attendance')}`} className="font-medium hover:underline">Primary attendance</button></th>
+              {showCommunity && <th scope="col" className="px-4 py-2 font-medium">Other participation</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -96,13 +93,12 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
                 return <tr key={`${row.rowType}-${row.individualId}`} className="text-gray-900 dark:text-gray-100">
                   <th scope="row" className="whitespace-nowrap px-4 py-2 text-left font-medium">{name}</th>
                   <td className="whitespace-nowrap px-4 py-2"><EngagementTierBadge status={row.primary} settings={settings} /> <EngagementEvidence status={row.primary} /></td>
-                  {showPreviousPrimary && <td className="whitespace-nowrap px-4 py-2">{row.previousPrimary ? <><EngagementTierBadge status={row.previousPrimary} settings={settings} /> <EngagementEvidence status={row.previousPrimary} /></> : '—'}</td>}
                   {showCommunity && <td className="whitespace-nowrap px-4 py-2">{row.community.status === 'not_assigned' ? '—' : <><EngagementTierBadge status={row.community} settings={settings} /> <EngagementEvidence status={row.community} /></>}</td>}
                 </tr>;
               }
               return <tr key={`${row.rowType}-${row.individualId}`} className="text-gray-900 dark:text-gray-100">
                 <th scope="row" className="whitespace-nowrap px-4 py-2 text-left font-medium">{name}</th>
-                <td className="px-4 py-2" colSpan={(showPreviousPrimary ? 1 : 0) + (showCommunity ? 1 : 0) + 1}>{row.rowType === 'visitor_journey' ? `First attendance ${row.firstAttendanceDate}` : 'Attendance record'}</td>
+                <td className="px-4 py-2" colSpan={(showCommunity ? 1 : 0) + 1}>{row.rowType === 'visitor_journey' ? `First attendance ${row.firstAttendanceDate}` : 'Attendance record'}</td>
               </tr>;
             })}
           </tbody>

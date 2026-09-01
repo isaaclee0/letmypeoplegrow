@@ -15,7 +15,7 @@ interface EngagementSettingsProps {
 
 const TIER_KEYS: EngagementTierKey[] = ['core', 'casual', 'irregular'];
 const ROLE_LABELS: Record<string, string> = {
-  primary: 'Primary', community: 'Community', other: 'Other', unclassified: 'Unclassified',
+  primary: 'Primary', community: 'Other participation', other: 'Excluded', unclassified: 'Unclassified',
 };
 
 function rulesSummary(settings: EngagementSettingsDto): string {
@@ -149,8 +149,8 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
         <legend className="font-semibold text-gray-900 dark:text-gray-100">Gathering roles</legend>
         <div className="mt-2 space-y-1 text-sm text-gray-600 dark:text-gray-300">
           <p>Primary combines alternative services into one opportunity per person each week.</p>
-          <p>Community treats each eligible session as a separate opportunity.</p>
-          <p>Other remains in attendance trends but not person tiers.</p>
+          <p>Other participation treats each eligible session as a separate opportunity.</p>
+          <p>Excluded gatherings remain in attendance trends but not person tiers.</p>
         </div>
         <div className="mt-4 space-y-3">
           {form.gatheringRoles.map((assignment) => {
@@ -164,7 +164,7 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
                   {gathering?.attendanceType === 'headcount' && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Headcount gatherings cannot create person-level tiers; their role affects aggregate trends only.</p>}
                 </div>
                 <select aria-label={`Role for ${name}`} value={assignment.role || ''} onChange={(event) => updateRole(assignment.gatheringTypeId, (event.target.value || null) as EngagementGatheringRole)} className="mt-2 rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 sm:mt-0">
-                  <option value="">Unclassified</option><option value="primary">Primary</option><option value="community">Community</option><option value="other">Other</option>
+                  <option value="">Unclassified</option><option value="primary">Primary</option><option value="community">Other participation</option><option value="other">Excluded</option>
                 </select>
               </div>
             );
@@ -173,7 +173,7 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
       </fieldset>
       <div className="flex flex-wrap gap-3 text-sm text-gray-700 dark:text-gray-300">
         <span>{settings.assignmentPreview.primaryAssigned} Primary assigned</span>
-        <span>{settings.assignmentPreview.communityAssigned} Community assigned</span>
+        <span>{settings.assignmentPreview.communityAssigned} Other participation assigned</span>
         <span>{settings.assignmentPreview.primaryNotAssigned} Primary not assigned</span>
       </div>
       {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{error}</p>}

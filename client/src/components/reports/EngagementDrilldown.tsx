@@ -65,7 +65,7 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
                 {row.rowType === 'engagement_profile' && (
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
                     <div>Primary: <EngagementTierBadge status={row.primary} settings={settings} /> <EngagementEvidence status={row.primary} /></div>
-                    {row.community.status !== 'not_assigned' && <div>Community: <EngagementTierBadge status={row.community} settings={settings} /> <EngagementEvidence status={row.community} /></div>}
+                    {row.community.status !== 'not_assigned' && <div>Other participation: <EngagementTierBadge status={row.community} settings={settings} /> <EngagementEvidence status={row.community} /></div>}
                   </div>
                 )}
                 {row.rowType === 'visitor_journey' && <div className="mt-1 text-sm">First attendance {row.firstAttendanceDate}</div>}

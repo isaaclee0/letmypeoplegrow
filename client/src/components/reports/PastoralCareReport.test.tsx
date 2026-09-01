@@ -165,7 +165,10 @@ describe('PastoralCareReport', () => {
     expect(within(decline).getByText(/Last attendance: 10 Aug 2026 at Sunday Morning/)).toBeInTheDocument();
 
     expect(within(screen.getByRole('article', { name: 'Blair Example' }))
-      .getByText('Community is Core while Primary is Irregular')).toBeInTheDocument();
+      .getByText('Other participation is Core while Primary is Irregular')).toBeInTheDocument();
+    expect(within(screen.getByRole('article', { name: 'Blair Example' }))
+      .getByText('Other participation-connected, Primary-irregular')).toBeInTheDocument();
+    expect(screen.queryByText(/^Community$/)).not.toBeInTheDocument();
     expect(within(screen.getByRole('article', { name: 'Casey Example' }))
       .getByText('First Primary attendance on 2 Aug 2026; no later Primary attendance')).toBeInTheDocument();
     const reEngagement = screen.getByRole('article', { name: 'Devon Example' });

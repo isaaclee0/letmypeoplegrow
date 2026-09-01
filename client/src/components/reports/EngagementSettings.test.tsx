@@ -33,7 +33,7 @@ describe('EngagementSettings', () => {
     expect(screen.getByText('Casual: 20% to 59%')).toBeInTheDocument();
     expect(screen.getByText(/^Sunday: Primary$/)).toBeInTheDocument();
     expect(screen.getByText('Youth: Unclassified (Inactive)')).toBeInTheDocument();
-    expect(screen.getByText('Conference: Other (Headcount)')).toBeInTheDocument();
+    expect(screen.getByText('Conference: Excluded (Headcount)')).toBeInTheDocument();
     expect(screen.getByText(/Headcount gatherings do not create person-level tiers/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save engagement settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
@@ -42,8 +42,8 @@ describe('EngagementSettings', () => {
   it('lets admins edit labels, colours, thresholds, and every gathering role with explanations', () => {
     render(<EngagementSettings settings={settings} canEdit onSaved={vi.fn()} />);
     expect(screen.getByText(/Primary combines alternative services into one opportunity per person each week/)).toBeInTheDocument();
-    expect(screen.getByText(/Community treats each eligible session as a separate opportunity/)).toBeInTheDocument();
-    expect(screen.getByText(/Other remains in attendance trends but not person tiers/)).toBeInTheDocument();
+    expect(screen.getByText(/Other participation treats each eligible session as a separate opportunity/)).toBeInTheDocument();
+    expect(screen.getByText(/Excluded gatherings remain in attendance trends but not person tiers/)).toBeInTheDocument();
     expect(screen.getByText('Youth')).toBeInTheDocument();
     expect(screen.getByText('Inactive')).toBeInTheDocument();
     expect(screen.getByText('Conference')).toBeInTheDocument();
@@ -52,11 +52,15 @@ describe('EngagementSettings', () => {
     expect(screen.getByLabelText('Core colour')).toHaveValue('#16a34a');
     expect(screen.getByLabelText('Role for Youth')).toBeInTheDocument();
     expect(screen.getByText('7 Primary assigned')).toBeInTheDocument();
-    expect(screen.getByText('3 Community assigned')).toBeInTheDocument();
+    expect(screen.getByText('3 Other participation assigned')).toBeInTheDocument();
     expect(screen.getByText('2 Primary not assigned')).toBeInTheDocument();
     expect(screen.getByText(/Weekly: 31 of 52 is 60%/)).toBeInTheDocument();
     expect(screen.getByText(/Fortnightly: 16 of 26 is 62%/)).toBeInTheDocument();
     expect(screen.getByText(/Monthly: 8 of 13 is 62%/)).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: 'Other participation' })).toHaveLength(3);
+    expect(screen.getAllByRole('option', { name: 'Excluded' })).toHaveLength(3);
+    expect(screen.queryByText(/^Community$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^Other$/ })).not.toBeInTheDocument();
   });
 
   it('blocks invalid thresholds before saving', async () => {
