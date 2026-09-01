@@ -166,9 +166,36 @@ async function retireSupersededRulesWithConnection(conn, churchId, rulesVersion)
   );
 }
 
-async function loadUnprocessedPrimaryTransitions(conn, churchId, throughWeekEnd) {
+async function retireSupersededPrimaryTransitionsWithConnection(
+  conn,
+  churchId,
+  rulesVersion,
+  throughWeekEnd,
+) {
+  const weekFilter = throughWeekEnd == null ? '' : 'AND confirmed_week_end <= ?';
+  const params = [churchId, rulesVersion];
+  if (throughWeekEnd != null) params.push(throughWeekEnd);
+  return conn.query(
+    `UPDATE engagement_tier_transitions
+     SET decline_event_id = NULL,
+         pastoral_processed_at = datetime('now')
+     WHERE church_id = ?
+       AND axis = 'primary'
+       AND pastoral_processed_at IS NULL
+       AND rules_version <> ?
+       ${weekFilter}`,
+    params,
+  );
+}
+
+async function loadUnprocessedPrimaryTransitions(
+  conn,
+  churchId,
+  rulesVersion,
+  throughWeekEnd,
+) {
   const weekFilter = throughWeekEnd == null ? '' : 'AND transition.confirmed_week_end <= ?';
-  const params = [churchId, churchId];
+  const params = [churchId, churchId, rulesVersion];
   if (throughWeekEnd != null) params.push(throughWeekEnd);
   return conn.query(
     `SELECT transition.id,
@@ -191,6 +218,7 @@ async function loadUnprocessedPrimaryTransitions(conn, churchId, throughWeekEnd)
      WHERE transition.church_id = ?
        AND transition.axis = 'primary'
        AND transition.pastoral_processed_at IS NULL
+       AND transition.rules_version = ?
        ${weekFilter}
      ORDER BY transition.confirmed_week_end, transition.id`,
     params,
@@ -295,9 +323,20 @@ async function processConfirmedPrimaryTransitions(churchId, { throughWeekEnd } =
   return Database.transactionForChurch(churchId, async (conn) => {
     const rulesVersion = await loadCurrentRulesVersion(conn, churchId);
     await retireSupersededRulesWithConnection(conn, churchId, rulesVersion);
-    const transitions = await loadUnprocessedPrimaryTransitions(conn, churchId, throughWeekEnd);
+    const retiredTransitions = await retireSupersededPrimaryTransitionsWithConnection(
+      conn,
+      churchId,
+      rulesVersion,
+      throughWeekEnd,
+    );
+    const transitions = await loadUnprocessedPrimaryTransitions(
+      conn,
+      churchId,
+      rulesVersion,
+      throughWeekEnd,
+    );
     const summary = {
-      transitionsProcessed: 0,
+      transitionsProcessed: retiredTransitions.affectedRows,
       eventsCreated: 0,
       eventsRecovered: 0,
       deliveriesCreated: 0,

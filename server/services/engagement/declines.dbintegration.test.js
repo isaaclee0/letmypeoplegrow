@@ -547,6 +547,102 @@ test('rules-version rollover retires only this church old-rule pastoral and deli
   });
 });
 
+test('stale Primary transitions retire durably while current rules process and Other stays pending', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const familyId = await seedFamily(churchId, 'Stale transitions');
+    const individualId = await seedPerson(churchId, fixture, { familyId });
+    await assignUser(churchId, familyId);
+    await Database.query(
+      `INSERT INTO engagement_settings (church_id, calculation_rules_version)
+       VALUES (?, 2)
+       ON CONFLICT(church_id) DO UPDATE SET calculation_rules_version = 2`,
+      [churchId],
+    );
+    const staleEligibleId = await seedTransition(churchId, individualId, {
+      confirmedWeekEnd: '2026-08-09',
+      rulesVersion: 1,
+    });
+    const staleFutureId = await seedTransition(churchId, individualId, {
+      fromTier: 'casual',
+      toTier: 'irregular',
+      confirmedWeekEnd: '2026-08-23',
+      rulesVersion: 1,
+    });
+    const otherParticipationId = await seedTransition(churchId, individualId, {
+      axis: 'community',
+      confirmedWeekEnd: '2026-08-09',
+      rulesVersion: 1,
+    });
+    const currentId = await seedTransition(churchId, individualId, {
+      confirmedWeekEnd: SUNDAY,
+      rulesVersion: 2,
+    });
+
+    assert.deepEqual(await declines.processConfirmedPrimaryTransitions(churchId, {
+      throughWeekEnd: SUNDAY,
+    }), {
+      transitionsProcessed: 2,
+      eventsCreated: 1,
+      eventsRecovered: 0,
+      deliveriesCreated: 1,
+    });
+    const persistedEvents = await events(churchId);
+    assert.equal(persistedEvents.length, 1);
+    assert.equal(persistedEvents[0].rulesVersion, 2);
+    assert.equal(persistedEvents[0].effectiveWeekEnd, SUNDAY);
+    const staleEligibleState = await transitionState(churchId, staleEligibleId);
+    assert.equal(staleEligibleState.pastoralProcessedAt != null, true);
+    assert.equal(staleEligibleState.declineEventId, null);
+    const currentState = await transitionState(churchId, currentId);
+    assert.equal(currentState.pastoralProcessedAt != null, true);
+    assert.equal(currentState.declineEventId, persistedEvents[0].id);
+    assert.deepEqual(await transitionState(churchId, staleFutureId), {
+      pastoralProcessedAt: null,
+      declineEventId: null,
+    });
+    assert.deepEqual(await transitionState(churchId, otherParticipationId), {
+      pastoralProcessedAt: null,
+      declineEventId: null,
+    });
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count
+       FROM engagement_decline_deliveries
+       WHERE church_id = ?`,
+      [churchId],
+    ))[0].count, 1);
+
+    assert.deepEqual(await declines.processConfirmedPrimaryTransitions(churchId, {
+      throughWeekEnd: SUNDAY,
+    }), {
+      transitionsProcessed: 0,
+      eventsCreated: 0,
+      eventsRecovered: 0,
+      deliveriesCreated: 0,
+    });
+    assert.deepEqual(await declines.processConfirmedPrimaryTransitions(churchId), {
+      transitionsProcessed: 1,
+      eventsCreated: 0,
+      eventsRecovered: 0,
+      deliveriesCreated: 0,
+    });
+    const staleFutureState = await transitionState(churchId, staleFutureId);
+    assert.equal(staleFutureState.pastoralProcessedAt != null, true);
+    assert.equal(staleFutureState.declineEventId, null);
+    assert.deepEqual(await transitionState(churchId, otherParticipationId), {
+      pastoralProcessedAt: null,
+      declineEventId: null,
+    });
+    assert.equal((await events(churchId)).length, 1);
+    assert.deepEqual(await declines.processConfirmedPrimaryTransitions(churchId), {
+      transitionsProcessed: 0,
+      eventsCreated: 0,
+      eventsRecovered: 0,
+      deliveriesCreated: 0,
+    });
+  });
+});
+
 test('the temporary wrapper confirms tiers before processing durable transitions', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedChurch(churchId);
