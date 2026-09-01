@@ -451,6 +451,12 @@ async function seedEstablishedTierActivity(churchId, regulars, converted) {
     toTier: 'irregular',
     confirmedWeekEnd: '2026-05-17',
   });
+  await insertTransition(churchId, regulars[2], 'primary', {
+    fromTier: 'core',
+    toTier: 'casual',
+    candidateStartedWeekEnd: '2026-05-31',
+    confirmedWeekEnd: '2026-08-02',
+  });
   await insertTransition(churchId, regulars[0], 'primary', {
     fromTier: 'casual',
     toTier: 'core',
@@ -531,19 +537,22 @@ async function measureOverviewQueries(churchId) {
   const originalQuery = Database.query;
   const originalQueryForChurch = Database.queryForChurch;
   let queryCount = 0;
+  let activityRows = null;
   Database.query = async (...args) => {
     queryCount += 1;
     return originalQuery.call(Database, ...args);
   };
   Database.queryForChurch = async (...args) => {
     queryCount += 1;
-    return originalQueryForChurch.call(Database, ...args);
+    const rows = await originalQueryForChurch.call(Database, ...args);
+    if (String(args[1]).includes('FROM engagement_tier_state')) activityRows = rows;
+    return rows;
   };
   try {
     const overview = await buildEngagementOverview(churchId, {
       asOf: '2026-08-16T14:00:00.000Z',
     });
-    return { overview, queryCount };
+    return { overview, queryCount, activityRows };
   } finally {
     Database.query = originalQuery;
     Database.queryForChurch = originalQueryForChurch;
@@ -778,6 +787,17 @@ test('uses established tiers and serves recomputed confirmation and recent trans
       confirmationEvidence: { attended: 1, opportunities: 8, rate: 0.125 },
     }]);
 
+    const primaryTransitionRows = await listEngagementPeople(churchId, {
+      segment: overview.tierMovement.axes.primary.confirmedRecently.peopleToken,
+    });
+    assert.deepEqual(
+      primaryTransitionRows.rows.map((row) => ({
+        individualId: row.individualId,
+        confirmedWeekEnd: row.confirmedWeekEnd,
+      })),
+      [{ individualId: fixture.regulars[0], confirmedWeekEnd: '2026-05-24' }],
+    );
+
     const retiredToken = createDrilldownToken({
       churchId,
       kind: 'people',
@@ -788,6 +808,40 @@ test('uses established tiers and serves recomputed confirmation and recent trans
     await assert.rejects(
       () => listEngagementPeople(churchId, { segment: retiredToken }),
       DrilldownTokenError,
+    );
+  });
+});
+
+test('bulk activity query excludes inactive regulars and visitors before materialization', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const inactive = await insertPerson(churchId, 'Inactive', 'Regular');
+    await Database.query(
+      `UPDATE individuals SET is_active = 0 WHERE church_id = ? AND id = ?`,
+      [churchId, inactive],
+    );
+    const visitor = await insertPerson(
+      churchId,
+      'Local',
+      'Visitor',
+      'local_visitor',
+    );
+    for (const individualId of [inactive, visitor]) {
+      await insertTierState(churchId, individualId, 'primary', {
+        establishedTier: 'casual',
+      });
+      await insertTransition(churchId, individualId, 'primary', {
+        confirmedWeekEnd: '2026-08-02',
+      });
+    }
+
+    const measured = await measureOverviewQueries(churchId);
+
+    assert.deepEqual(measured.activityRows, []);
+    assert.equal(measured.overview.population.activeRegulars, 0);
+    assert.equal(measured.overview.tierMovement.axes.primary.confirmedRecently.count, 0);
+    assert.ok(
+      measured.queryCount <= 12,
+      `expected bounded overview queries, received ${measured.queryCount}`,
     );
   });
 });

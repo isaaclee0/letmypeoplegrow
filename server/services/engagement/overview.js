@@ -97,6 +97,7 @@ function summarizeEngagementProfiles({
   });
 
   const currentIds = new Set(current.keys());
+  const establishedKeys = establishedAxisKeys(current);
   const movementAxes = Object.fromEntries(ENGAGEMENT_AXES.map((axis) => {
     const activeStates = tierStates.filter((state) => state.axis === axis
       && currentIds.has(state.individualId));
@@ -109,7 +110,7 @@ function summarizeEngagementProfiles({
       confirmingLower: confirmation('lower'),
       confirmedRecently: {
         count: recentTransitions.filter((transition) => transition.axis === axis
-          && currentIds.has(transition.individualId)).length,
+          && establishedKeys.has(tierStateKey(transition.individualId, axis))).length,
         peopleToken: peopleToken({
           type: 'transition', axis, recentWeeks: RECENT_TRANSITION_WEEKS,
         }),
@@ -519,15 +520,15 @@ async function loadTierActivity(churchId, rulesVersion, completedWeekEnd) {
     churchId,
     `SELECT 'state' AS rowKind,
             NULL AS activityId,
-            individual_id AS individualId,
-            axis,
-            rules_version AS rulesVersion,
-            established_tier AS establishedTier,
-            candidate_tier AS candidateTier,
-            candidate_direction AS candidateDirection,
-            candidate_started_week_end AS candidateStartedWeekEnd,
-            candidate_final_week_end AS candidateFinalWeekEnd,
-            last_evaluated_week_end AS lastEvaluatedWeekEnd,
+            state.individual_id AS individualId,
+            state.axis,
+            state.rules_version AS rulesVersion,
+            state.established_tier AS establishedTier,
+            state.candidate_tier AS candidateTier,
+            state.candidate_direction AS candidateDirection,
+            state.candidate_started_week_end AS candidateStartedWeekEnd,
+            state.candidate_final_week_end AS candidateFinalWeekEnd,
+            state.last_evaluated_week_end AS lastEvaluatedWeekEnd,
             NULL AS fromTier,
             NULL AS toTier,
             NULL AS confirmedWeekEnd,
@@ -537,39 +538,53 @@ async function loadTierActivity(churchId, rulesVersion, completedWeekEnd) {
             NULL AS confirmationAttended,
             NULL AS confirmationOpportunities,
             NULL AS confirmationRate
-     FROM engagement_tier_state
-     WHERE church_id = ?
-       AND rules_version = ?
+     FROM engagement_tier_state state
+     JOIN individuals state_person
+       ON state_person.id = state.individual_id
+      AND state_person.church_id = state.church_id
+      AND state_person.church_id = ?
+      AND state_person.is_active = 1
+      AND state_person.people_type = 'regular'
+     WHERE state.church_id = ?
+       AND state.rules_version = ?
      UNION ALL
      SELECT 'transition' AS rowKind,
-            id AS activityId,
-            individual_id AS individualId,
-            axis,
-            rules_version AS rulesVersion,
+            transition.id AS activityId,
+            transition.individual_id AS individualId,
+            transition.axis,
+            transition.rules_version AS rulesVersion,
             NULL AS establishedTier,
             NULL AS candidateTier,
             NULL AS candidateDirection,
-            candidate_started_week_end AS candidateStartedWeekEnd,
+            transition.candidate_started_week_end AS candidateStartedWeekEnd,
             NULL AS candidateFinalWeekEnd,
             NULL AS lastEvaluatedWeekEnd,
-            from_tier AS fromTier,
-            to_tier AS toTier,
-            confirmed_week_end AS confirmedWeekEnd,
-            long_term_attended AS longTermAttended,
-            long_term_opportunities AS longTermOpportunities,
-            long_term_rate AS longTermRate,
-            confirmation_attended AS confirmationAttended,
-            confirmation_opportunities AS confirmationOpportunities,
-            confirmation_rate AS confirmationRate
-     FROM engagement_tier_transitions
-     WHERE church_id = ?
-       AND rules_version = ?
-       AND confirmed_week_end >= ?
-       AND confirmed_week_end <= ?
+            transition.from_tier AS fromTier,
+            transition.to_tier AS toTier,
+            transition.confirmed_week_end AS confirmedWeekEnd,
+            transition.long_term_attended AS longTermAttended,
+            transition.long_term_opportunities AS longTermOpportunities,
+            transition.long_term_rate AS longTermRate,
+            transition.confirmation_attended AS confirmationAttended,
+            transition.confirmation_opportunities AS confirmationOpportunities,
+            transition.confirmation_rate AS confirmationRate
+     FROM engagement_tier_transitions transition
+     JOIN individuals transition_person
+       ON transition_person.id = transition.individual_id
+      AND transition_person.church_id = transition.church_id
+      AND transition_person.church_id = ?
+      AND transition_person.is_active = 1
+      AND transition_person.people_type = 'regular'
+     WHERE transition.church_id = ?
+       AND transition.rules_version = ?
+       AND transition.confirmed_week_end >= ?
+       AND transition.confirmed_week_end <= ?
      ORDER BY individualId, axis, rowKind, confirmedWeekEnd, activityId`,
     [
       churchId,
+      churchId,
       rulesVersion,
+      churchId,
       churchId,
       rulesVersion,
       addDateOnly(completedWeekEnd, { days: -RECENT_TRANSITION_DAYS }),
@@ -584,6 +599,18 @@ async function loadTierActivity(churchId, rulesVersion, completedWeekEnd) {
 
 function tierStateKey(individualId, axis) {
   return `${individualId}:${axis}`;
+}
+
+function establishedAxisKeys(profiles) {
+  const keys = new Set();
+  for (const [individualId, profile] of profiles) {
+    for (const axis of ENGAGEMENT_AXES) {
+      if (profile[axis].statusSource === 'established') {
+        keys.add(tierStateKey(individualId, axis));
+      }
+    }
+  }
+  return keys;
 }
 
 function buildEstablishedProfiles(calculatedProfiles, tierStates) {
@@ -650,6 +677,7 @@ async function buildState(churchId, options = {}) {
     profiles.current,
     tierActivity.tierStates,
   );
+  const establishedKeys = establishedAxisKeys(establishedProfiles);
   const datedOpportunities = groupDatedOpportunities(profiles.datedOpportunities);
   const cohorts = visitorCohorts(overviewSource.visitorRows, window);
   return {
@@ -657,6 +685,7 @@ async function buildState(churchId, options = {}) {
     settings,
     profiles,
     establishedProfiles,
+    establishedKeys,
     datedOpportunities,
     tierStates: tierActivity.tierStates,
     recentTransitions: tierActivity.recentTransitions,
@@ -829,7 +858,11 @@ function transitionRows(state, selector) {
     throw new DrilldownTokenError();
   }
   return state.recentTransitions.flatMap((transition) => {
-    if (transition.axis !== selector.axis) return [];
+    if (transition.axis !== selector.axis
+        || !state.establishedKeys.has(tierStateKey(
+          transition.individualId,
+          transition.axis,
+        ))) return [];
     const profile = state.establishedProfiles.get(transition.individualId);
     if (!profile) return [];
     return [{
