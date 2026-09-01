@@ -9,36 +9,59 @@ const medicalNotesPolicy = require('../services/planningCenter/medicalNotesPolic
 const medicalNotesSync = require('../services/planningCenter/medicalNotesSync');
 const pcoCredentialMigration = require('../services/peopleSync/pcoCredentialMigration');
 const engagementSettings = require('../services/engagement/settings');
+const { evaluateEngagementTierConfirmations } = require('../services/engagement/tierConfirmationEvaluator');
+
+function attachEngagementSettingsRoutes(router, dependencies = {}) {
+  const evaluateConfirmations = dependencies.evaluateEngagementTierConfirmations
+    || evaluateEngagementTierConfirmations;
+
+  router.get('/engagement', requireRole(['admin', 'coordinator']), async (req, res) => {
+    try {
+      const settings = await engagementSettings.getEngagementSettings(req.user.church_id);
+      res.json({ settings });
+    } catch (error) {
+      console.error('Get engagement settings error:', error);
+      res.status(500).json({ error: 'Failed to retrieve engagement settings.' });
+    }
+  });
+
+  router.put('/engagement', requireRole(['admin']), async (req, res) => {
+    try {
+      const { settings, rulesChanged } = await engagementSettings.updateEngagementSettings(
+        req.user.church_id,
+        req.user.id,
+        req.body,
+      );
+      let baselinePending = false;
+      if (rulesChanged) {
+        try {
+          await evaluateConfirmations(req.user.church_id, { asOf: new Date(), baselineOnly: true });
+        } catch (error) {
+          baselinePending = true;
+          console.error(`Engagement settings baseline failed for church ${req.user.church_id}:`, error.message);
+        }
+      }
+      res.json({ settings, baselinePending });
+    } catch (error) {
+      if (error instanceof engagementSettings.EngagementSettingsValidationError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+      }
+      console.error('Update engagement settings error:', error);
+      res.status(500).json({ error: 'Failed to update engagement settings.' });
+    }
+  });
+}
+
+function createEngagementSettingsRouter(dependencies = {}) {
+  const engagementRouter = express.Router();
+  engagementRouter.use(verifyToken);
+  attachEngagementSettingsRoutes(engagementRouter, dependencies);
+  return engagementRouter;
+}
 
 const router = express.Router();
 router.use(verifyToken);
-
-router.get('/engagement', requireRole(['admin', 'coordinator']), async (req, res) => {
-  try {
-    const settings = await engagementSettings.getEngagementSettings(req.user.church_id);
-    res.json({ settings });
-  } catch (error) {
-    console.error('Get engagement settings error:', error);
-    res.status(500).json({ error: 'Failed to retrieve engagement settings.' });
-  }
-});
-
-router.put('/engagement', requireRole(['admin']), async (req, res) => {
-  try {
-    const settings = await engagementSettings.updateEngagementSettings(
-      req.user.church_id,
-      req.user.id,
-      req.body,
-    );
-    res.json({ settings });
-  } catch (error) {
-    if (error instanceof engagementSettings.EngagementSettingsValidationError) {
-      return res.status(error.status).json({ error: error.message, code: error.code });
-    }
-    console.error('Update engagement settings error:', error);
-    res.status(500).json({ error: 'Failed to update engagement settings.' });
-  }
-});
+attachEngagementSettingsRoutes(router);
 
 // Get church settings
 router.get('/', requireRole(['admin']), async (req, res) => {
@@ -711,3 +734,4 @@ router.post('/caregiver-digest/test', requireRole(['admin']), async (req, res) =
 });
 
 module.exports = router;
+module.exports.createEngagementSettingsRouter = createEngagementSettingsRouter;

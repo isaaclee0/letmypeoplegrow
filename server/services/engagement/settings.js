@@ -184,6 +184,7 @@ async function updateEngagementSettings(churchId, actorId, input) {
   void actorId;
   const normalized = validateInput(input);
 
+  let rulesChanged = false;
   await Database.transactionForChurch(churchId, async (connection) => {
     const query = (sql, params) => connection.query(sql, params);
     const [currentRow, currentRoles] = await Promise.all([
@@ -201,7 +202,7 @@ async function updateEngagementSettings(churchId, actorId, input) {
     const currentRoleById = new Map(
       currentRoles.map((assignment) => [assignment.gatheringTypeId, assignment.role]),
     );
-    const rulesChanged = current.coreMinimum !== normalized.coreMinimum
+    rulesChanged = current.coreMinimum !== normalized.coreMinimum
       || current.casualMinimum !== normalized.casualMinimum
       || normalized.gatheringRoles.some(
         (assignment) => currentRoleById.get(assignment.gatheringTypeId) !== assignment.role,
@@ -262,7 +263,10 @@ async function updateEngagementSettings(churchId, actorId, input) {
     }
   });
 
-  return getEngagementSettings(churchId);
+  return {
+    settings: await getEngagementSettings(churchId),
+    rulesChanged,
+  };
 }
 
 module.exports = {

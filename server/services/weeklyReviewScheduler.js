@@ -4,7 +4,8 @@ const { generateWeeklyReviewData, detectSendDay } = require('./weeklyReview');
 const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewInsight');
 const { sendWeeklyReviewEmail } = require('../utils/email');
 const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
-const { evaluateEngagementDeclines } = require('./engagement/declines');
+const { evaluateEngagementTierConfirmations } = require('./engagement/tierConfirmationEvaluator');
+const { processConfirmedPrimaryTransitions } = require('./engagement/declines');
 const { shouldNudgeForGuidance } = require('./weeklyReviewGuidance');
 const { getChurchDate, getZonedParts, addDateOnly } = require('../utils/churchTime');
 
@@ -92,7 +93,10 @@ async function processChurch(church, options = {}) {
   const churchId = church.church_id;
   const deps = options.__deps || {};
   const database = deps.database || Database;
-  const evaluateDeclines = deps.evaluateEngagementDeclines || evaluateEngagementDeclines;
+  const evaluateConfirmations = deps.evaluateEngagementTierConfirmations
+    || evaluateEngagementTierConfirmations;
+  const processPastoralTransitions = deps.processConfirmedPrimaryTransitions
+    || processConfirmedPrimaryTransitions;
   const loadReview = deps.generateWeeklyReviewData || generateWeeklyReviewData;
   const resolveSendDay = deps.detectSendDay || detectSendDay;
   const sendReview = deps.sendWeeklyReviewEmail || sendWeeklyReviewEmail;
@@ -136,10 +140,18 @@ async function processChurch(church, options = {}) {
       const isRetryDay = localDay === retryDay;
 
       if (isPrimaryDay) {
+        let confirmation = null;
         try {
-          await evaluateDeclines(churchId, { asOf: now });
+          confirmation = await evaluateConfirmations(churchId, { asOf: now });
         } catch (error) {
-          console.error(`Weekly review: Engagement evaluation failed for church ${churchId}:`, error.message);
+          console.error(`Weekly review: Engagement confirmation evaluation failed for church ${churchId}:`, error.message);
+        }
+        try {
+          await processPastoralTransitions(churchId, confirmation?.completedWeekEnd
+            ? { throughWeekEnd: confirmation.completedWeekEnd }
+            : undefined);
+        } catch (error) {
+          console.error(`Weekly review: Pastoral transition processing failed for church ${churchId}:`, error.message);
         }
       }
 

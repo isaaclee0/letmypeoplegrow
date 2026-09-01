@@ -13,7 +13,7 @@ const settingsRouter = require('./settings');
 logger.exceptions?.unhandle();
 logger.rejections?.unhandle();
 
-async function startApp(churchId, role) {
+async function startApp(churchId, role, dependencies) {
   const inserted = await Database.query(
     `INSERT INTO users (email, role, first_name, last_name, is_active, church_id)
      VALUES (?, ?, 'Settings', 'User', 1, ?)`,
@@ -28,7 +28,7 @@ async function startApp(churchId, role) {
   const token = jwt.sign({ userId: inserted.insertId, churchId }, process.env.JWT_SECRET);
   const app = express();
   app.use(express.json());
-  app.use('/api/settings', settingsRouter);
+  app.use('/api/settings', settingsRouter.createEngagementSettingsRouter(dependencies));
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
@@ -168,6 +168,126 @@ test('invalid complete settings receive a client error without partial writes', 
         [gathering.insertId, churchId],
       );
       assert.equal(stored.role, null);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('a label or colour-only engagement settings save does not request a baseline', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (name, engagement_role, church_id)
+       VALUES ('Sunday', 'primary', ?)`,
+      [churchId],
+    );
+    const baselines = [];
+    const app = await startApp(churchId, 'admin', {
+      evaluateEngagementTierConfirmations: async (...args) => baselines.push(args),
+    });
+    try {
+      const input = inputFor(gathering.insertId);
+      input.tiers.core.label = 'Committed';
+      input.tiers.casual.colour = '#123456';
+
+      const response = await app.request('PUT', input);
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.settings.tiers.core.label, 'Committed');
+      assert.equal(response.body.baselinePending, false);
+      assert.deepEqual(baselines, []);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('a threshold-only change requests a successful immediate baseline', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (name, engagement_role, church_id)
+       VALUES ('Sunday', 'primary', ?)`,
+      [churchId],
+    );
+    const baselines = [];
+    const app = await startApp(churchId, 'admin', {
+      evaluateEngagementTierConfirmations: async (baselineChurchId, options) => {
+        baselines.push({ baselineChurchId, options });
+      },
+    });
+    try {
+      const input = inputFor(gathering.insertId);
+      input.coreMinimum = 65;
+
+      const response = await app.request('PUT', input);
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.baselinePending, false);
+      assert.equal(baselines.length, 1);
+      assert.equal(baselines[0].baselineChurchId, churchId);
+      assert.equal(baselines[0].options.baselineOnly, true);
+      assert.ok(baselines[0].options.asOf instanceof Date);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('a gathering-role-only change requests an immediate baseline', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
+      [churchId],
+    );
+    const baselines = [];
+    const app = await startApp(churchId, 'admin', {
+      evaluateEngagementTierConfirmations: async (baselineChurchId, options) => {
+        baselines.push({ baselineChurchId, options });
+      },
+    });
+    try {
+      const response = await app.request('PUT', inputFor(gathering.insertId));
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.baselinePending, false);
+      assert.equal(baselines.length, 1);
+      assert.equal(baselines[0].baselineChurchId, churchId);
+      assert.equal(baselines[0].options.baselineOnly, true);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('a failed immediate baseline leaves the committed settings save available for weekly retry', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
+      [churchId],
+    );
+    const app = await startApp(churchId, 'admin', {
+      evaluateEngagementTierConfirmations: async () => {
+        throw new Error('baseline evaluator unavailable');
+      },
+    });
+    try {
+      const input = inputFor(gathering.insertId);
+      input.coreMinimum = 65;
+
+      const response = await app.request('PUT', input);
+      const [stored] = await Database.query(
+        `SELECT core_minimum AS coreMinimum, engagement_role AS role
+         FROM engagement_settings es
+         JOIN gathering_types gt ON gt.church_id = es.church_id
+         WHERE es.church_id = ? AND gt.id = ?`,
+        [churchId, gathering.insertId],
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.settings.coreMinimum, 65);
+      assert.equal(response.body.baselinePending, true);
+      assert.equal(stored.coreMinimum, 65);
+      assert.equal(stored.role, 'primary');
     } finally {
       await app.close();
     }

@@ -20,12 +20,13 @@ test('weekly review send day and hour use the church timezone', () => {
 function schedulerHarness({
   enabled = 0,
   day = 'Friday',
-  evaluatorError = null,
+  confirmationError = null,
+  pastoralError = null,
   lastSent = null,
   reviewData = undefined,
   mainGatheringData = true,
 } = {}) {
-  const calls = { evaluations: [], reviews: [], digests: [] };
+  const calls = { stages: [], evaluations: [], pastorals: [], reviews: [], digests: [] };
   const database = {
     setChurchContext: async (_churchId, fn) => fn(),
     query: async (sql) => {
@@ -43,10 +44,17 @@ function schedulerHarness({
   };
   const processChurch = createProcessChurch({
     database,
-    evaluateEngagementDeclines: async (churchId, options) => {
+    evaluateEngagementTierConfirmations: async (churchId, options) => {
+      calls.stages.push('confirm');
       calls.evaluations.push({ churchId, asOf: options.asOf.toISOString() });
-      if (evaluatorError) throw evaluatorError;
+      if (confirmationError) throw confirmationError;
       return { completedWeekEnd: '2026-08-09' };
+    },
+    processConfirmedPrimaryTransitions: async (churchId, options) => {
+      calls.stages.push('pastoral');
+      calls.pastorals.push({ churchId, throughWeekEnd: options?.throughWeekEnd });
+      if (pastoralError) throw pastoralError;
+      return { transitionsProcessed: 0 };
     },
     generateWeeklyReviewData: async (churchId) => reviewData === undefined ? ({
       churchName: 'Test Church',
@@ -70,7 +78,7 @@ function schedulerHarness({
   return { calls, processChurch };
 }
 
-test('configured primary day evaluates declines even when weekly email delivery is disabled', async () => {
+test('configured primary day confirms tiers before processing pastoral transitions even when weekly email delivery is disabled', async () => {
   const { calls, processChurch } = schedulerHarness({ enabled: 0 });
   const now = new Date('2026-08-13T21:15:00.000Z');
 
@@ -80,6 +88,8 @@ test('configured primary day evaluates declines even when weekly email delivery 
     churchId: 'church-a',
     asOf: '2026-08-13T21:15:00.000Z',
   }]);
+  assert.deepEqual(calls.stages, ['confirm', 'pastoral']);
+  assert.deepEqual(calls.pastorals, [{ churchId: 'church-a', throughWeekEnd: '2026-08-09' }]);
   assert.deepEqual(calls.reviews, []);
   assert.deepEqual(calls.digests, []);
 });
@@ -91,6 +101,7 @@ test('retry day sends enabled emails without rerunning the primary-day evaluatio
   await processChurch({ church_id: 'church-a' }, { now });
 
   assert.deepEqual(calls.evaluations, []);
+  assert.deepEqual(calls.pastorals, []);
   assert.deepEqual(calls.reviews, ['admin@example.test']);
   assert.deepEqual(calls.digests, [{
     churchId: 'church-a',
@@ -150,8 +161,8 @@ test('primary-day attendance deferral still attempts pending decline delivery wi
   }]);
 });
 
-test('a church evaluation failure is contained so the next church still evaluates', async () => {
-  const failing = schedulerHarness({ enabled: 0, evaluatorError: new Error('broken church') });
+test('a church confirmation failure is contained so the next church still evaluates', async () => {
+  const failing = schedulerHarness({ enabled: 0, confirmationError: new Error('broken church') });
   const healthy = schedulerHarness({ enabled: 0 });
   const now = new Date('2026-08-13T21:15:00.000Z');
 
@@ -159,22 +170,43 @@ test('a church evaluation failure is contained so the next church still evaluate
   await healthy.processChurch({ church_id: 'church-b' }, { now });
 
   assert.equal(failing.calls.evaluations.length, 1);
+  assert.deepEqual(failing.calls.pastorals, [{ churchId: 'church-a', throughWeekEnd: undefined }]);
   assert.deepEqual(healthy.calls.evaluations, [{
     churchId: 'church-b',
     asOf: '2026-08-13T21:15:00.000Z',
   }]);
 });
 
-test('a decline evaluation failure does not suppress established weekly or absence email paths', async () => {
+test('a confirmation failure does not suppress pastoral, weekly, or absence email paths', async () => {
   const { calls, processChurch } = schedulerHarness({
     enabled: 1,
-    evaluatorError: new Error('decline evaluator unavailable'),
+    confirmationError: new Error('confirmation evaluator unavailable'),
   });
   const now = new Date('2026-08-13T21:15:00.000Z');
 
   await processChurch({ church_id: 'church-a' }, { now });
 
   assert.equal(calls.evaluations.length, 1);
+  assert.deepEqual(calls.stages, ['confirm', 'pastoral']);
+  assert.deepEqual(calls.pastorals, [{ churchId: 'church-a', throughWeekEnd: undefined }]);
+  assert.deepEqual(calls.reviews, ['admin@example.test']);
+  assert.deepEqual(calls.digests, [{
+    churchId: 'church-a',
+    now: '2026-08-13T21:15:00.000Z',
+    includeAbsences: undefined,
+  }]);
+});
+
+test('a pastoral processing failure does not suppress the ordinary weekly or absence email paths', async () => {
+  const { calls, processChurch } = schedulerHarness({
+    enabled: 1,
+    pastoralError: new Error('pastoral processor unavailable'),
+  });
+  const now = new Date('2026-08-13T21:15:00.000Z');
+
+  await processChurch({ church_id: 'church-a' }, { now });
+
+  assert.deepEqual(calls.stages, ['confirm', 'pastoral']);
   assert.deepEqual(calls.reviews, ['admin@example.test']);
   assert.deepEqual(calls.digests, [{
     churchId: 'church-a',

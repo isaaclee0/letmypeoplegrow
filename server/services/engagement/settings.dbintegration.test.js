@@ -125,7 +125,7 @@ test('an atomic update persists complete roles and previews active standard-gath
       ],
     );
 
-    const updated = await updateEngagementSettings(churchId, 41, completeInput([
+    const { settings: updated, rulesChanged } = await updateEngagementSettings(churchId, 41, completeInput([
       { gatheringTypeId: primaryId, role: 'primary' },
       { gatheringTypeId: communityId, role: 'community' },
       { gatheringTypeId: headcountId, role: 'primary' },
@@ -140,6 +140,7 @@ test('an atomic update persists complete roles and previews active standard-gath
       },
     }));
 
+    assert.equal(rulesChanged, true);
     assert.equal(updated.calculationRulesVersion, 2);
     assert.deepEqual(updated.assignmentPreview, {
       primaryAssigned: 1,
@@ -191,7 +192,8 @@ test('updates a large gathering-role set with bounded database queries', async (
       completeInput(gatheringRoles),
     ));
 
-    assert.equal(measured.result.gatheringRoles.length, 100);
+    assert.equal(measured.result.rulesChanged, true);
+    assert.equal(measured.result.settings.gatheringRoles.length, 100);
     assert.ok(
       measured.queryCount <= 7,
       `expected bounded settings queries, received ${measured.queryCount}`,
@@ -330,21 +332,33 @@ test('rules version changes for thresholds or roles, but not labels or colours',
         core: { label: 'Committed', colour: '#16A34A' },
       },
     });
-    assert.equal((await updateEngagementSettings(churchId, 1, labelsChanged)).calculationRulesVersion, 1);
+    let result = await updateEngagementSettings(churchId, 1, labelsChanged);
+    assert.equal(result.rulesChanged, false);
+    assert.equal(result.settings.calculationRulesVersion, 1);
 
     const coloursChanged = structuredClone(labelsChanged);
     coloursChanged.tiers.casual.colour = '#CA5';
-    assert.equal((await updateEngagementSettings(churchId, 1, coloursChanged)).calculationRulesVersion, 1);
+    result = await updateEngagementSettings(churchId, 1, coloursChanged);
+    assert.equal(result.rulesChanged, false);
+    assert.equal(result.settings.calculationRulesVersion, 1);
 
     const thresholdsChanged = structuredClone(coloursChanged);
     thresholdsChanged.coreMinimum = 65;
-    assert.equal((await updateEngagementSettings(churchId, 1, thresholdsChanged)).calculationRulesVersion, 2);
-    assert.equal((await updateEngagementSettings(churchId, 1, thresholdsChanged)).calculationRulesVersion, 2);
+    result = await updateEngagementSettings(churchId, 1, thresholdsChanged);
+    assert.equal(result.rulesChanged, true);
+    assert.equal(result.settings.calculationRulesVersion, 2);
+    result = await updateEngagementSettings(churchId, 1, thresholdsChanged);
+    assert.equal(result.rulesChanged, false);
+    assert.equal(result.settings.calculationRulesVersion, 2);
 
     const roleChanged = structuredClone(thresholdsChanged);
     roleChanged.gatheringRoles[0].role = 'primary';
-    assert.equal((await updateEngagementSettings(churchId, 1, roleChanged)).calculationRulesVersion, 3);
-    assert.equal((await updateEngagementSettings(churchId, 1, roleChanged)).calculationRulesVersion, 3);
+    result = await updateEngagementSettings(churchId, 1, roleChanged);
+    assert.equal(result.rulesChanged, true);
+    assert.equal(result.settings.calculationRulesVersion, 3);
+    result = await updateEngagementSettings(churchId, 1, roleChanged);
+    assert.equal(result.rulesChanged, false);
+    assert.equal(result.settings.calculationRulesVersion, 3);
   });
 });
 
@@ -357,13 +371,13 @@ test('updates use the explicit church when ambient context is mismatched or abse
 
     const mismatchedResult = await Database.setChurchContext('wrong_church_context', () =>
       updateEngagementSettings(churchId, 1, primaryInput));
-    assert.equal(mismatchedResult.gatheringRoles[0].role, 'primary');
+    assert.equal(mismatchedResult.settings.gatheringRoles[0].role, 'primary');
 
     const noContextInput = structuredClone(primaryInput);
     noContextInput.gatheringRoles[0].role = 'community';
     const noContextResult = await Database.setChurchContext(undefined, () =>
       updateEngagementSettings(churchId, 1, noContextInput));
-    assert.equal(noContextResult.gatheringRoles[0].role, 'community');
+    assert.equal(noContextResult.settings.gatheringRoles[0].role, 'community');
 
     const [stored] = await Database.queryForChurch(
       churchId,
