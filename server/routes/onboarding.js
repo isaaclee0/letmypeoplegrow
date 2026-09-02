@@ -59,6 +59,35 @@ const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId, ch
 
 const router = express.Router();
 
+function crossChurchTierReferenceError() {
+  return Object.assign(
+    new Error('Tier state or transition history carries a different church ID.'),
+    { statusCode: 409, code: 'CROSS_CHURCH_TIER_REFERENCE' },
+  );
+}
+
+async function assertNoCrossChurchTierReferences(conn, churchId) {
+  // This integrity guard intentionally inspects non-matching child church IDs
+  // before deleting target-church parents whose legacy FK omits church_id.
+  const [result] = await conn.query(
+    `SELECT EXISTS(
+       SELECT 1
+       FROM engagement_tier_state state
+       JOIN individuals person ON person.id = state.individual_id
+       WHERE person.church_id = ? AND state.church_id <> ?
+     ) OR EXISTS(
+       SELECT 1
+       FROM engagement_tier_transitions transition_row
+       JOIN individuals person ON person.id = transition_row.individual_id
+       WHERE person.church_id = ? AND transition_row.church_id <> ?
+     ) AS hasForeignTierReferences`,
+    [churchId, churchId, churchId, churchId],
+  );
+  if (Number(result.hasForeignTierReferences) === 1) {
+    throw crossChurchTierReferenceError();
+  }
+}
+
 // Helper function to save onboarding progress
 const saveOnboardingProgress = async (userId, currentStep, data = {}, completedSteps = []) => {
   try {
@@ -918,6 +947,7 @@ router.post('/clear-sample-data',
       const churchId = req.user.church_id;
 
       await Database.transaction(async (conn) => {
+        await assertNoCrossChurchTierReferences(conn, churchId);
         // Delete in dependency order
         // Engagement history intentionally belongs to the sample dataset in this
         // destructive reset flow; clear RESTRICT-protected audit rows explicitly.
@@ -983,6 +1013,9 @@ router.post('/clear-sample-data',
 
       res.json({ message: 'Sample data cleared successfully' });
     } catch (error) {
+      if (error && error.statusCode === 409) {
+        return res.status(409).json({ error: error.message, code: error.code });
+      }
       console.error('Clear sample data error:', error);
       res.status(500).json({ error: 'Failed to clear sample data' });
     }

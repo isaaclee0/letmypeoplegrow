@@ -134,6 +134,33 @@ function earlierTimestamp(left, right) {
   return left <= right ? left : right;
 }
 
+function crossChurchTierReferenceError() {
+  return Object.assign(
+    new Error('Tier state or transition history carries a different church ID.'),
+    { statusCode: 409, code: 'CROSS_CHURCH_TIER_REFERENCE' },
+  );
+}
+
+async function assertNoCrossChurchTierReferences(conn, churchId, individualIds) {
+  const ids = [...new Set(individualIds.map(Number).filter(Number.isInteger))];
+  if (ids.length === 0) return;
+  // This integrity guard intentionally searches for rows outside churchId because
+  // the legacy foreign key references individuals(id) without church_id.
+  const [result] = await conn.query(
+    `SELECT EXISTS(
+       SELECT 1 FROM engagement_tier_state
+       WHERE individual_id IN (?) AND church_id <> ?
+     ) OR EXISTS(
+       SELECT 1 FROM engagement_tier_transitions
+       WHERE individual_id IN (?) AND church_id <> ?
+     ) AS hasForeignTierReferences`,
+    [ids, churchId, ids, churchId],
+  );
+  if (Number(result.hasForeignTierReferences) === 1) {
+    throw crossChurchTierReferenceError();
+  }
+}
+
 async function mergeEventDeliveries(conn, churchId, duplicateEventId, canonicalEventId) {
   const deliveries = await conn.query(
     `SELECT id, recipient_type AS recipientType, recipient_id AS recipientId,
@@ -331,6 +358,11 @@ async function rehomeTierTransitions(conn, churchId, keepId, deleteIds, eventMap
       && transition.declineEventId != null;
     const evidence = adoptLinkedEvidence ? transition : canonical;
     const declineEventId = canonical.declineEventId ?? transition.declineEventId;
+    const pastoralProcessedAt = laterTimestamp(
+      canonical.pastoralProcessedAt,
+      transition.pastoralProcessedAt,
+    );
+    const createdAt = earlierTimestamp(canonical.createdAt, transition.createdAt);
     await conn.query(
       `UPDATE engagement_tier_transitions
        SET candidate_started_week_end = ?,
@@ -346,18 +378,25 @@ async function rehomeTierTransitions(conn, churchId, keepId, deleteIds, eventMap
         evidence.confirmationAttended,
         evidence.confirmationOpportunities,
         evidence.confirmationRate,
-        laterTimestamp(canonical.pastoralProcessedAt, transition.pastoralProcessedAt),
+        pastoralProcessedAt,
         declineEventId,
-        earlierTimestamp(canonical.createdAt, transition.createdAt),
+        createdAt,
         churchId,
         canonical.id,
       ],
     );
-    canonical.declineEventId = declineEventId;
-    canonical.pastoralProcessedAt = laterTimestamp(
-      canonical.pastoralProcessedAt,
-      transition.pastoralProcessedAt,
-    );
+    Object.assign(canonical, {
+      candidateStartedWeekEnd: evidence.candidateStartedWeekEnd,
+      longTermAttended: evidence.longTermAttended,
+      longTermOpportunities: evidence.longTermOpportunities,
+      longTermRate: evidence.longTermRate,
+      confirmationAttended: evidence.confirmationAttended,
+      confirmationOpportunities: evidence.confirmationOpportunities,
+      confirmationRate: evidence.confirmationRate,
+      pastoralProcessedAt,
+      declineEventId,
+      createdAt,
+    });
     await conn.query(
       `DELETE FROM engagement_tier_transitions WHERE church_id = ? AND id = ?`,
       [churchId, transition.id],
@@ -558,6 +597,11 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 
     // Start a transaction
     await Database.transaction(async (conn) => {
+      await assertNoCrossChurchTierReferences(
+        conn,
+        req.user.church_id,
+        deleteIds,
+      );
       await rehomeEngagementHistoryWithConnection(conn, {
         churchId: req.user.church_id,
         keepId: Number(keepId),
@@ -601,6 +645,9 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
     
     res.json({ message: 'Deduplication successful', keptId: keepId, deletedIds: deleteIds });
   } catch (error) {
+    if (error && error.statusCode === 409) {
+      return res.status(409).json({ error: error.message, code: error.code });
+    }
     console.error('Deduplicate individuals error:', error);
     res.status(500).json({ error: 'Failed to deduplicate individuals.' });
   }
@@ -941,6 +988,7 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
     }
 
     await Database.transaction(async (conn) => {
+      await assertNoCrossChurchTierReferences(conn, req.user.church_id, [id]);
       const [history] = await conn.query(
         `SELECT EXISTS(
            SELECT 1 FROM engagement_decline_events

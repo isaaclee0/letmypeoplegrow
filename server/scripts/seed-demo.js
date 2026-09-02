@@ -15,6 +15,29 @@ const CHURCH_ID = 'devch1';
 const REGISTRY_PATH = path.join(DATA_DIR, 'registry.sqlite');
 const CHURCH_DB_PATH = path.join(DATA_DIR, 'churches', `${CHURCH_ID}.sqlite`);
 
+function assertNoCrossChurchTierReferences(db, churchId) {
+  // Intentionally inspect non-matching child church IDs before parent deletion.
+  const result = db.prepare(
+    `SELECT EXISTS(
+       SELECT 1
+       FROM engagement_tier_state state
+       JOIN individuals person ON person.id = state.individual_id
+       WHERE person.church_id = ? AND state.church_id <> ?
+     ) OR EXISTS(
+       SELECT 1
+       FROM engagement_tier_transitions transition_row
+       JOIN individuals person ON person.id = transition_row.individual_id
+       WHERE person.church_id = ? AND transition_row.church_id <> ?
+     ) AS hasForeignTierReferences`,
+  ).get(churchId, churchId, churchId, churchId);
+  if (Number(result.hasForeignTierReferences) === 1) {
+    throw Object.assign(
+      new Error('CROSS_CHURCH_TIER_REFERENCE: tier rows carry a different church ID.'),
+      { code: 'CROSS_CHURCH_TIER_REFERENCE' },
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -157,6 +180,7 @@ function seed() {
   }
 
   // --- Clear old seed data ---
+  assertNoCrossChurchTierReferences(db, CHURCH_ID);
   for (const table of [
     'pastoral_insight_states',
     'engagement_decline_deliveries',

@@ -205,7 +205,10 @@ async function evaluateEngagementTierConfirmations(churchId, {
               opportunities: 0,
               rate: null,
             },
-            previousState: baselineOnly ? null : previousState,
+            // A person absent from the current active-regular profile has lost
+            // eligibility. Clear it even on the same completed week so a later
+            // reactivation baselines instead of resuming stale tier state.
+            previousState: null,
             datedOpportunities: [],
             settings: profiles.settings,
           });

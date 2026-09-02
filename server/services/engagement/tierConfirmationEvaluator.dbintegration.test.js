@@ -262,7 +262,7 @@ test('first run baselines both axes for active regulars and persists nullable in
   });
 });
 
-test('inactive evaluation clears current tier eligibility without deleting transition history', async () => {
+test('same-week inactive evaluation clears eligibility and reactivation creates a fresh baseline', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedRoster(churchId, [
       { primary: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0] },
@@ -274,9 +274,11 @@ test('inactive evaluation clears current tier eligibility without deleting trans
       candidateDirection: 'higher',
       candidateStartedWeekEnd: '2026-08-09',
       candidateFinalWeekEnd: '2026-11-08',
+      lastEvaluatedWeekEnd: '2026-08-16',
     });
     await seedState(churchId, individualId, 'community', {
       establishedTier: 'casual',
+      lastEvaluatedWeekEnd: '2026-08-16',
     });
     const transition = await scopedQuery(churchId)(
       `INSERT INTO engagement_tier_transitions
@@ -325,6 +327,50 @@ test('inactive evaluation clears current tier eligibility without deleting trans
         candidateStartedWeekEnd: null,
         candidateFinalWeekEnd: null,
         lastEvaluatedWeekEnd: '2026-08-16',
+      },
+    ]);
+    assert.deepEqual(await scopedQuery(churchId)(
+      `SELECT id, individual_id AS individualId
+       FROM engagement_tier_transitions WHERE church_id = ?`,
+      [churchId],
+    ), [{ id: transition.insertId, individualId }]);
+
+    await scopedQuery(churchId)(
+      `UPDATE individuals SET is_active = 1 WHERE church_id = ? AND id = ?`,
+      [churchId, individualId],
+    );
+    const reactivated = await evaluateEngagementTierConfirmations(churchId, { asOf: NEXT_WEEK });
+
+    assert.deepEqual(reactivated, {
+      completedWeekEnd: '2026-08-23',
+      baselined: 1,
+      candidatesStarted: 0,
+      candidatesCancelled: 0,
+      candidatesExpired: 0,
+      transitionsConfirmed: 0,
+    });
+    assert.deepEqual(await loadStates(churchId), [
+      {
+        individualId,
+        axis: 'community',
+        rulesVersion: 1,
+        establishedTier: null,
+        candidateTier: null,
+        candidateDirection: null,
+        candidateStartedWeekEnd: null,
+        candidateFinalWeekEnd: null,
+        lastEvaluatedWeekEnd: '2026-08-23',
+      },
+      {
+        individualId,
+        axis: 'primary',
+        rulesVersion: 1,
+        establishedTier: 'core',
+        candidateTier: null,
+        candidateDirection: null,
+        candidateStartedWeekEnd: null,
+        candidateFinalWeekEnd: null,
+        lastEvaluatedWeekEnd: '2026-08-23',
       },
     ]);
     assert.deepEqual(await scopedQuery(churchId)(

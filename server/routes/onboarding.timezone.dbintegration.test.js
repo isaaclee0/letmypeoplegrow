@@ -5,12 +5,43 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
 const jwt = require('jsonwebtoken');
+const path = require('node:path');
+const { execFile } = require('node:child_process');
 const logger = require('../config/logger');
 logger.exceptions?.unhandle();
 logger.rejections?.unhandle();
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const onboardingRouter = require('./onboarding');
+
+async function seedForeignTierReferences(individualId, foreignChurchId) {
+  await Database.query(
+    `INSERT INTO engagement_tier_state
+       (church_id, individual_id, axis, rules_version, established_tier,
+        last_evaluated_week_end)
+     VALUES (?, ?, 'primary', 1, 'casual', '2026-08-16')`,
+    [foreignChurchId, individualId],
+  );
+  const transition = await Database.query(
+    `INSERT INTO engagement_tier_transitions
+       (church_id, individual_id, axis, from_tier, to_tier,
+        candidate_started_week_end, confirmed_week_end, rules_version,
+        long_term_attended, long_term_opportunities, long_term_rate,
+        confirmation_attended, confirmation_opportunities, confirmation_rate)
+     VALUES (?, ?, 'community', 'irregular', 'casual', '2026-05-10', '2026-08-09', 1,
+             5, 13, ?, 4, 8, 0.5)`,
+    [foreignChurchId, individualId, 5 / 13],
+  );
+  return transition.insertId;
+}
+
+function runScript(scriptPath, args, env) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [scriptPath, ...args], { env }, (error, stdout, stderr) => {
+      resolve({ code: error?.code ?? 0, stdout, stderr });
+    });
+  });
+}
 
 async function startApp(churchId) {
   const inserted = await Database.query(
@@ -181,4 +212,89 @@ test('clear sample data removes engagement history before deleting people', asyn
       await app.close();
     }
   });
+});
+
+test('clear sample data rolls back when target people have tier rows carrying another church ID', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const app = await startApp(churchId);
+    try {
+      await Database.query(
+        'UPDATE church_settings SET has_sample_data = 1 WHERE church_id = ?',
+        [churchId],
+      );
+      const person = await Database.query(
+        `INSERT INTO individuals (church_id, first_name, last_name, people_type, is_active)
+         VALUES (?, 'Corrupt', 'Reference', 'regular', 1)`,
+        [churchId],
+      );
+      const foreignChurchId = `${churchId}_foreign`;
+      const transitionId = await seedForeignTierReferences(
+        person.insertId,
+        foreignChurchId,
+      );
+
+      const response = await app.clearSampleData();
+
+      assert.equal(response.status, 409);
+      assert.equal(response.body.code, 'CROSS_CHURCH_TIER_REFERENCE');
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
+        [churchId, person.insertId],
+      ))[0].count, 1);
+      assert.deepEqual(await Database.query(
+        `SELECT church_id AS churchId, individual_id AS individualId
+         FROM engagement_tier_state WHERE church_id = ? AND individual_id = ?`,
+        [foreignChurchId, person.insertId],
+      ), [{ churchId: foreignChurchId, individualId: person.insertId }]);
+      assert.deepEqual(await Database.query(
+        `SELECT id, church_id AS churchId, individual_id AS individualId
+         FROM engagement_tier_transitions WHERE church_id = ? AND individual_id = ?`,
+        [foreignChurchId, person.insertId],
+      ), [{ id: transitionId, churchId: foreignChurchId, individualId: person.insertId }]);
+      assert.equal((await Database.query(
+        `SELECT has_sample_data AS hasSampleData FROM church_settings WHERE church_id = ?`,
+        [churchId],
+      ))[0].hasSampleData, 1);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('church wipe fails closed when target people have tier rows carrying another church ID', async () => {
+  let tempDir;
+  await withTestChurchDb(async (churchId) => {
+    const person = await Database.query(
+      `INSERT INTO individuals (church_id, first_name, last_name, people_type, is_active)
+       VALUES (?, 'Corrupt', 'Wipe Reference', 'regular', 1)`,
+      [churchId],
+    );
+    const foreignChurchId = `${churchId}_foreign`;
+    const transitionId = await seedForeignTierReferences(
+      person.insertId,
+      foreignChurchId,
+    );
+    const result = await runScript(
+      path.join(__dirname, '../scripts/wipeChurchPeopleAndFamilies.js'),
+      [churchId],
+      { ...process.env, CHURCH_DATA_DIR: tempDir },
+    );
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /CROSS_CHURCH_TIER_REFERENCE/);
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
+      [churchId, person.insertId],
+    ))[0].count, 1);
+    assert.deepEqual(await Database.query(
+      `SELECT church_id AS churchId, individual_id AS individualId
+       FROM engagement_tier_state WHERE church_id = ? AND individual_id = ?`,
+      [foreignChurchId, person.insertId],
+    ), [{ churchId: foreignChurchId, individualId: person.insertId }]);
+    assert.deepEqual(await Database.query(
+      `SELECT id, church_id AS churchId, individual_id AS individualId
+       FROM engagement_tier_transitions WHERE church_id = ? AND individual_id = ?`,
+      [foreignChurchId, person.insertId],
+    ), [{ id: transitionId, churchId: foreignChurchId, individualId: person.insertId }]);
+  }, (ready) => { tempDir = ready.tempDir; });
 });

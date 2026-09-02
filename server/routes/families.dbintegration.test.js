@@ -32,6 +32,27 @@ async function seedIndividual(churchId) {
   return res.insertId;
 }
 
+async function seedForeignTierReferences(individualId, foreignChurchId) {
+  await Database.query(
+    `INSERT INTO engagement_tier_state
+       (church_id, individual_id, axis, rules_version, established_tier,
+        last_evaluated_week_end)
+     VALUES (?, ?, 'primary', 1, 'casual', '2026-08-16')`,
+    [foreignChurchId, individualId],
+  );
+  const transition = await Database.query(
+    `INSERT INTO engagement_tier_transitions
+       (church_id, individual_id, axis, from_tier, to_tier,
+        candidate_started_week_end, confirmed_week_end, rules_version,
+        long_term_attended, long_term_opportunities, long_term_rate,
+        confirmation_attended, confirmation_opportunities, confirmation_rate)
+     VALUES (?, ?, 'community', 'irregular', 'casual', '2026-05-10', '2026-08-09', 1,
+             5, 13, ?, 4, 8, 0.5)`,
+    [foreignChurchId, individualId, 5 / 13],
+  );
+  return transition.insertId;
+}
+
 async function seedGatheringType(churchId, name) {
   const res = await Database.query(
     `INSERT INTO gathering_types (name, church_id) VALUES (?, ?)`,
@@ -667,6 +688,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
   await withRouteChurchDb(async (churchId) => {
     const keepId = await seedIndividual(churchId);
     const deleteId = await seedIndividual(churchId);
+    const secondDeleteId = await seedIndividual(churchId);
     const otherChurchId = `${churchId}_other`;
     const recipientId = await seedUser(churchId);
     const detectedFamilyId = await seedFamily(churchId, 'Historical family');
@@ -723,7 +745,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
        VALUES (?, 'visitor_next_step', ?, 'visitor_next_step:first_primary:2026-08-02', 'resolved')`,
       [churchId, deleteId],
     );
-    for (const individualId of [keepId, deleteId]) {
+    for (const individualId of [keepId, deleteId, secondDeleteId]) {
       await Database.query(
         `INSERT INTO engagement_evaluation_state
            (church_id, individual_id, rules_version, last_evaluated_week_end,
@@ -751,6 +773,13 @@ test('individual deduplication re-homes engagement history and canonicalises eve
     await Database.query(
       `INSERT INTO engagement_tier_state
          (church_id, individual_id, axis, rules_version, established_tier,
+          last_evaluated_week_end)
+       VALUES (?, ?, 'primary', 2, 'irregular', '2026-08-16')`,
+      [churchId, secondDeleteId],
+    );
+    await Database.query(
+      `INSERT INTO engagement_tier_state
+         (church_id, individual_id, axis, rules_version, established_tier,
           candidate_tier, candidate_direction, candidate_started_week_end,
           candidate_final_week_end, last_evaluated_week_end)
        VALUES (?, ?, 'primary', 9, 'irregular', 'casual', 'higher',
@@ -762,9 +791,10 @@ test('individual deduplication re-homes engagement history and canonicalises eve
          (church_id, individual_id, axis, from_tier, to_tier,
           candidate_started_week_end, confirmed_week_end, rules_version,
           long_term_attended, long_term_opportunities, long_term_rate,
-          confirmation_attended, confirmation_opportunities, confirmation_rate)
+          confirmation_attended, confirmation_opportunities, confirmation_rate,
+          created_at)
        VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-10', '2026-08-09', 1,
-               7, 13, ?, 3, 8, 0.375)`,
+               7, 13, ?, 3, 8, 0.375, '2026-08-20 09:00:00')`,
       [churchId, keepId, 7 / 13],
     );
     await Database.query(
@@ -773,9 +803,10 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           candidate_started_week_end, confirmed_week_end, rules_version,
           long_term_attended, long_term_opportunities, long_term_rate,
           confirmation_attended, confirmation_opportunities, confirmation_rate,
-          pastoral_processed_at, decline_event_id)
+          pastoral_processed_at, decline_event_id, created_at)
        VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-17', '2026-08-09', 1,
-               6, 13, ?, 2, 8, 0.25, '2026-08-18 09:00:00', ?)`,
+               6, 13, ?, 2, 8, 0.25, '2026-08-18 09:00:00', ?,
+               '2026-08-10 09:00:00')`,
       [churchId, deleteId, 6 / 13, duplicateEvent.insertId],
     );
     const uniqueTransition = await Database.query(
@@ -784,9 +815,9 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           candidate_started_week_end, confirmed_week_end, rules_version,
           long_term_attended, long_term_opportunities, long_term_rate,
           confirmation_attended, confirmation_opportunities, confirmation_rate,
-          decline_event_id)
+          decline_event_id, created_at)
        VALUES (?, ?, 'primary', 'casual', 'irregular', '2026-05-24', '2026-08-16', 1,
-               4, 13, ?, 1, 8, 0.125, ?)`,
+               4, 13, ?, 1, 8, 0.125, ?, '2026-08-21 09:00:00')`,
       [churchId, deleteId, 4 / 13, uniqueEvent.insertId],
     );
     const communityTransition = await Database.query(
@@ -794,10 +825,22 @@ test('individual deduplication re-homes engagement history and canonicalises eve
          (church_id, individual_id, axis, from_tier, to_tier,
           candidate_started_week_end, confirmed_week_end, rules_version,
           long_term_attended, long_term_opportunities, long_term_rate,
-          confirmation_attended, confirmation_opportunities, confirmation_rate)
+          confirmation_attended, confirmation_opportunities, confirmation_rate,
+          created_at)
        VALUES (?, ?, 'community', 'casual', 'core', '2026-05-24', '2026-08-16', 1,
-               9, 13, ?, 6, 8, 0.75)`,
+               9, 13, ?, 6, 8, 0.75, '2026-08-22 09:00:00')`,
       [churchId, deleteId, 9 / 13],
+    );
+    await Database.query(
+      `INSERT INTO engagement_tier_transitions
+         (church_id, individual_id, axis, from_tier, to_tier,
+          candidate_started_week_end, confirmed_week_end, rules_version,
+          long_term_attended, long_term_opportunities, long_term_rate,
+          confirmation_attended, confirmation_opportunities, confirmation_rate,
+          created_at)
+       VALUES (?, ?, 'primary', 'core', 'casual', '2026-05-31', '2026-08-09', 1,
+               12, 13, ?, 7, 8, 0.875, '2026-08-25 09:00:00')`,
+      [churchId, secondDeleteId, 12 / 13],
     );
     const otherChurchTransition = await Database.query(
       `INSERT INTO engagement_tier_transitions
@@ -813,7 +856,11 @@ test('individual deduplication re-homes engagement history and canonicalises eve
     try {
       const response = await app.request('/api/individuals/deduplicate', {
         method: 'POST',
-        body: JSON.stringify({ keepId, deleteIds: [deleteId], mergeAssignments: false }),
+        body: JSON.stringify({
+          keepId,
+          deleteIds: [deleteId, secondDeleteId],
+          mergeAssignments: false,
+        }),
       });
 
       assert.strictEqual(response.status, 200);
@@ -871,7 +918,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
                 confirmation_opportunities AS confirmationOpportunities,
                 confirmation_rate AS confirmationRate,
                 pastoral_processed_at AS pastoralProcessedAt,
-                decline_event_id AS declineEventId
+                decline_event_id AS declineEventId, created_at AS createdAt
          FROM engagement_tier_transitions WHERE church_id = ? ORDER BY id`,
         [churchId],
       ), [
@@ -892,6 +939,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           confirmationRate: 0.25,
           pastoralProcessedAt: '2026-08-18 09:00:00',
           declineEventId: keepEvent.insertId,
+          createdAt: '2026-08-10 09:00:00',
         },
         {
           id: uniqueTransition.insertId,
@@ -910,6 +958,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           confirmationRate: 0.125,
           pastoralProcessedAt: null,
           declineEventId: uniqueEvent.insertId,
+          createdAt: '2026-08-21 09:00:00',
         },
         {
           id: communityTransition.insertId,
@@ -928,6 +977,7 @@ test('individual deduplication re-homes engagement history and canonicalises eve
           confirmationRate: 0.75,
           pastoralProcessedAt: null,
           declineEventId: null,
+          createdAt: '2026-08-22 09:00:00',
         },
       ]);
       assert.deepStrictEqual(await Database.query(
@@ -970,12 +1020,13 @@ test('individual deduplication re-homes engagement history and canonicalises eve
         row.episodeKey === `primary_decline:event:${keepEvent.insertId}`).length, 1);
       assert.equal((await Database.query(
         `SELECT COUNT(*) AS count FROM engagement_evaluation_state
-         WHERE church_id = ? AND individual_id IN (?, ?)`,
-        [churchId, keepId, deleteId],
+         WHERE church_id = ? AND individual_id IN (?, ?, ?)`,
+        [churchId, keepId, deleteId, secondDeleteId],
       ))[0].count, 0);
       assert.equal((await Database.query(
-        `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
-        [churchId, deleteId],
+        `SELECT COUNT(*) AS count FROM individuals
+         WHERE church_id = ? AND id IN (?, ?)`,
+        [churchId, deleteId, secondDeleteId],
       ))[0].count, 0);
       assert.deepStrictEqual(Database.getChurchDb(churchId).prepare('PRAGMA foreign_key_check').all(), []);
     } finally {
@@ -1059,6 +1110,75 @@ test('permanent deletion preserves tier-transition history that has no decline e
          FROM engagement_tier_transitions WHERE church_id = ?`,
         [churchId],
       ), [{ id: transition.insertId, individualId }]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('individual deduplication rolls back when source tier rows carry another church ID', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const keepId = await seedIndividual(churchId);
+    const deleteId = await seedIndividual(churchId);
+    const foreignChurchId = `${churchId}_foreign`;
+    const transitionId = await seedForeignTierReferences(deleteId, foreignChurchId);
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request('/api/individuals/deduplicate', {
+        method: 'POST',
+        body: JSON.stringify({ keepId, deleteIds: [deleteId], mergeAssignments: false }),
+      });
+
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(response.body.code, 'CROSS_CHURCH_TIER_REFERENCE');
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM individuals
+         WHERE church_id = ? AND id IN (?, ?)`,
+        [churchId, keepId, deleteId],
+      ))[0].count, 2);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT church_id AS churchId, individual_id AS individualId
+         FROM engagement_tier_state WHERE church_id = ? AND individual_id = ?`,
+        [foreignChurchId, deleteId],
+      ), [{ churchId: foreignChurchId, individualId: deleteId }]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT id, church_id AS churchId, individual_id AS individualId
+         FROM engagement_tier_transitions WHERE church_id = ? AND individual_id = ?`,
+        [foreignChurchId, deleteId],
+      ), [{ id: transitionId, churchId: foreignChurchId, individualId: deleteId }]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('permanent deletion rolls back when tier rows carry another church ID', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const foreignChurchId = `${churchId}_foreign`;
+    const transitionId = await seedForeignTierReferences(individualId, foreignChurchId);
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request(`/api/individuals/${individualId}/permanent`, {
+        method: 'DELETE',
+      });
+
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(response.body.code, 'CROSS_CHURCH_TIER_REFERENCE');
+      assert.equal((await Database.query(
+        `SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND id = ?`,
+        [churchId, individualId],
+      ))[0].count, 1);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT church_id AS churchId, individual_id AS individualId
+         FROM engagement_tier_state WHERE church_id = ? AND individual_id = ?`,
+        [foreignChurchId, individualId],
+      ), [{ churchId: foreignChurchId, individualId }]);
+      assert.deepStrictEqual(await Database.query(
+        `SELECT id, church_id AS churchId, individual_id AS individualId
+         FROM engagement_tier_transitions WHERE church_id = ? AND individual_id = ?`,
+        [foreignChurchId, individualId],
+      ), [{ id: transitionId, churchId: foreignChurchId, individualId }]);
     } finally {
       await app.close();
     }
