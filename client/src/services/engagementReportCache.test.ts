@@ -7,7 +7,7 @@ import {
 } from './engagementReportCache';
 
 const overview = (churchId = 'church-a', completedWeekEnd = '2026-08-16'): EngagementOverviewDto => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   churchId,
   window: {
     completedWeekEnd,
@@ -28,6 +28,7 @@ const overview = (churchId = 'church-a', completedWeekEnd = '2026-08-16'): Engag
   },
   setup: { hasPrimaryRole: true, hasStandardPrimaryRole: true, hasPrimaryAssignments: true },
   baseline: { pending: false, pendingAxes: 0 },
+  historyBackfill: { completed: true, firstWeekEnd: '2026-01-04', lastWeekEnd: completedWeekEnd, weeksEvaluated: 33, transitionsReconstructed: 1 },
   population: { activeRegulars: 1 },
   primaryDistribution: {
     classified: { denominator: 1, tiers: [{ tier: 'core', label: 'Core', colour: '#16A34A', count: 1, rate: 1, peopleToken: 'core' }] },
@@ -110,7 +111,7 @@ describe('engagement report cache', () => {
 
     expect(readEngagementOverviewCache('church-a')?.window.completedWeekEnd).toBe('2026-08-16');
     expect(readEngagementOverviewCache('church-b')?.churchId).toBe('church-b');
-    expect(Object.keys(localStorage).every((key) => key.includes(':v2:'))).toBe(true);
+    expect(Object.keys(localStorage).every((key) => key.includes(':v3:'))).toBe(true);
   });
 
   it('ignores schema-v1 overview entries without migrating them', () => {
@@ -125,9 +126,9 @@ describe('engagement report cache', () => {
   });
 
   it('rejects malformed cached JSON and clears entries whose embedded church differs', () => {
-    localStorage.setItem('engagement-overview:v2:church-a:2026-08-16', '{bad json');
+    localStorage.setItem('engagement-overview:v3:church-a:2026-08-16', '{bad json');
     localStorage.setItem(
-      'engagement-overview:v2:church-a:2026-08-09',
+      'engagement-overview:v3:church-a:2026-08-09',
       JSON.stringify(overview('church-b', '2026-08-09')),
     );
 
@@ -164,7 +165,7 @@ describe('engagement report cache', () => {
       localStorage.clear();
       const candidate = structuredClone(overview());
       corrupt(candidate);
-      localStorage.setItem('engagement-overview:v2:church-a:2026-08-16', JSON.stringify(candidate));
+      localStorage.setItem('engagement-overview:v3:church-a:2026-08-16', JSON.stringify(candidate));
       expect(readEngagementOverviewCache('church-a')).toBeNull();
       expect(localStorage.length).toBe(0);
     }
@@ -177,7 +178,7 @@ describe('engagement report cache', () => {
   ])('rejects cached overviews with an invalid %s', (_name, corrupt) => {
     const candidate = structuredClone(overview());
     corrupt(candidate);
-    const key = `engagement-overview:v2:church-a:${candidate.window.completedWeekEnd}`;
+    const key = `engagement-overview:v3:church-a:${candidate.window.completedWeekEnd}`;
     localStorage.setItem(key, JSON.stringify(candidate));
 
     expect(readEngagementOverviewCache('church-a')).toBeNull();

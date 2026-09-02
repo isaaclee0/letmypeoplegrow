@@ -5,6 +5,7 @@ const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewIn
 const { sendWeeklyReviewEmail } = require('../utils/email');
 const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
 const { evaluateEngagementTierConfirmations } = require('./engagement/tierConfirmationEvaluator');
+const { backfillPendingChurches } = require('./engagement/historyBackfillCoordinator');
 const { processConfirmedPrimaryTransitions } = require('./engagement/declines');
 const { shouldNudgeForGuidance } = require('./weeklyReviewGuidance');
 const { getChurchDate, getZonedParts, addDateOnly } = require('../utils/churchTime');
@@ -291,6 +292,15 @@ function createProcessChurch(dependencies = {}) {
   });
 }
 
+async function runHourlyCheck({ __deps = {} } = {}) {
+  const database = __deps.database || Database;
+  const retryBackfills = __deps.backfillPendingChurches || backfillPendingChurches;
+  const process = __deps.processChurch || processChurch;
+  const churches = database.listChurches();
+  await retryBackfills({ churches });
+  for (const church of churches) await process(church);
+}
+
 /**
  * Start the weekly review scheduler.
  * Runs every hour and checks each church's timezone for 7 AM send window.
@@ -302,10 +312,7 @@ function start() {
 
   cronJob = cron.schedule('0 * * * *', async () => {
     try {
-      const churches = Database.listChurches();
-      for (const church of churches) {
-        await processChurch(church);
-      }
+      await runHourlyCheck();
     } catch (err) {
       console.error('Weekly review scheduler error:', err.message);
     }
@@ -327,6 +334,7 @@ module.exports = {
   stop,
   processChurch,
   createProcessChurch,
+  runHourlyCheck,
   getLocalHour,
   getLocalDayName,
   getLocalDateString,

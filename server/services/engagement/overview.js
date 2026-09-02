@@ -650,6 +650,33 @@ function groupDatedOpportunities(datedOpportunities) {
   return grouped;
 }
 
+async function loadHistoryBackfill(churchId, rulesVersion) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT first_week_end AS firstWeekEnd,
+            last_week_end AS lastWeekEnd,
+            weeks_evaluated AS weeksEvaluated,
+            transitions_reconstructed AS transitionsReconstructed
+       FROM engagement_history_backfills
+      WHERE church_id = ? AND rules_version = ?`,
+    [churchId, rulesVersion],
+  );
+  const marker = rows[0];
+  return marker ? {
+    completed: true,
+    firstWeekEnd: marker.firstWeekEnd ?? null,
+    lastWeekEnd: marker.lastWeekEnd,
+    weeksEvaluated: Number(marker.weeksEvaluated),
+    transitionsReconstructed: Number(marker.transitionsReconstructed),
+  } : {
+    completed: false,
+    firstWeekEnd: null,
+    lastWeekEnd: null,
+    weeksEvaluated: 0,
+    transitionsReconstructed: 0,
+  };
+}
+
 async function buildState(churchId, options = {}) {
   if (!churchId) throw new Error('A church ID is required to build an engagement overview.');
   const [timeZone, settings] = await Promise.all([
@@ -664,9 +691,10 @@ async function buildState(churchId, options = {}) {
   if (options.completedWeekEnd && window.completedWeekEnd !== options.completedWeekEnd) {
     throw new DrilldownTokenError();
   }
-  const [overviewSource, tierActivity] = await Promise.all([
+  const [overviewSource, tierActivity, historyBackfill] = await Promise.all([
     loadOverviewSource(churchId, window),
     loadTierActivity(churchId, settings.calculationRulesVersion, window.completedWeekEnd),
+    loadHistoryBackfill(churchId, settings.calculationRulesVersion),
   ]);
   const opportunitySource = {
     people: overviewSource.people,
@@ -694,6 +722,7 @@ async function buildState(churchId, options = {}) {
     recentTransitions: tierActivity.recentTransitions,
     overviewSource,
     cohorts,
+    historyBackfill,
   };
 }
 
@@ -713,7 +742,7 @@ async function buildEngagementOverview(churchId, options = {}) {
   const activePrimary = state.overviewSource.gatherings.filter((gathering) => Number(gathering.isActive) === 1
     && gathering.engagementRole === 'primary');
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     churchId,
     window: state.window,
     settings: state.settings,
@@ -725,6 +754,7 @@ async function buildEngagementOverview(churchId, options = {}) {
       hasPrimaryAssignments: profileSummary.primaryDistribution.notAssigned.count
         < profileSummary.population.activeRegulars,
     },
+    historyBackfill: state.historyBackfill,
     ...profileSummary,
     trend: buildTrend({
       churchId,

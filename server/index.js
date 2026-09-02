@@ -736,6 +736,16 @@ async function startServer() {
       }
     }
 
+    if (dbInitialized) {
+      try {
+        const { backfillPendingChurches } = require('./services/engagement/historyBackfillCoordinator');
+        await backfillPendingChurches();
+        console.log('✅ Engagement history backfill checked');
+      } catch (error) {
+        console.warn('⚠️  Engagement history backfill failed unexpectedly:', error.message);
+      }
+    }
+
     // Initialize WebSocket service
     try {
       webSocketService.initialize(server);

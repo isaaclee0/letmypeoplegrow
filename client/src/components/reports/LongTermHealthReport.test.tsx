@@ -53,7 +53,7 @@ const settings = {
 };
 
 const overview = (overrides: Partial<EngagementOverviewDto> = {}): EngagementOverviewDto => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   churchId: 'church-a',
   window: {
     completedWeekEnd: '2026-08-16', sourceStart: '2025-07-21', sourceEnd: '2026-08-16',
@@ -63,6 +63,7 @@ const overview = (overrides: Partial<EngagementOverviewDto> = {}): EngagementOve
   settings,
   setup: { hasPrimaryRole: true, hasStandardPrimaryRole: true, hasPrimaryAssignments: true },
   baseline: { pending: false, pendingAxes: 0 },
+  historyBackfill: { completed: true, firstWeekEnd: '2026-01-04', lastWeekEnd: '2026-08-16', weeksEvaluated: 33, transitionsReconstructed: 4 },
   population: { activeRegulars: 10 },
   primaryDistribution: {
     classified: { denominator: 7, tiers: [
@@ -450,6 +451,16 @@ describe('LongTermHealthReport', () => {
     expect(within(movement).getByText(/current tiers are available now/i)).toBeInTheDocument();
     expect(screen.queryByLabelText('Engagement baseline pending')).not.toBeInTheDocument();
     expect(screen.queryByText(/people moved|tiers changed/i)).not.toBeInTheDocument();
+  });
+
+  it('explains reconstructed historical movement quietly', async () => {
+    vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
+
+    render(<LongTermHealthReport churchId="church-a" canConfigure />);
+
+    const movement = await screen.findByRole('region', { name: 'Tier movement' });
+    expect(within(movement).getByText(/historical movement was reconstructed/i))
+      .toHaveClass('text-gray-500', 'dark:text-gray-400');
   });
 
   it('clears old rules and drilldown tokens after save before refreshing, and fails closed if refresh fails', async () => {

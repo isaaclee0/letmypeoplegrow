@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS engagement_tier_transitions (
   pastoral_processed_at TEXT,
   decline_event_id INTEGER REFERENCES engagement_decline_events(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
+  reconstructed_at TEXT,
   CHECK(from_tier <> to_tier),
   UNIQUE(church_id, individual_id, axis, from_tier, to_tier, confirmed_week_end, rules_version)
 );
@@ -132,6 +133,17 @@ CREATE INDEX IF NOT EXISTS idx_engagement_tier_transitions_recent
   ON engagement_tier_transitions(church_id, confirmed_week_end);
 CREATE INDEX IF NOT EXISTS idx_engagement_tier_transitions_unprocessed
   ON engagement_tier_transitions(church_id, axis, pastoral_processed_at, confirmed_week_end);
+
+CREATE TABLE IF NOT EXISTS engagement_history_backfills (
+  church_id TEXT NOT NULL,
+  rules_version INTEGER NOT NULL CHECK(rules_version >= 1),
+  first_week_end TEXT,
+  last_week_end TEXT NOT NULL,
+  weeks_evaluated INTEGER NOT NULL CHECK(weeks_evaluated >= 0),
+  transitions_reconstructed INTEGER NOT NULL CHECK(transitions_reconstructed >= 0),
+  completed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY(church_id, rules_version)
+);
 
 CREATE TABLE IF NOT EXISTS engagement_decline_deliveries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,6 +297,9 @@ function ensureEngagementSchema(db, churchId) {
         'INTEGER CHECK(confirmation_opportunities_at_detection IS NULL OR confirmation_opportunities_at_detection >= 0)'],
       ['confirmation_rate_at_detection',
         'REAL CHECK(confirmation_rate_at_detection IS NULL OR confirmation_rate_at_detection BETWEEN 0 AND 1)'],
+    ]);
+    addMissingColumns(db, 'engagement_tier_transitions', [
+      ['reconstructed_at', 'TEXT'],
     ]);
     ensurePastoralSubjectForeignKey(db);
     // Recreate the named indexes if the pastoral table was rebuilt above.

@@ -8,7 +8,21 @@ const {
   getLocalDayName,
   getLocalDateString,
   createProcessChurch,
+  runHourlyCheck,
 } = require('./weeklyReviewScheduler');
+
+test('hourly check retries engagement history before normal church processing', async () => {
+  const stages = [];
+  const churches = [{ church_id: 'church-a', is_approved: 1 }];
+  await runHourlyCheck({
+    __deps: {
+      database: { listChurches: () => churches },
+      backfillPendingChurches: async ({ churches: supplied }) => stages.push(`backfill:${supplied.length}`),
+      processChurch: async (church) => stages.push(`church:${church.church_id}`),
+    },
+  });
+  assert.deepEqual(stages, ['backfill:1', 'church:church-a']);
+});
 
 test('weekly review send day and hour use the church timezone', () => {
   const now = new Date('2026-08-13T21:15:00Z'); // Friday 7:15am Hobart

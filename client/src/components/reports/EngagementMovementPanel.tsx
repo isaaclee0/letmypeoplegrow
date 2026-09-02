@@ -16,6 +16,7 @@ interface EngagementMovementPanelProps {
   movement: EngagementOverviewDto['tierMovement'];
   settings: EngagementSettingsDto;
   baselinePending?: boolean;
+  historyBackfill?: EngagementOverviewDto['historyBackfill'];
   loadPeople: (
     token: string,
     cursor?: string,
@@ -55,7 +56,7 @@ function evidence(attended: number, opportunities: number, rate: number): string
   return `${attended} of ${opportunities} (${percentage(rate)}%)`;
 }
 
-const EngagementMovementPanel: React.FC<EngagementMovementPanelProps> = ({ movement, settings, baselinePending = false, loadPeople }) => {
+const EngagementMovementPanel: React.FC<EngagementMovementPanelProps> = ({ movement, settings, baselinePending = false, historyBackfill, loadPeople }) => {
   const [axis, setAxis] = useState<'primary' | 'community'>('primary');
   const [selected, setSelected] = useState<MovementCategory | null>(null);
   const [rows, setRows] = useState<EngagementPersonDrilldownRow[]>([]);
@@ -184,6 +185,12 @@ const EngagementMovementPanel: React.FC<EngagementMovementPanelProps> = ({ movem
       {baselinePending && (
         <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
           Movement tracking is starting. Current tiers are available now; movement will appear after the next weekly update.
+        </p>
+      )}
+
+      {historyBackfill?.completed && historyBackfill.weeksEvaluated > 0 && (
+        <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
+          Historical movement was reconstructed using current engagement settings and assignments.
         </p>
       )}
 

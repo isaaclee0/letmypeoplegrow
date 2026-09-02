@@ -287,7 +287,11 @@ function assertEngagementTables(db) {
       'candidate_started_week_end', 'confirmed_week_end', 'rules_version',
       'long_term_attended', 'long_term_opportunities', 'long_term_rate',
       'confirmation_attended', 'confirmation_opportunities', 'confirmation_rate',
-      'pastoral_processed_at', 'decline_event_id', 'created_at',
+      'pastoral_processed_at', 'decline_event_id', 'created_at', 'reconstructed_at',
+    ],
+    engagement_history_backfills: [
+      'church_id', 'rules_version', 'first_week_end', 'last_week_end',
+      'weeks_evaluated', 'transitions_reconstructed', 'completed_at',
     ],
     engagement_evaluation_state: [
       'church_id', 'individual_id', 'rules_version', 'last_evaluated_week_end',
@@ -579,6 +583,9 @@ function assertForeignKeysAndIndexes(db) {
   );
   assert.deepEqual(primaryKeyColumns(db, 'engagement_tier_state'), [
     'church_id', 'individual_id', 'axis',
+  ]);
+  assert.deepEqual(primaryKeyColumns(db, 'engagement_history_backfills'), [
+    'church_id', 'rules_version',
   ]);
   assert.equal(hasUniqueIndex(db, 'engagement_tier_transitions', [
     'church_id', 'individual_id', 'axis', 'from_tier', 'to_tier',

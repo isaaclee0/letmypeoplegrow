@@ -218,6 +218,7 @@ async function loadUnprocessedPrimaryTransitions(
      WHERE transition.church_id = ?
        AND transition.axis = 'primary'
        AND transition.pastoral_processed_at IS NULL
+       AND transition.reconstructed_at IS NULL
        AND transition.rules_version = ?
        ${weekFilter}
      ORDER BY transition.confirmed_week_end, transition.id`,

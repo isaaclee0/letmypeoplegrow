@@ -128,13 +128,15 @@ async function seedTransition(churchId, individualId, overrides = {}) {
        (church_id, individual_id, axis, from_tier, to_tier,
         candidate_started_week_end, confirmed_week_end, rules_version,
         long_term_attended, long_term_opportunities, long_term_rate,
-        confirmation_attended, confirmation_opportunities, confirmation_rate)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        confirmation_attended, confirmation_opportunities, confirmation_rate,
+        reconstructed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       churchId, individualId, row.axis, row.fromTier, row.toTier,
       row.candidateStartedWeekEnd, row.confirmedWeekEnd, row.rulesVersion,
       row.longTermAttended, row.longTermOpportunities, row.longTermRate,
       row.confirmationAttended, row.confirmationOpportunities, row.confirmationRate,
+      row.reconstructedAt || null,
     ],
   )).insertId;
 }
@@ -200,6 +202,28 @@ test('raw calculated movement and an active lower candidate create no decline ev
       deliveriesCreated: 0,
     });
     assert.equal((await events(churchId)).length, 0);
+  });
+});
+
+test('reconstructed historical transitions do not create retrospective pastoral events', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedChurch(churchId);
+    const individualId = await seedPerson(churchId, fixture);
+    const reconstructedId = await seedTransition(churchId, individualId, {
+      reconstructedAt: '2026-09-03 00:00:00',
+    });
+
+    assert.deepEqual(await declines.processConfirmedPrimaryTransitions(churchId), {
+      transitionsProcessed: 0,
+      eventsCreated: 0,
+      eventsRecovered: 0,
+      deliveriesCreated: 0,
+    });
+    assert.equal((await events(churchId)).length, 0);
+    assert.deepEqual(await transitionState(churchId, reconstructedId), {
+      pastoralProcessedAt: null,
+      declineEventId: null,
+    });
   });
 });
 

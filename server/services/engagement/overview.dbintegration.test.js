@@ -562,13 +562,27 @@ async function measureOverviewQueries(churchId) {
 test('builds 13 fixed buckets, standard reach, headcount averages, visitors, coverage, and stable drilldowns', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedOverviewFixture(churchId);
+    await Database.query(
+      `INSERT INTO engagement_history_backfills
+         (church_id, rules_version, first_week_end, last_week_end,
+          weeks_evaluated, transitions_reconstructed)
+       VALUES (?, 1, '2026-01-04', '2026-08-16', 33, 4)`,
+      [churchId],
+    );
     const overview = await buildEngagementOverview(churchId, {
       asOf: '2026-08-16T14:00:00.000Z',
     });
 
     assert.equal(overview.window.currentStart, '2025-08-18');
     assert.equal(overview.window.currentEnd, '2026-08-16');
-    assert.equal(overview.schemaVersion, 2);
+    assert.equal(overview.schemaVersion, 3);
+    assert.deepEqual(overview.historyBackfill, {
+      completed: true,
+      firstWeekEnd: '2026-01-04',
+      lastWeekEnd: '2026-08-16',
+      weeksEvaluated: 33,
+      transitionsReconstructed: 4,
+    });
     assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 8 });
     assert.equal(overview.trend.buckets.length, 13);
     assert.equal(overview.trend.buckets[0].startDate, '2025-08-18');
@@ -691,7 +705,7 @@ test('uses established tiers and serves recomputed confirmation and recent trans
       asOf: '2026-08-16T14:00:00.000Z',
     });
 
-    assert.equal(overview.schemaVersion, 2);
+    assert.equal(overview.schemaVersion, 3);
     assert.equal(overview.movement, undefined);
     assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 4 });
     assert.deepEqual(
@@ -884,7 +898,7 @@ test('bulk activity query excludes inactive regulars and visitors before materia
     assert.equal(measured.overview.population.activeRegulars, 0);
     assert.equal(measured.overview.tierMovement.axes.primary.confirmedRecently.count, 0);
     assert.ok(
-      measured.queryCount <= 12,
+      measured.queryCount <= 13,
       `expected bounded overview queries, received ${measured.queryCount}`,
     );
   });
@@ -900,7 +914,7 @@ test('keeps overview queries constant for 1,000 regulars across 56 weeks', async
     assert.equal(representative.overview.coverage.personLevelSessions.denominator, 52);
     assert.equal(representative.queryCount, baseline.queryCount);
     assert.ok(
-      representative.queryCount <= 12,
+      representative.queryCount <= 13,
       `expected bounded overview queries, received ${representative.queryCount}`,
     );
     t.diagnostic(

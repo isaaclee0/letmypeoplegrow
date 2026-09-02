@@ -128,7 +128,7 @@ export interface EngagementMovementAxisDto {
 }
 
 export interface EngagementOverviewDto {
-  schemaVersion: 2;
+  schemaVersion: 3;
   churchId: string;
   window: {
     completedWeekEnd: string;
@@ -146,6 +146,13 @@ export interface EngagementOverviewDto {
     hasPrimaryAssignments: boolean;
   };
   baseline: { pending: boolean; pendingAxes: number };
+  historyBackfill: {
+    completed: boolean;
+    firstWeekEnd: string | null;
+    lastWeekEnd: string | null;
+    weeksEvaluated: number;
+    transitionsReconstructed: number;
+  };
   population: { activeRegulars: number };
   primaryDistribution: {
     classified: {

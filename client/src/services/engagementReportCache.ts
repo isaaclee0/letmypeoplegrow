@@ -2,7 +2,7 @@ import type { EngagementOverviewDto, PastoralInsightsDto } from './api';
 
 const CACHE_PREFIX = 'engagement-overview';
 const PASTORAL_CACHE_PREFIX = 'pastoral-insights';
-const OVERVIEW_SCHEMA_VERSION = 2;
+const OVERVIEW_SCHEMA_VERSION = 3;
 const PASTORAL_SCHEMA_VERSION = 1;
 const PASTORAL_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -91,7 +91,8 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
       || 'movement' in value || !isString(value.churchId)
       || !isRecord(value.window) || !isSettings(value.settings)
       || !isRecord(value.setup) || !isRecord(value.population)
-      || !isRecord(value.baseline) || !isRecord(value.primaryDistribution)
+      || !isRecord(value.baseline) || !isRecord(value.historyBackfill)
+      || !isRecord(value.primaryDistribution)
       || !isRecord(value.tierMovement)
       || !isRecord(value.matrix) || !isRecord(value.trend)
       || !isRecord(value.visitorJourney) || !isRecord(value.coverage)) return false;
@@ -104,6 +105,12 @@ function isOverview(value: unknown): value is EngagementOverviewDto {
       || !isNumber(value.population.activeRegulars)) return false;
   if (!isBoolean(value.baseline.pending)
       || !isNonNegativeInteger(value.baseline.pendingAxes)) return false;
+  const history = value.historyBackfill;
+  if (!isBoolean(history.completed)
+      || !(history.firstWeekEnd === null || isCanonicalDate(history.firstWeekEnd))
+      || !(history.lastWeekEnd === null || isCanonicalDate(history.lastWeekEnd))
+      || !isNonNegativeInteger(history.weeksEvaluated)
+      || !isNonNegativeInteger(history.transitionsReconstructed)) return false;
 
   const distribution = value.primaryDistribution;
   if (!isRecord(distribution.classified) || !isNumber(distribution.classified.denominator)

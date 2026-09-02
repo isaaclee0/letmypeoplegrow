@@ -286,7 +286,7 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
             {renderPeoplePanel('distribution')}
           </section>
 
-          <EngagementMovementPanel movement={overview.tierMovement} settings={settings} baselinePending={overview.baseline.pending} loadPeople={loadMovementPeople} />
+          <EngagementMovementPanel movement={overview.tierMovement} settings={settings} baselinePending={overview.baseline.pending} historyBackfill={overview.historyBackfill} loadPeople={loadMovementPeople} />
 
           <EngagementMatrix matrix={overview.matrix} labels={{ core: settings.tiers.core.label, casual: settings.tiers.casual.label, irregular: settings.tiers.irregular.label }} onOpen={(token, title) => openPeople(token, title, 'matrix')} panel={renderPeoplePanel('matrix')} />
 
