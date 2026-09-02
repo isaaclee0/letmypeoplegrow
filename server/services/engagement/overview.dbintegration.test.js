@@ -638,6 +638,45 @@ test('builds 13 fixed buckets, standard reach, headcount averages, visitors, cov
   });
 });
 
+test('keeps a classifiable axis pending until its persisted tier is established', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const fixture = await seedOverviewFixture(churchId);
+    await insertTierState(churchId, fixture.regulars[0], 'primary', {
+      candidateTier: 'core',
+      candidateDirection: 'higher',
+      candidateStartedWeekEnd: '2026-08-09',
+      candidateFinalWeekEnd: '2026-11-01',
+    });
+    await insertTransition(churchId, fixture.regulars[0], 'primary', {
+      fromTier: 'casual',
+      toTier: 'core',
+      confirmedWeekEnd: '2026-08-09',
+    });
+
+    const overview = await buildEngagementOverview(churchId, {
+      asOf: '2026-08-16T14:00:00.000Z',
+    });
+
+    assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 8 });
+    assert.equal(overview.tierMovement.axes.primary.confirmingHigher.count, 0);
+    assert.equal(overview.tierMovement.axes.primary.confirmedRecently.count, 0);
+
+    const coreToken = overview.primaryDistribution.classified.tiers
+      .find((tier) => tier.tier === 'core').peopleToken;
+    const coreRows = await listEngagementPeople(churchId, { segment: coreToken });
+    const pendingPerson = coreRows.rows.find(
+      (row) => row.individualId === fixture.regulars[0],
+    );
+    assert.equal(pendingPerson.primary.status, 'core');
+    assert.equal(pendingPerson.primary.statusSource, 'calculated_fallback');
+
+    const transitionRows = await listEngagementPeople(churchId, {
+      segment: overview.tierMovement.axes.primary.confirmedRecently.peopleToken,
+    });
+    assert.deepEqual(transitionRows.rows, []);
+  });
+});
+
 test('uses established tiers and serves recomputed confirmation and recent transition rows', async () => {
   await withTestChurchDb(async (churchId) => {
     const fixture = await seedOverviewFixture(churchId);
@@ -649,7 +688,7 @@ test('uses established tiers and serves recomputed confirmation and recent trans
 
     assert.equal(overview.schemaVersion, 2);
     assert.equal(overview.movement, undefined);
-    assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 1 });
+    assert.deepEqual(overview.baseline, { pending: true, pendingAxes: 4 });
     assert.deepEqual(
       overview.primaryDistribution.classified.tiers.map(({ tier, count }) => ({ tier, count })),
       [

@@ -100,7 +100,8 @@ function summarizeEngagementProfiles({
   const establishedKeys = establishedAxisKeys(current);
   const movementAxes = Object.fromEntries(ENGAGEMENT_AXES.map((axis) => {
     const activeStates = tierStates.filter((state) => state.axis === axis
-      && currentIds.has(state.individualId));
+      && currentIds.has(state.individualId)
+      && establishedKeys.has(tierStateKey(state.individualId, axis)));
     const confirmation = (direction) => ({
       count: activeStates.filter((state) => state.candidateDirection === direction).length,
       peopleToken: peopleToken({ type: 'confirmation', axis, direction }),
@@ -627,7 +628,9 @@ function buildEstablishedProfiles(calculatedProfiles, tierStates) {
         status: state && classified(state.establishedTier)
           ? state.establishedTier
           : calculated[axis].status,
-        statusSource: state ? 'established' : 'calculated_fallback',
+        statusSource: state && classified(state.establishedTier)
+          ? 'established'
+          : 'calculated_fallback',
       };
     }
     establishedProfiles.set(individualId, profile);

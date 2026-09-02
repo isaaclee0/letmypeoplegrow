@@ -141,6 +141,53 @@ function crossChurchTierReferenceError() {
   );
 }
 
+function deduplicationRequestError(statusCode, code, message) {
+  return Object.assign(new Error(message), { statusCode, code });
+}
+
+function normalizeDeduplicationParticipants(keepId, deleteIds) {
+  const normalizeId = (value) => {
+    if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') {
+      return null;
+    }
+    const id = Number(value);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  };
+  const survivorId = normalizeId(keepId);
+  if (survivorId === null || !Array.isArray(deleteIds) || deleteIds.length === 0) {
+    throw deduplicationRequestError(
+      400,
+      'INVALID_DEDUPLICATION_PARTICIPANTS',
+      'A survivor and at least one source individual are required.',
+    );
+  }
+  const sourceIds = deleteIds.map(normalizeId);
+  if (sourceIds.some((id) => id === null)
+      || new Set(sourceIds).size !== sourceIds.length
+      || sourceIds.includes(survivorId)) {
+    throw deduplicationRequestError(
+      400,
+      'INVALID_DEDUPLICATION_PARTICIPANTS',
+      'Deduplication participants must be distinct positive integer IDs.',
+    );
+  }
+  return { keepId: survivorId, deleteIds: sourceIds, involvedIds: [survivorId, ...sourceIds] };
+}
+
+async function assertDeduplicationParticipantsExist(conn, churchId, involvedIds) {
+  const rows = await conn.query(
+    `SELECT id FROM individuals WHERE church_id = ? AND id IN (?)`,
+    [churchId, involvedIds],
+  );
+  if (rows.length !== involvedIds.length) {
+    throw deduplicationRequestError(
+      404,
+      'DEDUPLICATION_PARTICIPANT_NOT_FOUND',
+      'One or more deduplication participants were not found.',
+    );
+  }
+}
+
 async function assertNoCrossChurchTierReferences(conn, churchId, individualIds) {
   const ids = [...new Set(individualIds.map(Number).filter(Number.isInteger))];
   if (ids.length === 0) return;
@@ -583,13 +630,10 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
 // Deduplicate individuals (Admin only)
 router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVIDUALS'), async (req, res) => {
   try {
-    const { keepId, deleteIds, mergeAssignments } = req.body;
-    
-    if (!keepId || !deleteIds || !Array.isArray(deleteIds)) {
-      return res.status(400).json({ error: 'Invalid request. Must provide keepId and deleteIds array.' });
-    }
+    const { mergeAssignments } = req.body;
+    const participants = normalizeDeduplicationParticipants(req.body.keepId, req.body.deleteIds);
+    const { keepId, deleteIds, involvedIds } = participants;
 
-    const involvedIds = [Number(keepId), ...deleteIds.map(Number)];
     const lock = await getPersonAuthorityLock(req.user.church_id, involvedIds);
     if (involvedIds.some(lock.isLocked)) {
       return res.status(403).json(lockedResponse(lock.active, 'deduplicate'));
@@ -597,15 +641,16 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 
     // Start a transaction
     await Database.transaction(async (conn) => {
+      await assertDeduplicationParticipantsExist(conn, req.user.church_id, involvedIds);
       await assertNoCrossChurchTierReferences(
         conn,
         req.user.church_id,
-        deleteIds,
+        involvedIds,
       );
       await rehomeEngagementHistoryWithConnection(conn, {
         churchId: req.user.church_id,
-        keepId: Number(keepId),
-        deleteIds: deleteIds.map(Number),
+        keepId,
+        deleteIds,
       });
       // If merging assignments, move assignments from deleted IDs to kept ID
       if (mergeAssignments) {
@@ -645,8 +690,8 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
     
     res.json({ message: 'Deduplication successful', keptId: keepId, deletedIds: deleteIds });
   } catch (error) {
-    if (error && error.statusCode === 409) {
-      return res.status(409).json({ error: error.message, code: error.code });
+    if (error && Number(error.statusCode) >= 400 && Number(error.statusCode) < 500) {
+      return res.status(error.statusCode).json({ error: error.message, code: error.code });
     }
     console.error('Deduplicate individuals error:', error);
     res.status(500).json({ error: 'Failed to deduplicate individuals.' });
