@@ -820,7 +820,8 @@ function confirmationRows(state, selector) {
   for (const tierState of state.tierStates) {
     if (tierState.axis !== selector.axis
         || tierState.candidateDirection !== selector.direction
-        || !tierState.candidateTier) continue;
+        || !tierState.candidateTier
+        || !state.establishedKeys.has(tierStateKey(tierState.individualId, tierState.axis))) continue;
     const profile = state.establishedProfiles.get(tierState.individualId);
     if (!profile) continue;
     const facts = (state.datedOpportunities[selector.axis].get(tierState.individualId) || [])

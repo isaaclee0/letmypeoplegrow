@@ -55,3 +55,18 @@ Addressed the two Important findings from the whole-branch review only:
 ## Concerns
 
 None introduced by this fix wave. The database transaction wrapper logs expected validation rollbacks during negative integration cases; this is pre-existing transaction logging behavior and does not change API responses or test outcomes.
+
+## Scoped re-review follow-up
+
+The scoped re-review identified one remaining presentation path for the first finding: a valid or stale confirmation token could still return a candidate row for an axis whose persisted `established_tier` was null, even though the overview summary correctly reported zero confirmations.
+
+- Extended `confirmationRows` to require the person/axis key to be present in the overview's `establishedKeys` set before returning a confirmation row.
+- Extended the null-established integration regression to use the generated confirmation token and assert an empty result.
+- The pre-existing established-tier confirmation case continues to return its detailed confirmation row.
+
+TDD and verification:
+
+- RED: the null-established confirmation drilldown returned Amy with `establishedTier: null` instead of an empty result.
+- GREEN: overview integration **7 passed, 0 failed**.
+- Full 14-file engagement server matrix **139 passed, 0 failed**.
+- Production syntax, diff hygiene, and package/lock checks passed; no client or unrelated files changed.

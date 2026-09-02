@@ -670,6 +670,11 @@ test('keeps a classifiable axis pending until its persisted tier is established'
     assert.equal(pendingPerson.primary.status, 'core');
     assert.equal(pendingPerson.primary.statusSource, 'calculated_fallback');
 
+    const confirmationRows = await listEngagementPeople(churchId, {
+      segment: overview.tierMovement.axes.primary.confirmingHigher.peopleToken,
+    });
+    assert.deepEqual(confirmationRows.rows, []);
+
     const transitionRows = await listEngagementPeople(churchId, {
       segment: overview.tierMovement.axes.primary.confirmedRecently.peopleToken,
     });
