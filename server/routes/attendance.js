@@ -127,6 +127,52 @@ router.put('/sessions/state',
     }
   });
 
+router.put('/sessions/exclusion',
+  disableCache,
+  requireRole(['admin', 'coordinator']),
+  async (req, res) => {
+    const { gatheringTypeId, sessionDate, excluded } = req.body || {};
+    if (!Number.isInteger(gatheringTypeId) || gatheringTypeId <= 0
+        || !isValidDateOnly(sessionDate)
+        || typeof excluded !== 'boolean') {
+      return res.status(400).json({ error: 'A valid gathering, session date, and exclusion state are required.' });
+    }
+
+    try {
+      const session = await Database.transaction(async (conn) => {
+        const ensured = await ensureSessionWithConnection(conn, {
+          churchId: req.user.church_id,
+          gatheringTypeId,
+          sessionDate,
+          actorId: req.user.id,
+        });
+        await conn.query(
+          `UPDATE attendance_sessions
+           SET excluded_from_stats = ?, updated_at = datetime('now')
+           WHERE id = ? AND church_id = ?`,
+          [excluded ? 1 : 0, ensured.id, req.user.church_id],
+        );
+        return ensured;
+      });
+
+      const { broadcastSessionExcluded } = require('../utils/websocketBroadcast');
+      broadcastSessionExcluded(gatheringTypeId, sessionDate, req.user.church_id, {
+        excludedFromStats: excluded,
+      });
+
+      return res.json({
+        message: excluded ? 'Session excluded.' : 'Session included.',
+        excludedFromStats: excluded,
+        sessionId: session.id,
+      });
+    } catch (error) {
+      const mapped = sessionStateErrorResponse(error);
+      if (mapped) return res.status(mapped.status).json({ code: mapped.code, error: mapped.error });
+      logger.error('Failed to update attendance session exclusion', { error: error.message });
+      return res.status(500).json({ error: 'Failed to update session exclusion.' });
+    }
+  });
+
 // ===== HEADCOUNT ENDPOINTS (MUST BE FIRST TO AVOID ROUTE CONFLICTS) =====
 
 // Get headcount for a specific gathering and date

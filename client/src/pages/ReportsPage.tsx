@@ -44,7 +44,7 @@ const ReportsPage: React.FC = () => {
         tabIndex={0}
         hidden={activeTab !== 'selected-period'}
       >
-        {activeTab === 'selected-period' && <SelectedPeriodReport />}
+        <SelectedPeriodReport />
       </div>
       <div
         id="report-panel-long-term-health"

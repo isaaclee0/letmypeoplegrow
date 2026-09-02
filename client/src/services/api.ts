@@ -883,6 +883,12 @@ export const attendanceAPI = {
   toggleExcludeFromStats: (sessionId: number) =>
     api.patch(`/attendance/sessions/${sessionId}/exclude`),
 
+  setSessionExclusion: (data: {
+    gatheringTypeId: number;
+    sessionDate: string;
+    excluded: boolean;
+  }) => api.put<{ excludedFromStats: boolean; sessionId: number }>('/attendance/sessions/exclusion', data),
+
   setSessionState: (data: {
     gatheringTypeId: number;
     sessionDate: string;

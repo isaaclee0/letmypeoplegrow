@@ -7,8 +7,15 @@ import { writeEngagementOverviewCache } from '../../services/engagementReportCac
 import LongTermHealthReport from './LongTermHealthReport';
 
 vi.mock('react-chartjs-2', () => ({
-  Doughnut: ({ options }: { options?: { plugins?: { legend?: { labels?: { color?: string } } } } }) => <div aria-label="Primary tier distribution chart" data-legend-color={options?.plugins?.legend?.labels?.color} />,
-  Line: () => <div aria-label="Attendance trend chart" />,
+  Doughnut: ({ options }: { options?: { plugins?: { legend?: { labels?: { color?: string } } }; scales?: unknown } }) => <div aria-label="Primary tier distribution chart" data-legend-color={options?.plugins?.legend?.labels?.color} data-has-scales={String(Boolean(options?.scales))} />,
+  Line: ({ options }: { options?: { scales?: { x?: { ticks?: { color?: string } }; y?: { ticks?: { color?: string }; grid?: { color?: string } } } } }) => (
+    <div
+      aria-label="Attendance trend chart"
+      data-x-tick-color={options?.scales?.x?.ticks?.color}
+      data-y-tick-color={options?.scales?.y?.ticks?.color}
+      data-grid-color={options?.scales?.y?.grid?.color}
+    />
+  ),
 }));
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -114,6 +121,11 @@ const overview = (overrides: Partial<EngagementOverviewDto> = {}): EngagementOve
 describe('LongTermHealthReport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
     localStorage.clear();
   });
   afterEach(() => vi.restoreAllMocks());
@@ -179,13 +191,20 @@ describe('LongTermHealthReport', () => {
   });
 
   it('uses a high-contrast chart legend in dark mode', async () => {
-    document.documentElement.classList.add('dark');
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
     vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview() } as never);
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
 
     expect(await screen.findByLabelText('Primary tier distribution chart')).toHaveAttribute('data-legend-color', '#e5e7eb');
-    await act(async () => { document.documentElement.classList.remove('dark'); });
+    expect(screen.getByLabelText('Primary tier distribution chart')).toHaveAttribute('data-has-scales', 'false');
+    expect(screen.getByLabelText('Attendance trend chart')).toHaveAttribute('data-x-tick-color', '#e5e7eb');
+    expect(screen.getByLabelText('Attendance trend chart')).toHaveAttribute('data-y-tick-color', '#e5e7eb');
+    expect(screen.getByLabelText('Attendance trend chart')).toHaveAttribute('data-grid-color', 'rgba(255, 255, 255, 0.08)');
   });
 
   it('lets an administrator choose active standard Primary gatherings from setup', async () => {
@@ -296,7 +315,7 @@ describe('LongTermHealthReport', () => {
       community: { status: 'establishing', attended: 3, opportunities: 5, rate: .6 },
     }], nextCursor: null } } as never);
     const { rerender } = render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    fireEvent.click(screen.getByRole('button', { name: /Committed: 4 of 7/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Committed: 4 \(57%\)/ }));
     expect(await screen.findByText('Alex Able')).toBeInTheDocument();
 
     rerender(<LongTermHealthReport churchId="church-b" canConfigure />);
@@ -323,7 +342,9 @@ describe('LongTermHealthReport', () => {
 
     expect(await screen.findByText('18 Aug 2025 – 16 Aug 2026')).toBeInTheDocument();
     expect(screen.getByText(/latest 52 fully completed weeks/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Committed: 4 of 7 classified people \(57%\)/ })).toBeInTheDocument();
+    expect(screen.getByText('7 people')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Committed: 4 (57%)' })).toBeInTheDocument();
+    expect(screen.queryByText(/classified active regulars/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Establishing: 1 person' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not assigned: 2 people' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: /Occasional Primary, Committed Other participation: 2 people/ })).toBeInTheDocument();
@@ -356,7 +377,7 @@ describe('LongTermHealthReport', () => {
       }], nextCursor: null } } as never);
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    fireEvent.click(await screen.findByRole('button', { name: /Committed: 4 of 7/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Committed: 4 \(57%\)/ }));
     expect(screen.queryByRole('dialog', { name: 'Committed people' })).not.toBeInTheDocument();
     const panel = await screen.findByRole('region', { name: 'Committed people' });
     expect(within(panel).getByText('31 of 46 opportunities (67%)')).toBeInTheDocument();
@@ -386,7 +407,7 @@ describe('LongTermHealthReport', () => {
     ], nextCursor: null } } as never);
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
-    fireEvent.click(await screen.findByRole('button', { name: /Committed: 4 of 7/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Committed: 4 \(57%\)/ }));
     const panel = await screen.findByRole('region', { name: 'Committed people' });
 
     expect(within(panel).getAllByRole('rowheader').map((row) => row.textContent)).toEqual(['Alex Able', 'Jane Zebra']);
@@ -417,15 +438,17 @@ describe('LongTermHealthReport', () => {
     });
   });
 
-  it('labels calculated tiers as temporary while a baseline is pending without claiming movement', async () => {
+  it('scopes a pending baseline to a quiet note in Tier movement', async () => {
     vi.mocked(reportsAPI.getEngagementOverview).mockResolvedValue({ data: overview({
       baseline: { pending: true, pendingAxes: 3 },
     }) } as never);
 
     render(<LongTermHealthReport churchId="church-a" canConfigure />);
 
-    expect(await screen.findByText(/calculated tiers are shown temporarily/i)).toBeInTheDocument();
-    expect(screen.getByText(/movement will appear after the baseline is established/i)).toBeInTheDocument();
+    const movement = await screen.findByRole('region', { name: 'Tier movement' });
+    expect(within(movement).getByText(/movement tracking is starting/i)).toHaveClass('text-gray-500', 'dark:text-gray-400');
+    expect(within(movement).getByText(/current tiers are available now/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Engagement baseline pending')).not.toBeInTheDocument();
     expect(screen.queryByText(/people moved|tiers changed/i)).not.toBeInTheDocument();
   });
 
@@ -443,7 +466,7 @@ describe('LongTermHealthReport', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load long-term health');
     expect(screen.queryByText('10 active regulars')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Committed: 4 of 7/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Committed: 4 \(57%\)/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/showing saved data/i)).not.toBeInTheDocument();
   });
 

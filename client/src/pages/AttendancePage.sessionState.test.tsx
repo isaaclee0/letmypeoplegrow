@@ -1,6 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { recordAttendanceViaRest, SessionStatusControl } from './AttendancePage';
+import {
+  recordAttendanceViaRest,
+  SessionExclusionControl,
+  SessionStatusControl,
+} from './AttendancePage';
 
 vi.mock('../services/userPreferences', () => ({
   userPreferences: {},
@@ -19,45 +23,32 @@ describe('Attendance session status control', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('lets authorised users confirm, cancel, and restore while explaining report exclusion', async () => {
+  it('lets authorised users confirm held sessions without offering cancellation', async () => {
     const onChange = vi.fn().mockResolvedValue(undefined);
-    const { rerender } = render(
+    render(
       <SessionStatusControl status="open" canManage onChange={onChange} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm held' }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('held'));
-
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel gathering' }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith('cancelled'));
-
-    rerender(<SessionStatusControl status="held" canManage onChange={onChange} />);
-    expect(screen.getByText(/Exclude from reports keeps a gathering/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel gathering' }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith('cancelled'));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('does not delete attendance data'));
-
-    rerender(<SessionStatusControl status="cancelled" canManage onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Restore gathering' }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith('open'));
+    expect(screen.queryByRole('button', { name: 'Cancel gathering' })).not.toBeInTheDocument();
   });
 
-  it('shows the server activity-conflict message without changing or deleting data', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const onChange = vi.fn().mockRejectedValue({
-      response: {
-        data: {
-          error: 'Correct present attendance, headcount submissions, and check-in activity before cancelling this session.',
-        },
-      },
-    });
-    render(<SessionStatusControl status="held" canManage onChange={onChange} />);
+  it('uses one reversible Exclude action with clear confirmation copy', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <SessionExclusionControl excluded={false} canManage onChange={onChange} />,
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel gathering' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Exclude' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(true));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('will not affect reports or engagement calculations'));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Correct present attendance');
-    expect(screen.getByText('Held')).toBeInTheDocument();
+    rerender(<SessionExclusionControl excluded canManage onChange={onChange} />);
+    expect(screen.getByText(/excluded from reports and engagement calculations/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Include' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(false));
   });
 
   it('applies the session state returned by a REST attendance write', async () => {

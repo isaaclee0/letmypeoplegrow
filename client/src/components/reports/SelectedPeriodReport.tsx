@@ -79,6 +79,7 @@ const SelectedPeriodReport: React.FC = () => {
   });
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const canExport = selectedGatherings.length > 0 && Boolean(startDate) && Boolean(endDate);
 
   // Close the export format menu when clicking outside (same pattern as ActionMenu)
   useEffect(() => {
@@ -832,14 +833,16 @@ const SelectedPeriodReport: React.FC = () => {
               <div className="relative inline-flex rounded-md shadow-sm" ref={exportMenuRef}>
                 <button
                   onClick={() => handleExportData()}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-l-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  disabled={!canExport || isLoading}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-l-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
                   Export {EXPORT_FORMATS.find(f => f.id === exportFormat)?.label}
                 </button>
                 <button
                   onClick={() => setExportMenuOpen(open => !open)}
-                  className="inline-flex items-center px-2 py-2 -ml-px border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-r-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  disabled={!canExport || isLoading}
+                  className="inline-flex items-center px-2 py-2 -ml-px border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-r-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                   title="Choose export format"
                 >
                   <ChevronDownIcon className="h-4 w-4" />
@@ -871,14 +874,15 @@ const SelectedPeriodReport: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Date Range Selection */}
             <div>
-              <label htmlFor="date-range" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Date Range
-              </label>
+              </span>
               <div className="mt-1 space-y-2">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-2 space-y-2 sm:space-y-0">
                   <input
                     type="date"
                     id="start-date"
+                    aria-label="Start date"
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
                     max={today()}
@@ -888,6 +892,7 @@ const SelectedPeriodReport: React.FC = () => {
                   <input
                     type="date"
                     id="end-date"
+                    aria-label="End date"
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
                     max={today()}

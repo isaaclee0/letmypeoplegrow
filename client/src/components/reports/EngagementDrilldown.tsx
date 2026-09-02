@@ -12,6 +12,10 @@ import AccessibleDialog from './AccessibleDialog';
 
 type DrilldownRow = EngagementPersonDrilldownRow | EngagementSessionDrilldownRow;
 
+const formatDate = (value: string) => new Intl.DateTimeFormat('en-AU', {
+  day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
+}).format(new Date(`${value}T00:00:00Z`));
+
 interface EngagementDrilldownProps {
   kind: 'people' | 'sessions';
   token: string;
@@ -56,7 +60,7 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
         <ul className="mt-4 divide-y divide-gray-200 text-gray-900 dark:divide-gray-700 dark:text-gray-100">
           {rows.map((row) => {
             if (row.rowType === 'attendance_session') {
-              return <li key={`session-${row.sessionId}`} className="py-3"><strong>{row.gatheringName}</strong> — {row.sessionDate}; attendance {row.attendance}{row.uniquePeople === null ? '' : `; ${row.uniquePeople} unique people`}</li>;
+              return <li key={`session-${row.sessionId}`} className="py-3"><strong>{row.gatheringName}</strong> — {formatDate(row.sessionDate)}; attendance {row.attendance}{row.uniquePeople === null ? '' : `; ${row.uniquePeople} unique people`}</li>;
             }
             const name = `${row.firstName} ${row.lastName}`;
             return (
@@ -68,7 +72,7 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
                     {row.community.status !== 'not_assigned' && <div>Other participation: <EngagementTierBadge status={row.community} settings={settings} /> <EngagementEvidence status={row.community} /></div>}
                   </div>
                 )}
-                {row.rowType === 'visitor_journey' && <div className="mt-1 text-sm">First attendance {row.firstAttendanceDate}</div>}
+                {row.rowType === 'visitor_journey' && <div className="mt-1 text-sm">First attendance {formatDate(row.firstAttendanceDate)}</div>}
               </li>
             );
           })}

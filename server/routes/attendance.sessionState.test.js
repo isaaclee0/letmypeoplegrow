@@ -33,6 +33,18 @@ async function requestState(baseUrl, token, body) {
   return { response, body: await response.json() };
 }
 
+async function requestExclusion(baseUrl, token, body) {
+  const response = await fetch(`${baseUrl}/api/attendance/sessions/exclusion`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  return { response, body: await response.json() };
+}
+
 async function requestJson(baseUrl, token, path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
@@ -167,6 +179,53 @@ test('session state route enforces permissions, validation, church isolation, an
       assert.equal(conflict.body.code, 'SESSION_HAS_ACTIVITY');
       assert.match(conflict.body.error, /Correct present attendance/);
       assert.equal(JSON.stringify(conflict.body).includes('SQLITE'), false);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      if (previousSecret === undefined) delete process.env.JWT_SECRET;
+      else process.env.JWT_SECRET = previousSecret;
+    }
+  });
+});
+
+test('session exclusion can create an empty session and is reversible', async () => {
+  await withTestChurchDb(async (churchId) => {
+    Database.getRegistryDb().prepare(
+      `INSERT INTO churches (church_id, church_name, is_approved)
+       VALUES (?, 'Session Exclusion Test', 1)`,
+    ).run(churchId);
+    const admin = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id)
+       VALUES ('exclude-admin@test.example', 'admin', 'Exclude', 'Admin', 1, ?)`,
+      [churchId],
+    );
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (name, attendance_type, church_id)
+       VALUES ('Excluded gathering', 'standard', ?)`,
+      [churchId],
+    );
+
+    const previousSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = TEST_SECRET;
+    const token = jwt.sign({ userId: admin.insertId, churchId }, TEST_SECRET);
+    const { server, baseUrl } = await startApp();
+    try {
+      const excluded = await requestExclusion(baseUrl, token, {
+        gatheringTypeId: gathering.insertId,
+        sessionDate: '2026-08-24',
+        excluded: true,
+      });
+      assert.equal(excluded.response.status, 200);
+      assert.equal(excluded.body.excludedFromStats, true);
+      assert.equal(excluded.body.sessionId > 0, true);
+
+      const included = await requestExclusion(baseUrl, token, {
+        gatheringTypeId: gathering.insertId,
+        sessionDate: '2026-08-24',
+        excluded: false,
+      });
+      assert.equal(included.response.status, 200);
+      assert.equal(included.body.excludedFromStats, false);
+      assert.equal(included.body.sessionId, excluded.body.sessionId);
     } finally {
       await new Promise((resolve) => server.close(resolve));
       if (previousSecret === undefined) delete process.env.JWT_SECRET;

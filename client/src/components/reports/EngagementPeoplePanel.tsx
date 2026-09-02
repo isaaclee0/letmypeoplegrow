@@ -23,6 +23,10 @@ function primaryRate(row: EngagementPersonDrilldownRow): number | null {
   return row.rowType === 'engagement_profile' ? row.primary.rate : null;
 }
 
+const formatDate = (value: string) => new Intl.DateTimeFormat('en-AU', {
+  day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
+}).format(new Date(`${value}T00:00:00Z`));
+
 const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, title, settings, onClose }) => {
   const [rows, setRows] = useState<EngagementPersonDrilldownRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -48,6 +52,7 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
   useEffect(() => { void load(); }, [load]);
 
   const showCommunity = useMemo(() => rows.some((row) => row.rowType === 'engagement_profile' && row.community.status !== 'not_assigned'), [rows]);
+  const isVisitorJourney = rows.length > 0 && rows.every((row) => row.rowType === 'visitor_journey');
   const sortedRows = useMemo(() => [...rows].sort((left, right) => {
     if (sortKey === 'surname') return surnameCompare(left, right) * (sortDirection === 'ascending' ? 1 : -1);
     const leftRate = primaryRate(left);
@@ -82,7 +87,7 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
           <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-600 dark:bg-gray-900/60 dark:text-gray-400">
             <tr>
               <th scope="col" aria-sort={sortKey === 'surname' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('surname')} aria-label={`Sort by surname ${nextDirection('surname')}`} className="font-medium hover:underline">Surname</button></th>
-              <th scope="col" aria-sort={sortKey === 'attendance' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('attendance')} aria-label={`Sort by Primary attendance ${nextDirection('attendance')}`} className="font-medium hover:underline">Primary attendance</button></th>
+              <th scope="col" aria-sort={sortKey === 'attendance' ? sortDirection : 'none'} className="px-4 py-2 font-medium">{isVisitorJourney ? 'First attendance' : <button type="button" onClick={() => toggleSort('attendance')} aria-label={`Sort by Primary attendance ${nextDirection('attendance')}`} className="font-medium hover:underline">Primary attendance</button>}</th>
               {showCommunity && <th scope="col" className="px-4 py-2 font-medium">Other participation</th>}
             </tr>
           </thead>
@@ -98,7 +103,7 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
               }
               return <tr key={`${row.rowType}-${row.individualId}`} className="text-gray-900 dark:text-gray-100">
                 <th scope="row" className="whitespace-nowrap px-4 py-2 text-left font-medium">{name}</th>
-                <td className="px-4 py-2" colSpan={(showCommunity ? 1 : 0) + 1}>{row.rowType === 'visitor_journey' ? `First attendance ${row.firstAttendanceDate}` : 'Attendance record'}</td>
+                <td className="px-4 py-2" colSpan={(showCommunity ? 1 : 0) + 1}>{row.rowType === 'visitor_journey' ? formatDate(row.firstAttendanceDate) : 'Attendance record'}</td>
               </tr>;
             })}
           </tbody>

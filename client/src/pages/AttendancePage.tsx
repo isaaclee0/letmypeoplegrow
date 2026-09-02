@@ -81,6 +81,12 @@ interface SessionStatusControlProps {
   onChange: (status: AttendanceSessionStatus) => Promise<void>;
 }
 
+interface SessionExclusionControlProps {
+  excluded: boolean;
+  canManage: boolean;
+  onChange: (excluded: boolean) => Promise<void>;
+}
+
 const SESSION_STATUS_STYLES: Record<AttendanceSessionStatus, string> = {
   open: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-200',
   held: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200',
@@ -95,16 +101,12 @@ export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const availableActions: Array<{ status: AttendanceSessionStatus; label: string }> = status === 'open'
-    ? [{ status: 'held', label: 'Confirm held' }, { status: 'cancelled', label: 'Cancel gathering' }]
+    ? [{ status: 'held', label: 'Confirm held' }]
     : status === 'held'
-      ? [{ status: 'cancelled', label: 'Cancel gathering' }]
+      ? []
       : [{ status: 'open', label: 'Restore gathering' }];
 
   const handleChange = async (nextStatus: AttendanceSessionStatus) => {
-    if (nextStatus === 'cancelled' && !window.confirm(
-      'Cancel this gathering? Cancellation means it did not happen and does not delete attendance data.',
-    )) return;
-
     setIsSaving(true);
     setError('');
     try {
@@ -132,16 +134,75 @@ export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
           {isSaving ? 'Saving…' : action.label}
         </button>
       ))}
-      {canManage && (
-        <span className="basis-full text-xs leading-5 text-gray-500 dark:text-gray-400">
-          Cancellation means the gathering did not happen. Exclude from reports keeps a gathering but omits it from reporting.
-        </span>
-      )}
       {error && (
         <p role="alert" className="basis-full text-xs font-medium text-rose-700 dark:text-rose-300">
           {error}
         </p>
       )}
+    </div>
+  );
+};
+
+export const SessionExclusionControl: React.FC<SessionExclusionControlProps> = ({
+  excluded,
+  canManage,
+  onChange,
+}) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!canManage) return null;
+
+  const handleChange = async (nextExcluded: boolean) => {
+    if (nextExcluded && !window.confirm(
+      'Exclude this meeting? It will remain in attendance history but will not affect reports or engagement calculations. You can include it again later.',
+    )) return;
+
+    setIsSaving(true);
+    setError('');
+    try {
+      await onChange(nextExcluded);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.error || 'Could not update the meeting exclusion.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!excluded) {
+    return (
+      <div className="flex flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={() => handleChange(true)}
+          disabled={isSaving}
+          className="flex items-center space-x-1 text-xs text-gray-500 hover:text-amber-600 disabled:cursor-wait disabled:opacity-60 dark:text-gray-400 dark:hover:text-amber-400"
+        >
+          <XMarkIcon className="h-3.5 w-3.5" />
+          <span>{isSaving ? 'Excluding…' : 'Exclude'}</span>
+        </button>
+        {error && <p role="alert" className="text-xs font-medium text-rose-700 dark:text-rose-300">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
+      <div className="flex items-center space-x-2">
+        <XMarkIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+        <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
+          This meeting is excluded from reports and engagement calculations
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => handleChange(false)}
+        disabled={isSaving}
+        className="text-sm text-amber-700 underline hover:text-amber-900 disabled:cursor-wait disabled:opacity-60 dark:text-amber-300 dark:hover:text-amber-100"
+      >
+        {isSaving ? 'Including…' : 'Include'}
+      </button>
+      {error && <p role="alert" className="text-xs font-medium text-rose-700 dark:text-rose-300">{error}</p>}
     </div>
   );
 };
@@ -3082,53 +3143,21 @@ const AttendancePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Exclude from Stats Toggle - Admin/Coordinator only */}
-      {(user?.role === 'admin' || user?.role === 'coordinator') && currentSessionId && !excludedFromStats && (
-        <div className="flex items-center justify-end">
-          <button
-            onClick={async () => {
-              try {
-                await attendanceAPI.toggleExcludeFromStats(currentSessionId);
-                setExcludedFromStats(true);
-                showSuccess('Session excluded from stats');
-              } catch (err) {
-                console.error('Failed to exclude session:', err);
-              }
-            }}
-            className="text-xs text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 flex items-center space-x-1"
-          >
-            <XMarkIcon className="h-3.5 w-3.5" />
-            <span>Exclude from stats</span>
-          </button>
-        </div>
-      )}
-
-      {/* Excluded from Stats Banner */}
-      {excludedFromStats && (
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <XMarkIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-            <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
-              This session is excluded from stats
-            </span>
-          </div>
-          {(user?.role === 'admin' || user?.role === 'coordinator') && currentSessionId && (
-            <button
-              onClick={async () => {
-                try {
-                  await attendanceAPI.toggleExcludeFromStats(currentSessionId);
-                  setExcludedFromStats(false);
-                  showSuccess('Session included in stats');
-                } catch (err) {
-                  console.error('Failed to include session:', err);
-                }
-              }}
-              className="text-sm text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 underline"
-            >
-              Include in stats
-            </button>
-          )}
-        </div>
+      {selectedGathering && selectedDate && (
+        <SessionExclusionControl
+          excluded={excludedFromStats}
+          canManage={user?.role === 'admin' || user?.role === 'coordinator'}
+          onChange={async (excluded) => {
+            const response = await attendanceAPI.setSessionExclusion({
+              gatheringTypeId: selectedGathering.id,
+              sessionDate: selectedDate,
+              excluded,
+            });
+            setCurrentSessionId(response.data.sessionId);
+            setExcludedFromStats(response.data.excludedFromStats);
+            showSuccess(excluded ? 'Meeting excluded' : 'Meeting included');
+          }}
+        />
       )}
 
       {/* Attendance Summary Bar - Show only for standard gatherings */}

@@ -15,6 +15,7 @@ type SortDirection = 'ascending' | 'descending';
 interface EngagementMovementPanelProps {
   movement: EngagementOverviewDto['tierMovement'];
   settings: EngagementSettingsDto;
+  baselinePending?: boolean;
   loadPeople: (
     token: string,
     cursor?: string,
@@ -54,7 +55,7 @@ function evidence(attended: number, opportunities: number, rate: number): string
   return `${attended} of ${opportunities} (${percentage(rate)}%)`;
 }
 
-const EngagementMovementPanel: React.FC<EngagementMovementPanelProps> = ({ movement, settings, loadPeople }) => {
+const EngagementMovementPanel: React.FC<EngagementMovementPanelProps> = ({ movement, settings, baselinePending = false, loadPeople }) => {
   const [axis, setAxis] = useState<'primary' | 'community'>('primary');
   const [selected, setSelected] = useState<MovementCategory | null>(null);
   const [rows, setRows] = useState<EngagementPersonDrilldownRow[]>([]);
@@ -179,6 +180,12 @@ const EngagementMovementPanel: React.FC<EngagementMovementPanelProps> = ({ movem
           })}
         </div>
       </div>
+
+      {baselinePending && (
+        <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
+          Movement tracking is starting. Current tiers are available now; movement will appear after the next weekly update.
+        </p>
+      )}
 
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
         {CATEGORIES.map((category) => {

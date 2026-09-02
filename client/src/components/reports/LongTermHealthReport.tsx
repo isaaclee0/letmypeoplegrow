@@ -64,7 +64,8 @@ function seriesName(role: string, attendanceType: string): string {
 }
 
 function darkModeIsActive(): boolean {
-  return typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+  return typeof window !== 'undefined'
+    && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
 const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, canConfigure }) => {
@@ -114,9 +115,10 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
   }, [churchId, refresh]);
 
   useEffect(() => {
-    const observer = new MutationObserver(() => setIsDarkMode(darkModeIsActive()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (event: MediaQueryListEvent) => setIsDarkMode(event.matches);
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
 
   const openPeople = (token: string, title: string, placement: OpenPeoplePanel['placement']) => setPeoplePanel({ token, title, placement });
@@ -152,9 +154,21 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
       }),
     };
   }, [overview]);
-  const chartOptions = useMemo(() => ({
-    plugins: { legend: { labels: { color: isDarkMode ? '#e5e7eb' : '#4b5563' } } },
-  }), [isDarkMode]);
+  const distributionChartOptions = useMemo(() => {
+    const textColour = isDarkMode ? '#e5e7eb' : '#4b5563';
+    return { plugins: { legend: { labels: { color: textColour } } } };
+  }, [isDarkMode]);
+  const trendChartOptions = useMemo(() => {
+    const textColour = isDarkMode ? '#e5e7eb' : '#4b5563';
+    const gridColour = isDarkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
+    return {
+      plugins: { legend: { labels: { color: textColour } } },
+      scales: {
+        x: { ticks: { color: textColour }, grid: { color: gridColour } },
+        y: { ticks: { color: textColour }, grid: { color: gridColour } },
+      },
+    };
+  }, [isDarkMode]);
 
   if (!overview && (updating || (overviewState !== null && overviewState.churchId !== churchId))) return <div role="status" className="rounded-lg bg-white p-8 text-center shadow dark:bg-gray-800 dark:text-gray-100">Loading long-term health…</div>;
   if (!overview) return <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-5 text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200">{error || 'Could not load long-term health.'}</div>;
@@ -254,21 +268,14 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
         <>
           {!overview.setup.hasPrimaryAssignments && <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">No active regulars have a Primary assignment. Assign people to an active standard Primary gathering to build profiles.</p>}
 
-          {overview.baseline.pending && (
-            <aside className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-100" aria-label="Engagement baseline pending">
-              <p className="font-semibold">Engagement baseline is being established.</p>
-              <p className="mt-1">Calculated tiers are shown temporarily. No movement is inferred from this recalculation; movement will appear after the baseline is established.</p>
-            </aside>
-          )}
-
           <section className="rounded-lg bg-white p-5 shadow dark:bg-gray-800" aria-labelledby="primary-distribution-heading">
             <h2 id="primary-distribution-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Primary tier distribution</h2>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Among {denominator} classified active regulars.</p>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{denominator} people</p>
             <div className="mt-4 grid gap-6 lg:grid-cols-2">
-              <div className="mx-auto max-w-sm"><Doughnut aria-label="Primary tier distribution chart" data={distributionData} options={chartOptions} /></div>
+              <div className="mx-auto max-w-sm"><Doughnut aria-label="Primary tier distribution chart" data={distributionData} options={distributionChartOptions} /></div>
               <div className="space-y-2">
                 {overview.primaryDistribution.classified.tiers.map((tier) => {
-                  const label = `${tier.label}: ${tier.count} of ${denominator} classified people (${percentage(tier.rate)}%)`;
+                  const label = `${tier.label}: ${tier.count} (${percentage(tier.rate)}%)`;
                   return <button key={tier.tier} type="button" aria-label={label} onClick={() => openPeople(tier.peopleToken, `${tier.label} people`, 'distribution')} className="flex w-full items-center gap-2 rounded border border-gray-200 p-3 text-left text-gray-900 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700"><span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: tier.colour }} />{label}</button>;
                 })}
                 <button type="button" onClick={() => openPeople(overview.primaryDistribution.establishing.peopleToken, 'Establishing people', 'distribution')} className="block w-full rounded border border-gray-200 p-3 text-left text-gray-900 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700">Establishing: {people(overview.primaryDistribution.establishing.count)}</button>
@@ -279,14 +286,14 @@ const LongTermHealthReport: React.FC<LongTermHealthReportProps> = ({ churchId, c
             {renderPeoplePanel('distribution')}
           </section>
 
-          <EngagementMovementPanel movement={overview.tierMovement} settings={settings} loadPeople={loadMovementPeople} />
+          <EngagementMovementPanel movement={overview.tierMovement} settings={settings} baselinePending={overview.baseline.pending} loadPeople={loadMovementPeople} />
 
           <EngagementMatrix matrix={overview.matrix} labels={{ core: settings.tiers.core.label, casual: settings.tiers.casual.label, irregular: settings.tiers.irregular.label }} onOpen={(token, title) => openPeople(token, title, 'matrix')} panel={renderPeoplePanel('matrix')} />
 
           <section className="rounded-lg bg-white p-5 shadow dark:bg-gray-800" aria-labelledby="trend-heading">
             <h2 id="trend-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Attendance trend</h2>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Thirteen four-week buckets. The chart shows average attendance per held session.</p>
-            <div className="mt-4"><Line aria-label="Attendance trend chart" data={trendData} options={chartOptions} /></div>
+            <div className="mt-4"><Line aria-label="Attendance trend chart" data={trendData} options={trendChartOptions} /></div>
             <ul className="mt-4 space-y-2 text-sm">
               {overview.trend.buckets.flatMap((bucket) => bucket.series.map((series) => {
                 const text = `${formatDate(bucket.startDate)} – ${formatDate(bucket.endDate)}: ${seriesName(series.role, series.attendanceType)} — average ${Number(series.averageAttendance.toFixed(1))} across ${series.heldSessions} held sessions; ${series.uniquePeople === null ? 'unique reach is unavailable' : `${series.uniquePeople} unique people`}`;

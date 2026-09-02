@@ -208,13 +208,15 @@ describe('ReportsPage selected period workspace', () => {
     });
   });
 
-  it('switches between linked lazy tab panels without carrying selected-period controls forward', async () => {
+  it('switches between linked tab panels while preserving selected-period controls', async () => {
     render(<ReportsPage />);
 
     const selectedPeriodTab = screen.getByRole('tab', { name: 'Selected period' });
     const longTermTab = screen.getByRole('tab', { name: 'Long-term health' });
     const pastoralCareTab = screen.getByRole('tab', { name: 'Pastoral care' });
     expect(selectedPeriodTab).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByLabelText('Start date')).toHaveValue('2026-07-20'));
+    await waitFor(() => expect(reportsAPI.getDashboard).toHaveBeenCalled());
 
     const selectedPeriodPanel = document.getElementById(selectedPeriodTab.getAttribute('aria-controls')!);
     const longTermPanel = document.getElementById(longTermTab.getAttribute('aria-controls')!);
@@ -226,6 +228,7 @@ describe('ReportsPage selected period workspace', () => {
     expect(pastoralCarePanel).toHaveAttribute('role', 'tabpanel');
     expect(pastoralCarePanel).toHaveAttribute('hidden');
 
+    fireEvent.click(screen.getByRole('checkbox', { name: /Sunday Evening/ }));
     fireEvent.click(longTermTab);
 
     expect(longTermTab).toHaveAttribute('aria-selected', 'true');
@@ -234,8 +237,7 @@ describe('ReportsPage selected period workspace', () => {
     expect(longTermPanel).not.toHaveAttribute('hidden');
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load long-term health');
     expect(screen.queryByText('Coming in the next implementation slice.')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Gathering Types')).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue('2026-07-20')).not.toBeInTheDocument();
+    expect(selectedPeriodPanel).not.toBeVisible();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Pastoral care' }));
 
@@ -245,8 +247,10 @@ describe('ReportsPage selected period workspace', () => {
     expect(pastoralCarePanel).not.toHaveAttribute('hidden');
     expect(await screen.findByRole('heading', { name: 'Pastoral care' })).toBeInTheDocument();
     expect(screen.getByText('No pastoral care follow-up is currently open.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Gathering Types')).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue('2026-07-20')).not.toBeInTheDocument();
+    expect(selectedPeriodPanel).not.toBeVisible();
+
+    fireEvent.click(selectedPeriodTab);
+    expect(screen.getByRole('checkbox', { name: /Sunday Evening/ })).toBeChecked();
   });
 
   it('keeps caregiver results and actions bound to the displayed family after a family switch', async () => {
