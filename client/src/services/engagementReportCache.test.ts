@@ -159,4 +159,15 @@ describe('contextual long-term trends cache', () => {
     expect(readLongTermTrendsCache('church-a', [1])?.window.completedWeekEnd).toBe('2026-08-30');
     expect(readLongTermTrendsCache('church-a', [3])?.window.completedWeekEnd).toBe('2026-08-30');
   });
+
+  it('retains the three most recently written selections from the same completed week', () => {
+    for (let id = 1; id <= 4; id += 1) {
+      writeLongTermTrendsCache(contextualOverview({ gatheringTypeIds: [id] }));
+    }
+
+    expect(readLongTermTrendsCache('church-a', [1])).toBeNull();
+    expect(readLongTermTrendsCache('church-a', [2])).not.toBeNull();
+    expect(readLongTermTrendsCache('church-a', [3])).not.toBeNull();
+    expect(readLongTermTrendsCache('church-a', [4])).not.toBeNull();
+  });
 });

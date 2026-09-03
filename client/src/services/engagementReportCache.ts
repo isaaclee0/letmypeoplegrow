@@ -1,6 +1,7 @@
 import type { ContextualLongTermOverviewDto } from './api';
 
 const LONG_TERM_TRENDS_CACHE_PREFIX = 'long-term-trends';
+const LONG_TERM_TRENDS_RECENCY_PREFIX = 'long-term-trends-recency';
 const LONG_TERM_TRENDS_SCHEMA_VERSION = 4;
 const LONG_TERM_TRENDS_CACHE_LIMIT = 3;
 
@@ -174,6 +175,36 @@ function longTermTrendsPrefix(churchId: string): string {
   return `${LONG_TERM_TRENDS_CACHE_PREFIX}:v${LONG_TERM_TRENDS_SCHEMA_VERSION}:${encodeURIComponent(churchId)}:`;
 }
 
+function recencyKey(churchId: string): string {
+  return `${LONG_TERM_TRENDS_RECENCY_PREFIX}:v${LONG_TERM_TRENDS_SCHEMA_VERSION}:${encodeURIComponent(churchId)}`;
+}
+
+function readRecency(churchId: string): Record<string, number> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(recencyKey(churchId)) || '{}');
+    if (!isRecord(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => isNumber(entry[1])));
+  } catch { return {}; }
+}
+
+function touchCacheEntry(churchId: string, key: string): Record<string, number> {
+  const recency = readRecency(churchId);
+  recency[key] = Math.max(Date.now(), ...Object.values(recency).map((value) => value + 1));
+  try {
+    localStorage.setItem(recencyKey(churchId), JSON.stringify(recency));
+  } catch { /* Cache metadata is optional. */ }
+  return recency;
+}
+
+function pruneRecency(churchId: string): void {
+  try {
+    const liveKeys = new Set(longTermTrendsKeys(churchId));
+    const recency = Object.fromEntries(Object.entries(readRecency(churchId)).filter(([key]) => liveKeys.has(key)));
+    if (liveKeys.size === 0) localStorage.removeItem(recencyKey(churchId));
+    else localStorage.setItem(recencyKey(churchId), JSON.stringify(recency));
+  } catch { /* Cache metadata is optional. */ }
+}
+
 function longTermTrendsKeys(churchId: string): string[] {
   const prefix = longTermTrendsPrefix(churchId);
   try {
@@ -206,6 +237,7 @@ export function readLongTermTrendsCache(
         removeCacheEntry(key);
         continue;
       }
+      touchCacheEntry(churchId, key);
       return parsed;
     } catch {
       removeCacheEntry(key);
@@ -229,20 +261,24 @@ export function writeLongTermTrendsCache(overview: ContextualLongTermOverviewDto
   };
   if (!isContextualOverview(canonicalOverview)) return;
   try {
-    localStorage.setItem(longTermTrendsKey(canonicalOverview), JSON.stringify(canonicalOverview));
+    const currentKey = longTermTrendsKey(canonicalOverview);
+    localStorage.setItem(currentKey, JSON.stringify(canonicalOverview));
+    const recency = touchCacheEntry(canonicalOverview.churchId, currentKey);
     const snapshots = longTermTrendsKeys(canonicalOverview.churchId).map((key) => {
       try {
         const value = JSON.parse(localStorage.getItem(key) || 'null') as unknown;
-        return isContextualOverview(value) ? { key, value } : null;
+        return isContextualOverview(value) ? { key, value, recency: recency[key] ?? 0 } : null;
       } catch { return null; }
-    }).filter((entry): entry is { key: string; value: ContextualLongTermOverviewDto } => entry !== null)
-      .sort((left, right) => right.value.window.completedWeekEnd.localeCompare(left.value.window.completedWeekEnd));
+    }).filter((entry): entry is { key: string; value: ContextualLongTermOverviewDto; recency: number } => entry !== null)
+      .sort((left, right) => right.value.window.completedWeekEnd.localeCompare(left.value.window.completedWeekEnd)
+        || right.recency - left.recency);
     const retainedSelections = new Set<string>();
     for (const { key, value } of snapshots) {
       const selection = value.gatheringTypeIds.join(',');
       if (retainedSelections.has(selection) || retainedSelections.size >= LONG_TERM_TRENDS_CACHE_LIMIT) removeCacheEntry(key);
       else retainedSelections.add(selection);
     }
+    pruneRecency(canonicalOverview.churchId);
   } catch {
     // Cache persistence is an optional optimisation; server data remains authoritative.
   }
@@ -251,10 +287,12 @@ export function writeLongTermTrendsCache(overview: ContextualLongTermOverviewDto
 export function clearLongTermTrendsCache(churchId: string, gatheringTypeIds?: number[]): void {
   if (gatheringTypeIds === undefined) {
     longTermTrendsKeys(churchId).forEach(removeCacheEntry);
+    pruneRecency(churchId);
     return;
   }
   const canonicalIds = canonicalGatheringTypeIds([...gatheringTypeIds].sort((left, right) => left - right));
   if (!canonicalIds) return;
   const prefix = `${longTermTrendsPrefix(churchId)}${canonicalIds.join(',')}:`;
   longTermTrendsKeys(churchId).filter((key) => key.startsWith(prefix)).forEach(removeCacheEntry);
+  pruneRecency(churchId);
 }
