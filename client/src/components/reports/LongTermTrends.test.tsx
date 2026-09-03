@@ -2,8 +2,8 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContextualLongTermOverviewDto, GatheringType } from '../../services/api';
-import { reportsAPI } from '../../services/api';
-import { writeLongTermTrendsCache } from '../../services/engagementReportCache';
+import { individualsAPI, reportsAPI, settingsAPI } from '../../services/api';
+import { readLongTermTrendsCache, writeLongTermTrendsCache } from '../../services/engagementReportCache';
 import LongTermTrends from './LongTermTrends';
 
 vi.mock('react-chartjs-2', () => ({
@@ -20,6 +20,14 @@ vi.mock('../../services/api', async (importOriginal) => {
       getLongTermTrends: vi.fn(),
       getEngagementPeople: vi.fn(),
       getEngagementSessions: vi.fn(),
+    },
+    individualsAPI: {
+      ...actual.individualsAPI,
+      getAttendanceHistory: vi.fn(),
+    },
+    settingsAPI: {
+      ...actual.settingsAPI,
+      updateEngagementSettings: vi.fn(),
     },
   };
 });
@@ -282,6 +290,69 @@ describe('LongTermTrends', () => {
     await act(async () => rejectRefresh(new Error('offline')));
     expect(await screen.findByRole('alert')).toHaveTextContent(/showing saved data/i);
     expect(screen.getByText('10 assigned active regulars')).toBeInTheDocument();
+  });
+
+  it('clears every long-term trends cache for the church after settings change, then refreshes the current selection', async () => {
+    const current = overview();
+    const otherSelection = overview({ gatherings: [selected(2, 'Youth')] });
+    writeLongTermTrendsCache(otherSelection);
+    vi.mocked(reportsAPI.getLongTermTrends)
+      .mockResolvedValueOnce({ data: current } as never)
+      .mockResolvedValueOnce({ data: { ...current, settings: { ...current.settings, calculationRulesVersion: 3 } } } as never);
+    vi.mocked(settingsAPI.updateEngagementSettings).mockResolvedValue({ data: { settings: current.settings } } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Regularity settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save regularity settings' }));
+
+    await waitFor(() => expect(reportsAPI.getLongTermTrends).toHaveBeenCalledTimes(2));
+    expect(readLongTermTrendsCache('church-a', [2])).toBeNull();
+  });
+
+  it('explains people without evidence even when every classified tier is zero', async () => {
+    const result = overview({ population: 3 });
+    result.dataAvailability.unclassifiedBecauseNoEvidence = 3;
+    result.regularity!.tiers = result.regularity!.tiers.map((tier) => ({ ...tier, count: 0, rate: 0 }));
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: result } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
+
+    expect(await screen.findByText('3 people could not be classified because they have no reliable attendance evidence.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Core: 0 people (0%)' })).toBeInTheDocument();
+  });
+
+  it('labels the latest attendance-session bucket with its exact date range', async () => {
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: overview() } as never);
+    vi.mocked(reportsAPI.getEngagementSessions).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'View Sunday attendance sessions for 1 Dec 2025 – 7 Dec 2025' }));
+    expect(await screen.findByRole('dialog', { name: 'Sunday attendance sessions — 1 Dec 2025 – 7 Dec 2025' })).toBeInTheDocument();
+  });
+
+  it('opens decline attendance history from the keyboard and scopes it to selected gatherings', async () => {
+    const gatherings = [selected(2, 'Youth'), selected(1, 'Sunday')];
+    const decline = {
+      ...declineRows(1)[0],
+      individualId: 1001,
+      firstName: 'Alex',
+      lastName: 'Able',
+    };
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: overview({ gatherings, declines: [decline] }) } as never);
+    vi.mocked(individualsAPI.getAttendanceHistory).mockResolvedValue({ data: { history: [
+      { date: '2026-09-02', gatheringId: 2, gatheringName: 'Youth', present: true },
+      { date: '2026-09-01', gatheringId: 1, gatheringName: 'Sunday', present: true },
+      { date: '2026-08-31', gatheringId: 3, gatheringName: 'Conference', present: true },
+    ] } } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={gatherings} canConfigure={false} />);
+
+    const declineRegion = await screen.findByRole('region', { name: 'People attending less often' });
+    const historyTrigger = within(declineRegion).getByRole('button', { name: /Alex Able/ });
+    expect(historyTrigger).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(historyTrigger, { key: 'Enter' });
+
+    expect(await within(declineRegion).findByText(/Sep 2, 2026/)).toHaveTextContent('Youth');
+    expect(within(declineRegion).getByText(/Sep 1, 2026/)).toHaveTextContent('Sunday');
+    expect(within(declineRegion).queryByText(/Aug 31, 2026/)).not.toBeInTheDocument();
   });
 
   it('keeps a no-cache failure local and retries it', async () => {

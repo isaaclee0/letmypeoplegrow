@@ -22,6 +22,7 @@ import {
   writeLongTermTrendsCache,
 } from '../../services/engagementReportCache';
 import AccessibleDialog from './AccessibleDialog';
+import AttendanceHistoryPopover from './AttendanceHistoryPopover';
 import EngagementDrilldown from './EngagementDrilldown';
 import EngagementPeoplePanel from './EngagementPeoplePanel';
 import RegularitySettings from './RegularitySettings';
@@ -48,7 +49,6 @@ interface OpenPeoplePanel {
 interface OpenSessions {
   token: string;
   title: string;
-  gatheringNames: string[];
 }
 
 const SERIES_COLOURS = ['#2563eb', '#0f766e', '#a16207', '#be123c', '#6d28d9', '#475569'];
@@ -184,6 +184,7 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
         title={peoplePanel.title}
         settings={overview.settings}
         variant="contextual"
+        gatheringIds={gatheringTypeIds}
         onClose={() => setPeoplePanel(null)}
       />
     : null;
@@ -192,7 +193,7 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
     setShowSettings(false);
     setPeoplePanel(null);
     setOverviewState(null);
-    clearLongTermTrendsCache(churchId, gatheringTypeIds);
+    clearLongTermTrendsCache(churchId);
     setRetryGeneration((generation) => generation + 1);
   };
 
@@ -241,8 +242,9 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
               {overview.direction.series.map((series) => {
                 const latest = [...series.buckets].reverse().find(({ heldSessions }) => heldSessions > 0);
                 if (!latest) return <li key={series.gatheringTypeId} className="rounded border border-gray-200 px-3 py-2 text-gray-500 dark:border-gray-700 dark:text-gray-400">{series.name}: no held sessions</li>;
+                const bucketRange = `${formatDate(latest.startDate)} – ${formatDate(latest.endDate)}`;
                 return <li key={series.gatheringTypeId}>
-                  <button type="button" onClick={() => setSessions({ token: latest.sessionsToken, title: `${series.name} sessions`, gatheringNames: [series.name] })} className="rounded border border-gray-200 px-3 py-2 text-indigo-700 hover:bg-indigo-50 dark:border-gray-700 dark:text-indigo-300 dark:hover:bg-gray-700">View {series.name} sessions</button>
+                  <button type="button" onClick={() => setSessions({ token: latest.sessionsToken, title: `${series.name} attendance sessions — ${bucketRange}` })} className="rounded border border-gray-200 px-3 py-2 text-indigo-700 hover:bg-indigo-50 dark:border-gray-700 dark:text-indigo-300 dark:hover:bg-gray-700">View {series.name} attendance sessions for {bucketRange}</button>
                 </li>;
               })}
             </ul>
@@ -256,6 +258,11 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
               </div>
               {canConfigure && overview.regularity && <button type="button" onClick={() => setShowSettings(true)} className="rounded border border-indigo-600 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 dark:border-indigo-300 dark:text-indigo-300 dark:hover:bg-gray-700">Regularity settings</button>}
             </div>
+            {overview.dataAvailability.unclassifiedBecauseNoEvidence > 0 && (
+              <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+                {people(overview.dataAvailability.unclassifiedBecauseNoEvidence)} could not be classified because they have no reliable attendance evidence.
+              </p>
+            )}
             {!overview.regularity ? (
               <p className="mt-3 rounded-lg bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">Person-level trends require a standard attendance gathering because headcount gatherings do not identify attendees.</p>
             ) : overview.regularity.population === 0 ? (
@@ -288,8 +295,15 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
                 <ul className="mt-4 divide-y divide-gray-200 dark:divide-gray-700">
                   {overview.declines.rows.slice(0, 10).map((row) => (
                     <li key={row.individualId} className="py-3">
-                      <p className="font-medium text-gray-900 dark:text-gray-100">{row.firstName} {row.lastName}</p>
-                      <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-300">{row.summary}</p>
+                      <AttendanceHistoryPopover
+                        people={[{ individualId: row.individualId, name: `${row.firstName} ${row.lastName}` }]}
+                        gatheringIds={gatheringTypeIds}
+                      >
+                        <span className="block">
+                          <span className="block font-medium text-gray-900 dark:text-gray-100">{row.firstName} {row.lastName}</span>
+                          <span className="mt-0.5 block text-sm text-gray-600 dark:text-gray-300">{row.summary}</span>
+                        </span>
+                      </AttendanceHistoryPopover>
                     </li>
                   ))}
                 </ul>
@@ -320,7 +334,6 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
           kind="sessions"
           token={sessions.token}
           title={sessions.title}
-          selectedGatheringNames={sessions.gatheringNames}
           settings={overview.settings}
           onClose={() => setSessions(null)}
         />

@@ -7,6 +7,7 @@ import type {
   EngagementTierKey,
 } from '../../services/api';
 import { reportsAPI } from '../../services/api';
+import AttendanceHistoryPopover from './AttendanceHistoryPopover';
 import EngagementEvidence from './EngagementEvidence';
 import EngagementTierBadge from './EngagementTierBadge';
 
@@ -15,6 +16,7 @@ interface EngagementPeoplePanelProps {
   title: string;
   settings: EngagementSettingsDto | ContextualEngagementSettingsDto;
   variant?: 'legacy' | 'contextual';
+  gatheringIds?: number[];
   onClose: () => void;
 }
 
@@ -63,7 +65,7 @@ const formatDate = (value: string) => new Intl.DateTimeFormat('en-AU', {
   day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
 }).format(new Date(`${value}T00:00:00Z`));
 
-const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, title, settings, variant = 'legacy', onClose }) => {
+const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, title, settings, variant = 'legacy', gatheringIds, onClose }) => {
   const [rows, setRows] = useState<PeopleRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,7 +155,11 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
               }
               if (row.rowType === 'contextual_decline') {
                 return <tr key={`${row.rowType}-${row.individualId}`} className="text-gray-900 dark:text-gray-100">
-                  <th scope="row" className="whitespace-nowrap px-4 py-2 text-left font-medium">{name}</th>
+                  <th scope="row" className="whitespace-nowrap px-4 py-2 text-left font-medium">
+                    <AttendanceHistoryPopover people={[{ individualId: row.individualId, name }]} gatheringIds={gatheringIds}>
+                      <span className="block">{name}</span>
+                    </AttendanceHistoryPopover>
+                  </th>
                   <td className="whitespace-nowrap px-4 py-2">{row.baseline.attendedWeeks} of {row.baseline.opportunityWeeks} earlier weeks ({formatPercent(row.baseline.rate)}%)</td>
                   <td className="whitespace-nowrap px-4 py-2">{row.recent.attendedWeeks} of {row.recent.opportunityWeeks} recent weeks ({formatPercent(row.recent.rate)}%)</td>
                 </tr>;
