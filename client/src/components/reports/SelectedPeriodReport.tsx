@@ -6,6 +6,7 @@ import { reportDateRange, type ReportDateRangePreset } from '../../utils/reportD
 import { reportsAPI, gatheringsAPI, GatheringType, attendanceAPI, familiesAPI } from '../../services/api';
 import AttendanceHistoryPopover from './AttendanceHistoryPopover';
 import CaregiverPicker from './CaregiverPicker';
+import LongTermTrends from './LongTermTrends';
 import { userPreferences, PREFERENCE_KEYS } from '../../services/userPreferences';
 import logger from '../../utils/logger';
 import {
@@ -927,6 +928,9 @@ const SelectedPeriodReport: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Gathering Types
               </label>
+              <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                Choose the gathering you want to report on. If you choose more than one, attendance at any selected gathering counts as attendance for that week in Long-term trends.
+              </p>
               <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-3">
                 {gatherings.map((gathering) => (
                   <label key={gathering.id} className="flex items-center">
@@ -1347,6 +1351,14 @@ const SelectedPeriodReport: React.FC = () => {
       )}
 
       {/* Commented out Spreadsheet Instructions Modal for now - CSV export is sufficient */}
+
+      {user?.church_id && (
+        <LongTermTrends
+          churchId={user.church_id}
+          selectedGatherings={selectedGatherings}
+          canConfigure={user.role === 'admin'}
+        />
+      )}
 
       <CaregiverPicker
         familyId={caregiverPopoverFamilyId ?? 0}

@@ -1,14 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { ChartBarIcon } from '@heroicons/react/24/outline';
-import ReportTabs, { type ReportTabKey } from '../components/reports/ReportTabs';
 import SelectedPeriodReport from '../components/reports/SelectedPeriodReport';
-import LongTermHealthReport from '../components/reports/LongTermHealthReport';
-import PastoralCareReport from '../components/reports/PastoralCareReport';
 import { useAuth } from '../contexts/AuthContext';
 
 const ReportsPage: React.FC = () => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<ReportTabKey>('selected-period');
   const hasReportsAccess = user?.role === 'admin' || user?.role === 'coordinator';
 
   if (!hasReportsAccess) {
@@ -34,40 +30,9 @@ const ReportsPage: React.FC = () => {
             View attendance trends and insights
           </p>
         </div>
-        <ReportTabs activeTab={activeTab} onChange={setActiveTab} />
       </header>
 
-      <div
-        id="report-panel-selected-period"
-        role="tabpanel"
-        aria-labelledby="report-tab-selected-period"
-        tabIndex={0}
-        hidden={activeTab !== 'selected-period'}
-      >
-        <SelectedPeriodReport />
-      </div>
-      <div
-        id="report-panel-long-term-health"
-        role="tabpanel"
-        aria-labelledby="report-tab-long-term-health"
-        tabIndex={0}
-        hidden={activeTab !== 'long-term-health'}
-      >
-        {activeTab === 'long-term-health' && user?.church_id && (
-          <LongTermHealthReport key={user.church_id} churchId={user.church_id} canConfigure={user.role === 'admin'} />
-        )}
-      </div>
-      <div
-        id="report-panel-pastoral-care"
-        role="tabpanel"
-        aria-labelledby="report-tab-pastoral-care"
-        tabIndex={0}
-        hidden={activeTab !== 'pastoral-care'}
-      >
-        {activeTab === 'pastoral-care' && user?.church_id && (
-          <PastoralCareReport key={user.church_id} churchId={user.church_id} />
-        )}
-      </div>
+      <SelectedPeriodReport />
     </div>
   );
 };

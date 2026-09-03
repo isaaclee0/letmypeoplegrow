@@ -5,6 +5,15 @@ import ReportsPage from '../../pages/ReportsPage';
 import { familiesAPI, gatheringsAPI, reportsAPI } from '../../services/api';
 import CaregiverPicker from './CaregiverPicker';
 
+vi.mock('./LongTermTrends', () => ({
+  default: ({ selectedGatherings }: { selectedGatherings: Array<{ id: number }> }) => (
+    <section>
+      <h2>Long-term trends</h2>
+      <output aria-label="Long-term trend gathering IDs">{selectedGatherings.map(({ id }) => id).join(',')}</output>
+    </section>
+  ),
+}));
+
 const { refreshUserData } = vi.hoisted(() => ({
   refreshUserData: vi.fn().mockResolvedValue(undefined),
 }));
@@ -208,49 +217,22 @@ describe('ReportsPage selected period workspace', () => {
     });
   });
 
-  it('switches between linked tab panels while preserving selected-period controls', async () => {
+  it('shows the selected-period report immediately and shares selected gatherings with long-term trends', async () => {
     render(<ReportsPage />);
 
-    const selectedPeriodTab = screen.getByRole('tab', { name: 'Selected period' });
-    const longTermTab = screen.getByRole('tab', { name: 'Long-term health' });
-    const pastoralCareTab = screen.getByRole('tab', { name: 'Pastoral care' });
-    expect(selectedPeriodTab).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(screen.getByLabelText('Start date')).toHaveValue('2026-07-20'));
-    await waitFor(() => expect(reportsAPI.getDashboard).toHaveBeenCalled());
-
-    const selectedPeriodPanel = document.getElementById(selectedPeriodTab.getAttribute('aria-controls')!);
-    const longTermPanel = document.getElementById(longTermTab.getAttribute('aria-controls')!);
-    const pastoralCarePanel = document.getElementById(pastoralCareTab.getAttribute('aria-controls')!);
-    expect(selectedPeriodPanel).toHaveAttribute('role', 'tabpanel');
-    expect(selectedPeriodPanel).not.toHaveAttribute('hidden');
-    expect(longTermPanel).toHaveAttribute('role', 'tabpanel');
-    expect(longTermPanel).toHaveAttribute('hidden');
-    expect(pastoralCarePanel).toHaveAttribute('role', 'tabpanel');
-    expect(pastoralCarePanel).toHaveAttribute('hidden');
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Long-term health/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Pastoral care/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Primary|Other participation|Pastoral casebook/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Long-term trends' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Long-term trend gathering IDs')).toHaveTextContent('11');
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Sunday Evening/ }));
-    fireEvent.click(longTermTab);
 
-    expect(longTermTab).toHaveAttribute('aria-selected', 'true');
-    expect(longTermTab).toHaveClass('dark:bg-primary-500/10');
-    expect(selectedPeriodPanel).toHaveAttribute('hidden');
-    expect(longTermPanel).not.toHaveAttribute('hidden');
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load long-term health');
-    expect(screen.queryByText('Coming in the next implementation slice.')).not.toBeInTheDocument();
-    expect(selectedPeriodPanel).not.toBeVisible();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Pastoral care' }));
-
-    expect(pastoralCareTab).toHaveAttribute('aria-selected', 'true');
-    expect(selectedPeriodPanel).toHaveAttribute('hidden');
-    expect(longTermPanel).toHaveAttribute('hidden');
-    expect(pastoralCarePanel).not.toHaveAttribute('hidden');
-    expect(await screen.findByRole('heading', { name: 'Pastoral care' })).toBeInTheDocument();
-    expect(screen.getByText('No pastoral care follow-up is currently open.')).toBeInTheDocument();
-    expect(selectedPeriodPanel).not.toBeVisible();
-
-    fireEvent.click(selectedPeriodTab);
-    expect(screen.getByRole('checkbox', { name: /Sunday Evening/ })).toBeChecked();
+    await waitFor(() => {
+      expect(screen.getByLabelText('Long-term trend gathering IDs')).toHaveTextContent('11,12');
+    });
   });
 
   it('keeps caregiver results and actions bound to the displayed family after a family switch', async () => {
