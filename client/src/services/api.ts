@@ -77,6 +77,80 @@ export interface EngagementSettingsDto extends Omit<EngagementSettingsInput, 'ga
   };
 }
 
+export interface ContextualEngagementSettingsDto {
+  coreMinimum: number;
+  casualMinimum: number;
+  tiers: {
+    core: EngagementTierStyle;
+    casual: EngagementTierStyle;
+    irregular: EngagementTierStyle;
+  };
+  calculationRulesVersion: number;
+}
+
+export type ContextualDirectionStatus = 'up' | 'down' | 'steady' | 'unavailable';
+export interface ContextualLongTermOverviewDto {
+  schemaVersion: 4;
+  churchId: string;
+  gatheringTypeIds: number[];
+  window: {
+    completedWeekEnd: string;
+    startDate: string;
+    endDate: string;
+    maximumWeeks: 52;
+  };
+  settings: ContextualEngagementSettingsDto;
+  dataAvailability: {
+    availableWeeks: number;
+    validOpportunityWeeks: number;
+    excludedWeeks: number;
+    unclassifiedBecauseNoEvidence: number;
+    standardGatherings: number;
+    headcountGatherings: number;
+  };
+  direction: {
+    comparisonWeeks: 12;
+    previousAverage: number | null;
+    recentAverage: number | null;
+    percentChange: number | null;
+    status: ContextualDirectionStatus;
+    series: Array<{
+      gatheringTypeId: number;
+      name: string;
+      attendanceType: 'standard' | 'headcount';
+      buckets: Array<{
+        index: number;
+        startDate: string;
+        endDate: string;
+        heldSessions: number;
+        averageAttendance: number | null;
+        sessionsToken: string;
+      }>;
+    }>;
+  };
+  regularity: {
+    population: number;
+    tiers: Array<EngagementTierStyle & {
+      tier: EngagementTierKey;
+      count: number;
+      rate: number;
+      peopleToken: string;
+    }>;
+  } | null;
+  declines: {
+    total: number;
+    rows: Array<{
+      individualId: number;
+      firstName: string;
+      lastName: string;
+      baseline: { attendedWeeks: number; opportunityWeeks: number; rate: number };
+      recent: { attendedWeeks: number; opportunityWeeks: number; rate: number };
+      summary: string;
+    }>;
+    peopleToken: string;
+  } | null;
+}
+
 export type EngagementTierKey = 'core' | 'casual' | 'irregular';
 export interface EngagementClassifiedStatus {
   status: EngagementTierKey;
@@ -1131,6 +1205,13 @@ export const reportsAPI = {
 
   getEngagementOverview: () =>
     api.get<EngagementOverviewDto>('/reports/engagement/overview'),
+
+  getLongTermTrends: (gatheringTypeIds: number[]) =>
+    api.get<ContextualLongTermOverviewDto>('/reports/engagement/overview', {
+      params: {
+        gatheringTypeIds: [...new Set(gatheringTypeIds)].sort((a, b) => a - b).join(','),
+      },
+    }),
 
   getEngagementPeople: (params: { segment: string; cursor?: string; limit?: number }) =>
     api.get<EngagementDrilldownPage<EngagementPersonDrilldownRow>>(
