@@ -182,8 +182,6 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
         key={peoplePanel.token}
         token={peoplePanel.token}
         title={peoplePanel.title}
-        settings={overview.settings}
-        variant="contextual"
         gatheringIds={gatheringTypeIds}
         onClose={() => setPeoplePanel(null)}
       />
@@ -331,10 +329,8 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
       )}
       {sessions && overview && (
         <EngagementDrilldown
-          kind="sessions"
           token={sessions.token}
           title={sessions.title}
-          settings={overview.settings}
           onClose={() => setSessions(null)}
         />
       )}

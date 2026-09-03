@@ -68,10 +68,7 @@ const RegularitySettings: React.FC<RegularitySettingsProps> = ({ settings, onSav
     setSaving(true);
     setError('');
     try {
-      const update = settingsAPI.updateEngagementSettings as unknown as (
-        input: RegularitySettingsInput,
-      ) => Promise<{ data: { settings: ContextualEngagementSettingsDto } }>;
-      const response = await update(form);
+      const response = await settingsAPI.updateEngagementSettings(form);
       await onSaved(response.data.settings);
       setSaved(true);
     } catch (requestError: any) {

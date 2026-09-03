@@ -1,7 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ContextualEngagementSettingsDto } from '../../services/api';
 import { individualsAPI, reportsAPI } from '../../services/api';
 import EngagementPeoplePanel from './EngagementPeoplePanel';
 
@@ -19,17 +18,6 @@ vi.mock('../../services/api', async (importOriginal) => {
     },
   };
 });
-
-const settings: ContextualEngagementSettingsDto = {
-  coreMinimum: 60,
-  casualMinimum: 20,
-  tiers: {
-    core: { label: 'Core', colour: '#166534' },
-    casual: { label: 'Casual', colour: '#b45309' },
-    irregular: { label: 'Irregular', colour: '#b91c1c' },
-  },
-  calculationRulesVersion: 2,
-};
 
 describe('EngagementPeoplePanel contextual declines', () => {
   beforeEach(() => {
@@ -61,8 +49,6 @@ describe('EngagementPeoplePanel contextual declines', () => {
       <EngagementPeoplePanel
         token="decline-token"
         title="People attending less often"
-        settings={settings}
-        variant="contextual"
         gatheringIds={[2, 1]}
         onClose={vi.fn()}
       />,

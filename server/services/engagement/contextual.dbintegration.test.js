@@ -298,6 +298,47 @@ test('rejects a foreign-church gathering before loading attendance data', async 
   });
 });
 
+test('paginates contextual session drill-downs and binds cursors to their selected gathering', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const sundayId = await seedGathering(churchId, { name: 'Sunday' });
+    const youthId = await seedGathering(churchId, { name: 'Youth' });
+    const sundaySessionIds = [];
+    for (const date of ['2026-08-24', '2026-08-17', '2026-08-10']) {
+      sundaySessionIds.push(await seedSession(churchId, userId, sundayId, date));
+    }
+    await seedSession(churchId, userId, youthId, '2026-08-24');
+
+    const sunday = await buildContextualLongTermOverview(churchId, [sundayId], { asOf: AS_OF });
+    const youth = await buildContextualLongTermOverview(churchId, [youthId], { asOf: AS_OF });
+    const sundaySeries = sunday.direction.series[0].buckets.find(({ heldSessions }) => heldSessions === 3);
+    const youthSeries = youth.direction.series[0].buckets.find(({ heldSessions }) => heldSessions === 1);
+
+    const first = await listContextualSessions(churchId, {
+      series: sundaySeries.sessionsToken,
+      limit: 1,
+    });
+    assert.deepEqual(first.rows.map(({ sessionId }) => sessionId), [sundaySessionIds[0]]);
+    assert.ok(first.nextCursor);
+
+    const second = await listContextualSessions(churchId, {
+      series: sundaySeries.sessionsToken,
+      cursor: first.nextCursor,
+      limit: 10,
+    });
+    assert.deepEqual(second.rows.map(({ sessionId }) => sessionId), sundaySessionIds.slice(1));
+    assert.equal(second.nextCursor, null);
+
+    await assert.rejects(
+      listContextualSessions(churchId, {
+        series: youthSeries.sessionsToken,
+        cursor: first.nextCursor,
+      }),
+      DrilldownTokenError,
+    );
+  });
+});
+
 test('reports shorter history exactly, caps old history at 52 weeks, and compares twelve-week periods', async () => {
   await withTestChurchDb(async (churchId) => {
     const userId = await seedUser(churchId);

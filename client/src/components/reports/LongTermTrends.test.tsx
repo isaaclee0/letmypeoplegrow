@@ -239,7 +239,6 @@ describe('LongTermTrends', () => {
     const panel = await screen.findByRole('region', { name: 'Core people' });
     expect(within(panel).getByRole('columnheader', { name: 'Name' })).toBeInTheDocument();
     expect(within(panel).getByRole('columnheader', { name: 'Attendance' })).toBeInTheDocument();
-    expect(within(panel).queryByText(/Primary|Other participation/)).not.toBeInTheDocument();
     expect(within(panel).getByText('9 of 12 weeks (75%)')).toBeInTheDocument();
     expect(within(panel).getByRole('heading', { name: 'Core people' })).toHaveFocus();
     fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
@@ -255,7 +254,6 @@ describe('LongTermTrends', () => {
     const panel = screen.getByRole('region', { name: 'Core people' });
     expect(within(panel).getByRole('columnheader', { name: 'Name' })).toBeInTheDocument();
     expect(within(panel).getByRole('columnheader', { name: 'Attendance' })).toBeInTheDocument();
-    expect(within(panel).queryByText(/Primary|Other participation/)).not.toBeInTheDocument();
   });
 
   it('limits the decline preview to ten plain evidence rows and opens View all', async () => {

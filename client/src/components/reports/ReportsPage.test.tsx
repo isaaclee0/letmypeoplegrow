@@ -59,7 +59,7 @@ vi.mock('../../utils/logger', () => ({
 
 vi.mock('react-chartjs-2', () => ({
   Bar: () => <div aria-label="Report chart" />,
-  Doughnut: () => <div aria-label="Primary tier distribution chart" />,
+  Doughnut: () => <div aria-label="Regularity chart" />,
   Line: () => <div aria-label="Attendance trend chart" />,
 }));
 
@@ -95,36 +95,8 @@ vi.mock('../../services/api', () => ({
     getDismissals: vi.fn().mockResolvedValue({ data: { dismissals: [] } }),
     dismissAbsence: vi.fn(),
     exportData: vi.fn(),
-    getEngagementOverview: vi.fn().mockRejectedValue(new Error('offline')),
     getEngagementPeople: vi.fn(),
     getEngagementSessions: vi.fn(),
-    getPastoralInsights: vi.fn().mockResolvedValue({
-      data: {
-        schemaVersion: 1,
-        churchId: 'test-church',
-        window: { completedWeekEnd: '2026-08-16' },
-        insights: [],
-      },
-    }),
-    applyPastoralInsightAction: vi.fn(),
-  },
-  settingsAPI: {
-    getEngagementSettings: vi.fn().mockResolvedValue({
-      data: {
-        settings: {
-          coreMinimum: 60,
-          casualMinimum: 20,
-          tiers: {
-            core: { label: 'Core', colour: '#166534' },
-            casual: { label: 'Casual', colour: '#b45309' },
-            irregular: { label: 'Irregular', colour: '#b91c1c' },
-          },
-          gatheringRoles: [],
-          calculationRulesVersion: 1,
-          assignmentPreview: { primaryAssigned: 0, communityAssigned: 0, primaryNotAssigned: 0 },
-        },
-      },
-    }),
   },
   usersAPI: {
     getAll: vi.fn().mockResolvedValue({
@@ -222,9 +194,6 @@ describe('ReportsPage selected period workspace', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Start date')).toHaveValue('2026-07-20'));
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /Long-term health/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /Pastoral care/i })).not.toBeInTheDocument();
-    expect(screen.queryByText(/Primary|Other participation|Pastoral casebook/i)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Long-term trends' })).toBeInTheDocument();
     expect(screen.getByLabelText('Long-term trend gathering IDs')).toHaveTextContent('11');
 

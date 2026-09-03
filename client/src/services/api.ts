@@ -43,38 +43,9 @@ export interface PlanningCenterMedicalNotesSettingsDto {
 }
 export interface MedicalBadgeAppearance { icon: BadgeIconType; color: string; count: number }
 
-export type EngagementGatheringRole = 'primary' | 'community' | 'other' | null;
 export interface EngagementTierStyle {
   label: string;
   colour: string;
-}
-export interface EngagementGatheringRoleAssignment {
-  gatheringTypeId: number;
-  role: EngagementGatheringRole;
-}
-export interface EngagementGatheringRoleDto extends EngagementGatheringRoleAssignment {
-  name: string;
-  attendanceType: 'standard' | 'headcount';
-  isActive: boolean;
-}
-export interface EngagementSettingsInput {
-  coreMinimum: number;
-  casualMinimum: number;
-  tiers: {
-    core: EngagementTierStyle;
-    casual: EngagementTierStyle;
-    irregular: EngagementTierStyle;
-  };
-  gatheringRoles: EngagementGatheringRoleAssignment[];
-}
-export interface EngagementSettingsDto extends Omit<EngagementSettingsInput, 'gatheringRoles'> {
-  gatheringRoles: EngagementGatheringRoleDto[];
-  calculationRulesVersion: number;
-  assignmentPreview: {
-    primaryAssigned: number;
-    communityAssigned: number;
-    primaryNotAssigned: number;
-  };
 }
 
 export interface ContextualEngagementSettingsDto {
@@ -87,6 +58,11 @@ export interface ContextualEngagementSettingsDto {
   };
   calculationRulesVersion: number;
 }
+
+export type ContextualEngagementSettingsInput = Pick<
+  ContextualEngagementSettingsDto,
+  'coreMinimum' | 'casualMinimum' | 'tiers'
+>;
 
 export type ContextualDirectionStatus = 'up' | 'down' | 'steady' | 'unavailable';
 export interface ContextualLongTermOverviewDto {
@@ -152,301 +128,42 @@ export interface ContextualLongTermOverviewDto {
 }
 
 export type EngagementTierKey = 'core' | 'casual' | 'irregular';
-export interface EngagementClassifiedStatus {
-  status: EngagementTierKey;
-  attended: number;
-  opportunities: number;
+export interface ContextualRegularityDrilldownRow {
+  rowType: 'contextual_regularity';
+  individualId: number;
+  firstName: string;
+  lastName: string;
+  familyId: number | null;
+  tier: EngagementTierKey;
   rate: number;
+  evidence: { attendedWeeks: number; opportunityWeeks: number };
 }
-export interface EngagementEstablishingStatus {
-  status: 'establishing';
-  attended: number;
-  opportunities: number;
-  rate: number | null;
-}
-export interface EngagementNotAssignedStatus {
-  status: 'not_assigned';
-  attended: 0;
-  opportunities: 0;
-  rate: null;
-}
-export type EngagementAxisStatus =
-  | EngagementClassifiedStatus
-  | EngagementEstablishingStatus
-  | EngagementNotAssignedStatus;
-
-export interface EngagementCountDrilldown {
-  count: number;
-  peopleToken: string;
-}
-export interface EngagementRateFact {
-  numerator: number;
-  denominator: number;
-  rate: number;
-}
-export type EngagementTrendRole = 'primary' | 'community' | 'other' | 'unclassified';
-export type EngagementAttendanceType = 'standard' | 'headcount';
-export type EngagementAxis = 'primary' | 'community';
-export type EngagementStatusSource = 'established' | 'calculated_fallback';
-export interface EngagementReportedAxisStatus {
-  status: EngagementTierKey | 'establishing' | 'not_assigned';
-  attended: number;
-  opportunities: number;
-  rate: number | null;
-  statusSource: EngagementStatusSource;
-}
-export interface EngagementMovementAxisDto {
-  confirmingHigher: EngagementCountDrilldown;
-  confirmingLower: EngagementCountDrilldown;
-  confirmedRecently: EngagementCountDrilldown;
-}
-
-export interface EngagementOverviewDto {
-  schemaVersion: 3;
-  churchId: string;
-  window: {
-    completedWeekEnd: string;
-    sourceStart: string;
-    sourceEnd: string;
-    currentStart: string;
-    currentEnd: string;
-    comparisonStart: string;
-    comparisonEnd: string;
-  };
-  settings: EngagementSettingsDto;
-  setup: {
-    hasPrimaryRole: boolean;
-    hasStandardPrimaryRole: boolean;
-    hasPrimaryAssignments: boolean;
-  };
-  baseline: { pending: boolean; pendingAxes: number };
-  historyBackfill: {
-    completed: boolean;
-    firstWeekEnd: string | null;
-    lastWeekEnd: string | null;
-    weeksEvaluated: number;
-    transitionsReconstructed: number;
-  };
-  population: { activeRegulars: number };
-  primaryDistribution: {
-    classified: {
-      denominator: number;
-      tiers: Array<EngagementTierStyle & {
-        tier: EngagementTierKey;
-        count: number;
-        rate: number;
-        peopleToken: string;
-      }>;
-    };
-    establishing: EngagementCountDrilldown;
-    notAssigned: EngagementCountDrilldown;
-  };
-  tierMovement: {
-    recentWindowWeeks: 13;
-    axes: Record<EngagementAxis, EngagementMovementAxisDto>;
-  };
-  matrix: {
-    classifiedOnBothAxes: number;
-    cells: Array<{
-      primaryTier: EngagementTierKey;
-      communityTier: EngagementTierKey;
-      primaryLabel: string;
-      communityLabel: string;
-      count: number;
-      peopleToken: string;
-    }>;
-    outside: {
-      primaryEstablishing: number;
-      primaryNotAssigned: number;
-      communityEstablishing: number;
-      communityNotAssigned: number;
-      notClassifiedOnBothAxes: number;
-    };
-  };
-  trend: {
-    buckets: Array<{
-      index: number;
-      startDate: string;
-      endDate: string;
-      series: Array<{
-        role: EngagementTrendRole;
-        attendanceType: EngagementAttendanceType;
-        heldSessions: number;
-        totalAttendance: number;
-        averageAttendance: number;
-        uniquePeople: number | null;
-        sessionsToken: string;
-        peopleToken: string | null;
-      }>;
-    }>;
-  };
-  visitorJourney: {
-    local: {
-      firstTime: EngagementCountDrilldown;
-      returnedWithinEightWeeks: EngagementCountDrilldown;
-      currentRegular: EngagementCountDrilldown;
-      conversionDateKnown: false;
-    };
-    traveller: { firstTime: EngagementCountDrilldown };
-  };
-  coverage: {
-    personLevelSessions: EngagementRateFact & { excluded: number };
-    explicitProvenance: EngagementRateFact;
-    legacyProvenance: EngagementRateFact;
-    establishing: EngagementRateFact;
-    primaryNotAssigned: EngagementRateFact;
-    sessionsTokens: {
-      eligible: string;
-      explicit: string;
-      legacy: string;
-      excludedUnknown: string;
-    };
-  };
-}
-
-export interface EngagementProfileDrilldownRow {
-  rowType: 'engagement_profile';
+export interface ContextualDeclineDrilldownRow {
+  rowType: 'contextual_decline';
   individualId: number;
   firstName: string;
   lastName: string;
   familyId: number | null;
-  primary: EngagementReportedAxisStatus;
-  community: EngagementReportedAxisStatus;
+  baseline: { attendedWeeks: number; opportunityWeeks: number; rate: number };
+  recent: { attendedWeeks: number; opportunityWeeks: number; rate: number };
+  summary: string;
 }
-export interface EngagementConfirmationDrilldownRow {
-  rowType: 'engagement_confirmation';
-  individualId: number;
-  firstName: string;
-  lastName: string;
-  familyId: number | null;
-  axis: EngagementAxis;
-  direction: 'higher' | 'lower';
-  establishedTier: EngagementTierKey;
-  candidateTier: EngagementTierKey;
-  observedOpportunities: number;
-  attended: number;
-  rate: number | null;
-  candidateStartedWeekEnd: string;
-  candidateFinalWeekEnd: string;
-  currentWeek: number;
-}
-export interface EngagementTransitionEvidenceDto {
-  attended: number;
-  opportunities: number;
-  rate: number;
-}
-export interface EngagementTransitionDrilldownRow {
-  rowType: 'engagement_transition';
-  individualId: number;
-  firstName: string;
-  lastName: string;
-  familyId: number | null;
-  axis: EngagementAxis;
-  fromTier: EngagementTierKey;
-  toTier: EngagementTierKey;
-  candidateStartedWeekEnd: string;
-  confirmedWeekEnd: string;
-  longTermEvidence: EngagementTransitionEvidenceDto;
-  confirmationEvidence: EngagementTransitionEvidenceDto;
-}
-export interface EngagementAttendancePersonDrilldownRow {
-  rowType: 'attendance_person';
-  individualId: number;
-  firstName: string;
-  lastName: string;
-  familyId: number | null;
-  currentPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
-}
-export interface EngagementVisitorDrilldownRow {
-  rowType: 'visitor_journey';
-  individualId: number;
-  firstName: string;
-  lastName: string;
-  familyId: number | null;
-  currentPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
-  firstAttendanceDate: string;
-  returnedWithinEightWeeks: boolean;
-  isCurrentRegular: boolean;
-}
-export type EngagementPersonDrilldownRow =
-  | EngagementProfileDrilldownRow
-  | EngagementConfirmationDrilldownRow
-  | EngagementTransitionDrilldownRow
-  | EngagementAttendancePersonDrilldownRow
-  | EngagementVisitorDrilldownRow;
-
+export type ContextualPeopleDrilldownRow =
+  | ContextualRegularityDrilldownRow
+  | ContextualDeclineDrilldownRow;
 export interface EngagementSessionDrilldownRow {
   rowType: 'attendance_session';
   sessionId: number;
   sessionDate: string;
   gatheringTypeId: number;
   gatheringName: string;
-  role: EngagementTrendRole;
-  attendanceType: EngagementAttendanceType;
   attendance: number;
   uniquePeople: number | null;
-  provenance: 'explicit' | 'legacy' | 'unknown' | 'not_applicable';
 }
 export interface EngagementDrilldownPage<Row> {
   rows: Row[];
   nextCursor: string | null;
 }
-
-export type PastoralInsightType =
-  | 'primary_decline'
-  | 'community_primary_gap'
-  | 'visitor_next_step'
-  | 're_engagement';
-export type PastoralWorkflowState = 'open' | 'snoozed' | 'dismissed' | 'resolved';
-export interface PastoralInsightDto {
-  id: number;
-  type: PastoralInsightType;
-  episodeKey: string;
-  declineEventId: number | null;
-  person: {
-    id: number;
-    firstName: string;
-    lastName: string;
-    peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
-    isActive: boolean;
-  };
-  family: { id: number; name: string } | null;
-  lastAttendance: {
-    individualId: number;
-    date: string;
-    gatheringTypeId: number;
-    gatheringName: string;
-    engagementRole: EngagementGatheringRole;
-  } | null;
-  profiles: { primary: EngagementAxisStatus; community: EngagementAxisStatus };
-  evidence: Record<string, string | number | null>;
-  caregivers: Array<{
-    assignmentId: number;
-    type: 'user' | 'contact';
-    id: number;
-    firstName: string;
-    lastName: string;
-    email: string | null;
-    isActive: boolean;
-  }>;
-  deliverySummary: { pending: number; delivered: number; cancelled: number };
-  workflow: {
-    state: PastoralWorkflowState;
-    snoozedUntil: string | null;
-    actedBy: number | null;
-    createdAt: string | null;
-    updatedAt: string | null;
-  };
-}
-export interface PastoralInsightsDto {
-  schemaVersion: 1;
-  churchId: string;
-  window: { completedWeekEnd: string };
-  insights: PastoralInsightDto[];
-}
-export type PastoralInsightAction =
-  | { action: 'snooze'; snoozeUntil: string }
-  | { action: 'dismiss' | 'reopen' };
 
 // Shared by Planning Center and Elvanto reviewed applies. Keeping this
 // provider-neutral prevents either endpoint from adapting identity IDs or
@@ -1203,9 +920,6 @@ export const reportsAPI = {
   getDismissals: (params: { gatheringTypeIds: number[] }) =>
     api.get('/reports/dismissals', { params }),
 
-  getEngagementOverview: () =>
-    api.get<EngagementOverviewDto>('/reports/engagement/overview'),
-
   getLongTermTrends: (gatheringTypeIds: number[]) =>
     api.get<ContextualLongTermOverviewDto>('/reports/engagement/overview', {
       params: {
@@ -1214,7 +928,7 @@ export const reportsAPI = {
     }),
 
   getEngagementPeople: (params: { segment: string; cursor?: string; limit?: number }) =>
-    api.get<EngagementDrilldownPage<EngagementPersonDrilldownRow>>(
+    api.get<EngagementDrilldownPage<ContextualPeopleDrilldownRow>>(
       '/reports/engagement/people',
       { params },
     ),
@@ -1224,12 +938,6 @@ export const reportsAPI = {
       '/reports/engagement/sessions',
       { params },
     ),
-
-  getPastoralInsights: (params?: { includeSnoozed?: true }) =>
-    api.get<PastoralInsightsDto>('/reports/pastoral', { params }),
-
-  applyPastoralInsightAction: (insightId: number, action: PastoralInsightAction) =>
-    api.patch<{ insight: PastoralInsightDto }>(`/reports/pastoral/${insightId}`, action),
 };
 
 // Notifications API
@@ -1348,10 +1056,8 @@ export const notificationRulesAPI = {
 export const settingsAPI = {
   getAll: () => api.get('/settings'),
   getBadgeDefaults: () => api.get('/settings/badge-defaults'),
-  getEngagementSettings: () =>
-    api.get<{ settings: EngagementSettingsDto }>('/settings/engagement'),
-  updateEngagementSettings: (data: EngagementSettingsInput) =>
-    api.put<{ settings: EngagementSettingsDto }>('/settings/engagement', data),
+  updateEngagementSettings: (data: ContextualEngagementSettingsInput) =>
+    api.put<{ settings: ContextualEngagementSettingsDto }>('/settings/engagement', data),
   // DISABLED: External data access feature is currently disabled
   // getDataAccess: () => api.get('/settings/data-access'),
   // updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
