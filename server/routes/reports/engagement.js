@@ -2,10 +2,10 @@
 
 const express = require('express');
 const {
-  buildEngagementOverview,
-  listEngagementPeople,
-  listEngagementSessions,
-} = require('../../services/engagement/overview');
+  buildContextualLongTermOverview,
+  listContextualPeople,
+  listContextualSessions,
+} = require('../../services/engagement/contextual');
 const { DrilldownTokenError } = require('../../services/engagement/drilldownTokens');
 
 const router = express.Router();
@@ -28,14 +28,23 @@ function reportError(res, error) {
   if (error?.code === 'INVALID_ENGAGEMENT_LIMIT') {
     return res.status(400).json({ error: error.message, code: error.code });
   }
+  if (error?.code === 'INVALID_REPORT_GATHERING') {
+    return res.status(400).json({
+      error: 'Select one or more valid gatherings for this church.',
+      code: error.code,
+    });
+  }
   console.error('Engagement report error:', error);
   return res.status(500).json({ error: 'Failed to load the engagement report.' });
 }
 
 router.get('/overview', async (req, res) => {
-  if (Object.keys(req.query).length > 0) return unsupportedQuery(res);
+  if (hasUnknownQuery(req.query, new Set(['gatheringTypeIds']))) return unsupportedQuery(res);
+  const ids = typeof req.query.gatheringTypeIds === 'string'
+    ? req.query.gatheringTypeIds.split(',')
+    : [];
   try {
-    return res.json(await buildEngagementOverview(req.user.church_id));
+    return res.json(await buildContextualLongTermOverview(req.user.church_id, ids));
   } catch (error) {
     return reportError(res, error);
   }
@@ -46,7 +55,7 @@ router.get('/people', async (req, res) => {
     return unsupportedQuery(res);
   }
   try {
-    return res.json(await listEngagementPeople(req.user.church_id, {
+    return res.json(await listContextualPeople(req.user.church_id, {
       segment: req.query.segment,
       cursor: req.query.cursor,
       limit: req.query.limit,
@@ -61,7 +70,7 @@ router.get('/sessions', async (req, res) => {
     return unsupportedQuery(res);
   }
   try {
-    return res.json(await listEngagementSessions(req.user.church_id, {
+    return res.json(await listContextualSessions(req.user.church_id, {
       series: req.query.series,
       cursor: req.query.cursor,
       limit: req.query.limit,

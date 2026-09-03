@@ -64,13 +64,17 @@ test('admin and coordinator can view the overview while attendance takers are de
     await withTestChurchDb(async (churchId) => {
       const app = await startApp(churchId, role);
       try {
-        const response = await app.request('/overview');
+        const gathering = await Database.query(
+          `INSERT INTO gathering_types (name, attendance_type, is_active, church_id)
+           VALUES ('Sunday', 'standard', 1, ?)`,
+          [churchId],
+        );
+        const response = await app.request(`/overview?gatheringTypeIds=${gathering.insertId}`);
         assert.equal(response.status, expectedStatus);
         if (expectedStatus === 200) {
-          assert.equal(response.body.schemaVersion, 2);
+          assert.equal(response.body.schemaVersion, 4);
           assert.equal(response.body.churchId, churchId);
-          assert.deepEqual(response.body.baseline, { pending: false, pendingAxes: 0 });
-          assert.equal(response.body.movement, undefined);
+          assert.deepEqual(response.body.gatheringTypeIds, [gathering.insertId]);
         }
       } finally {
         await app.close();
@@ -79,12 +83,53 @@ test('admin and coordinator can view the overview while attendance takers are de
   }
 });
 
-test('overview rejects client date filters instead of changing the fixed completed-week window', async () => {
+test('overview scopes the report to its selected gatherings', async () => {
   await withTestChurchDb(async (churchId) => {
     const app = await startApp(churchId, 'admin');
     try {
-      for (const query of ['?startDate=2026-01-01', '?endDate=2026-02-01', '?asOf=2026-03-01']) {
+      const am = await Database.query(
+        `INSERT INTO gathering_types (name, attendance_type, is_active, church_id)
+         VALUES ('Sunday AM', 'standard', 1, ?)`,
+        [churchId],
+      );
+      const pm = await Database.query(
+        `INSERT INTO gathering_types (name, attendance_type, is_active, church_id)
+         VALUES ('Sunday PM', 'standard', 1, ?)`,
+        [churchId],
+      );
+      const response = await app.request(`/overview?gatheringTypeIds=${am.insertId},${pm.insertId}`);
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body.gatheringTypeIds, [am.insertId, pm.insertId]);
+      assert.equal(response.body.schemaVersion, 4);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('overview rejects invalid gathering selections and unsupported date filters', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const app = await startApp(churchId, 'admin');
+    try {
+      const gathering = await Database.query(
+        `INSERT INTO gathering_types (name, attendance_type, is_active, church_id)
+         VALUES ('Sunday', 'standard', 1, ?)`,
+        [churchId],
+      );
+      for (const query of [
+        '',
+        '?gatheringTypeIds=',
+        '?gatheringTypeIds=not-a-number',
+        '?gatheringTypeIds=999999',
+      ]) {
         const response = await app.request(`/overview${query}`);
+        assert.equal(response.status, 400);
+        assert.equal(response.body.code, 'INVALID_REPORT_GATHERING');
+      }
+      for (const query of ['?startDate=2026-01-01', '?endDate=2026-02-01', '?asOf=2026-03-01']) {
+        const response = await app.request(
+          `/overview?gatheringTypeIds=${gathering.insertId}&${query.slice(1)}`,
+        );
         assert.equal(response.status, 400);
         assert.equal(response.body.code, 'ENGAGEMENT_DATE_FILTER_UNSUPPORTED');
       }
@@ -144,17 +189,17 @@ async function seedCorePeople(churchId) {
       );
     }
   }
-  return people;
+  return { people, gatheringTypeId: gathering.insertId };
 }
 
-test('drilldowns enforce max 100, reject tampering, and paginate with stable opaque cursors', async () => {
+test('contextual drilldowns enforce limits, signed selection binding, and pagination', async () => {
   await withTestChurchDb(async (churchId) => {
     const app = await startApp(churchId, 'admin');
     try {
-      const people = await seedCorePeople(churchId);
-      const overview = await app.request('/overview');
+      const { people, gatheringTypeId } = await seedCorePeople(churchId);
+      const overview = await app.request(`/overview?gatheringTypeIds=${gatheringTypeId}`);
       assert.equal(overview.status, 200);
-      const segment = overview.body.primaryDistribution.classified.tiers
+      const segment = overview.body.regularity.tiers
         .find((tier) => tier.tier === 'core').peopleToken;
 
       const tooLarge = await app.request(`/people?segment=${encodeURIComponent(segment)}&limit=101`);
@@ -180,29 +225,23 @@ test('drilldowns enforce max 100, reject tampering, and paginate with stable opa
         people,
       );
 
+      const bucket = overview.body.direction.series[0].buckets
+        .find(({ heldSessions }) => heldSessions > 0);
+      const sessions = await app.request(`/sessions?series=${encodeURIComponent(bucket.sessionsToken)}`);
+      assert.equal(sessions.status, 200);
+      assert.ok(sessions.body.rows.length > 0);
+
       const wrongChurch = createDrilldownToken({
         churchId: 'another_church',
         kind: 'people',
-        selector: { type: 'confirmation', axis: 'primary', direction: 'higher' },
+        gatheringTypeIds: [gatheringTypeId],
+        selector: { type: 'tier', tier: 'core', gatheringTypeIds: [gatheringTypeId] },
         completedWeekEnd: overview.body.window.completedWeekEnd,
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       });
       const isolated = await app.request(`/people?segment=${encodeURIComponent(wrongChurch)}`);
       assert.equal(isolated.status, 400);
       assert.equal(isolated.body.code, 'INVALID_DRILLDOWN_TOKEN');
-
-      const retiredMovement = createDrilldownToken({
-        churchId,
-        kind: 'people',
-        selector: { type: 'movement', direction: 'same' },
-        completedWeekEnd: overview.body.window.completedWeekEnd,
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      });
-      const retired = await app.request(
-        `/people?segment=${encodeURIComponent(retiredMovement)}`,
-      );
-      assert.equal(retired.status, 400);
-      assert.equal(retired.body.code, 'INVALID_DRILLDOWN_TOKEN');
     } finally {
       await app.close();
     }
