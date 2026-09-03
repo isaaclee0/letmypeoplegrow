@@ -117,12 +117,33 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
       <fieldset>
         <legend className="font-semibold text-gray-900 dark:text-gray-100">Tier rules</legend>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <label className="text-sm text-gray-900 dark:text-gray-100">Core minimum
-            <input aria-label="Core minimum" type="number" min="0" max="100" value={form.coreMinimum} onChange={(event) => setForm({ ...form, coreMinimum: Number(event.target.value) })} className="mt-1 block w-full rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
-          </label>
-          <label className="text-sm text-gray-900 dark:text-gray-100">Casual minimum
-            <input aria-label="Casual minimum" type="number" min="0" max="100" value={form.casualMinimum} onChange={(event) => setForm({ ...form, casualMinimum: Number(event.target.value) })} className="mt-1 block w-full rounded border border-gray-300 p-2 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
-          </label>
+          <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+            <label htmlFor="core-minimum" className="block text-sm font-medium text-gray-900 dark:text-gray-100">Core threshold</label>
+            <p id="core-minimum-help" className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">Typically attends 3+ times a month</p>
+            <div className="relative mt-2">
+              <input id="core-minimum" aria-label="Core minimum" aria-describedby="core-minimum-help" type="number" min="0" max="100" value={form.coreMinimum} onChange={(event) => setForm({ ...form, coreMinimum: Number(event.target.value) })} className="block w-full rounded border border-gray-300 py-2 pl-3 pr-9 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+              <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-gray-500 dark:text-gray-400">%</span>
+            </div>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Percentage of eligible gatherings needed to enter this tier.</p>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+            <label htmlFor="casual-minimum" className="block text-sm font-medium text-gray-900 dark:text-gray-100">Casual threshold</label>
+            <p id="casual-minimum-help" className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">Typically attends 1–2 times a month</p>
+            <div className="relative mt-2">
+              <input id="casual-minimum" aria-label="Casual minimum" aria-describedby="casual-minimum-help" type="number" min="0" max="100" value={form.casualMinimum} onChange={(event) => setForm({ ...form, casualMinimum: Number(event.target.value) })} className="block w-full rounded border border-gray-300 py-2 pl-3 pr-9 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+              <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-gray-500 dark:text-gray-400">%</span>
+            </div>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Percentage of eligible gatherings needed to enter this tier.</p>
+          </div>
+        </div>
+        <div className="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-gray-900">
+          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">What these tiers mean</p>
+          <div className="mt-2 grid gap-2 text-sm sm:grid-cols-3">
+            <div><span className="font-medium text-gray-900 dark:text-gray-100">{form.tiers.core.label}</span><p className="text-gray-600 dark:text-gray-300">{form.coreMinimum}% or more</p></div>
+            <div><span className="font-medium text-gray-900 dark:text-gray-100">{form.tiers.casual.label}</span><p className="text-gray-600 dark:text-gray-300">{form.casualMinimum}%–{form.coreMinimum - 1}%</p></div>
+            <div><span className="font-medium text-gray-900 dark:text-gray-100">{form.tiers.irregular.label}</span><p className="text-gray-600 dark:text-gray-300">Typically attends once a month or less</p><p className="text-xs text-gray-500 dark:text-gray-400">Below {form.casualMinimum}%</p></div>
+          </div>
+          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">Monthly descriptions assume a roughly weekly primary gathering. The percentage of eligible gatherings is always the exact rule.</p>
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           {TIER_KEYS.map((tier) => (
@@ -135,14 +156,6 @@ const EngagementSettings: React.FC<EngagementSettingsProps> = ({ settings, canEd
               </label>
             </div>
           ))}
-        </div>
-        <div className="mt-4 rounded bg-gray-50 p-3 text-sm text-gray-700 dark:bg-gray-900 dark:text-gray-300">
-          <p>The exact opportunity percentage is used; monthly counts are examples only.</p>
-          <ul className="mt-2 list-disc pl-5">
-            <li>Weekly: 31 of 52 is 60%</li>
-            <li>Fortnightly: 16 of 26 is 62%</li>
-            <li>Monthly: 8 of 13 is 62%</li>
-          </ul>
         </div>
       </fieldset>
       <fieldset>

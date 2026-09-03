@@ -39,6 +39,19 @@ describe('EngagementSettings', () => {
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
+  it('explains editable percentage thresholds in everyday monthly attendance language', () => {
+    render(<EngagementSettings settings={settings} canEdit onSaved={vi.fn()} />);
+    expect(screen.getByText('Typically attends 3+ times a month')).toBeInTheDocument();
+    expect(screen.getByText('Typically attends 1–2 times a month')).toBeInTheDocument();
+    expect(screen.getByText('Typically attends once a month or less')).toBeInTheDocument();
+    expect(screen.getByText('60% or more')).toBeInTheDocument();
+    expect(screen.getByText('20%–59%')).toBeInTheDocument();
+    expect(screen.getByText('Below 20%')).toBeInTheDocument();
+    expect(screen.getAllByText('%')).toHaveLength(2);
+    expect(screen.getByText(/monthly descriptions assume a roughly weekly primary gathering/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Weekly: 31 of 52/)).not.toBeInTheDocument();
+  });
+
   it('lets admins edit labels, colours, thresholds, and every gathering role with explanations', () => {
     render(<EngagementSettings settings={settings} canEdit onSaved={vi.fn()} />);
     expect(screen.getByText(/Primary combines alternative services into one opportunity per person each week/)).toBeInTheDocument();
@@ -54,9 +67,6 @@ describe('EngagementSettings', () => {
     expect(screen.getByText('7 Primary assigned')).toBeInTheDocument();
     expect(screen.getByText('3 Other participation assigned')).toBeInTheDocument();
     expect(screen.getByText('2 Primary not assigned')).toBeInTheDocument();
-    expect(screen.getByText(/Weekly: 31 of 52 is 60%/)).toBeInTheDocument();
-    expect(screen.getByText(/Fortnightly: 16 of 26 is 62%/)).toBeInTheDocument();
-    expect(screen.getByText(/Monthly: 8 of 13 is 62%/)).toBeInTheDocument();
     expect(screen.getAllByRole('option', { name: 'Other participation' })).toHaveLength(3);
     expect(screen.getAllByRole('option', { name: 'Excluded' })).toHaveLength(3);
     expect(screen.queryByText(/^Community$/)).not.toBeInTheDocument();
