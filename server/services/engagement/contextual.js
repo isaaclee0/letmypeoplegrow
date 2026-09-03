@@ -21,7 +21,6 @@ const COMPARISON_WEEKS = 12;
 const RECENT_DECLINE_WEEKS = 8;
 const MINIMUM_BASELINE_OPPORTUNITIES = 8;
 const MINIMUM_RECENT_OPPORTUNITIES = 4;
-const MINIMUM_DECLINE = 0.2;
 const PREVIEW_LIMIT = 10;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -363,16 +362,37 @@ function averageForSessions(sessions, facts) {
     / sessions.length;
 }
 
-function directionStatus(previousAverage, recentAverage) {
-  if (previousAverage === null || recentAverage === null) {
+function sessionSummary(sessions, facts) {
+  const total = sessions.reduce(
+    (sum, session) => sum + facts.get(Number(session.id)).attendance,
+    0,
+  );
+  return {
+    total,
+    count: sessions.length,
+    average: sessions.length === 0 ? null : total / sessions.length,
+  };
+}
+
+function directionStatus(previous, recent) {
+  if (previous.count === 0 || recent.count === 0) {
     return { percentChange: null, status: 'unavailable' };
   }
   let percentChange;
-  if (previousAverage === 0) percentChange = recentAverage === 0 ? 0 : 100;
-  else percentChange = ((recentAverage - previousAverage) / previousAverage) * 100;
+  if (previous.total === 0) percentChange = recent.total === 0 ? 0 : 100;
+  else percentChange = ((recent.average - previous.average) / previous.average) * 100;
   const normalized = rounded(percentChange);
-  if (Math.abs(percentChange) < 1) return { percentChange: normalized, status: 'steady' };
-  return { percentChange: normalized, status: normalized > 0 ? 'up' : 'down' };
+  if (previous.total === 0) {
+    return { percentChange: normalized, status: recent.total === 0 ? 'steady' : 'up' };
+  }
+  // Cross-multiply the rational averages so exact one-percent changes do not
+  // slip below the boundary through floating-point representation.
+  const differenceNumerator = (recent.total * previous.count)
+    - (previous.total * recent.count);
+  const belowOnePercent = Math.abs(differenceNumerator) * 100
+    < previous.total * recent.count;
+  if (belowOnePercent) return { percentChange: normalized, status: 'steady' };
+  return { percentChange: normalized, status: differenceNumerator > 0 ? 'up' : 'down' };
 }
 
 function buildDirection({ churchId, gatheringTypeIds, gatherings, source, window, expiresAt }) {
@@ -422,13 +442,13 @@ function buildDirection({ churchId, gatheringTypeIds, gatherings, source, window
   const recentSessions = heldSessions.filter(
     (session) => session.sessionDate >= recentStart && session.sessionDate <= window.endDate,
   );
-  const previousRaw = averageForSessions(previousSessions, facts);
-  const recentRaw = averageForSessions(recentSessions, facts);
+  const previous = sessionSummary(previousSessions, facts);
+  const recent = sessionSummary(recentSessions, facts);
   return {
     comparisonWeeks: COMPARISON_WEEKS,
-    previousAverage: previousRaw === null ? null : rounded(previousRaw),
-    recentAverage: recentRaw === null ? null : rounded(recentRaw),
-    ...directionStatus(previousRaw, recentRaw),
+    previousAverage: previous.average === null ? null : rounded(previous.average),
+    recentAverage: recent.average === null ? null : rounded(recent.average),
+    ...directionStatus(previous, recent),
     series,
   };
 }
@@ -485,7 +505,13 @@ function buildDeclineCandidates(evidence, settings) {
     const recentTier = contextualTier(recentRate, settings);
     const tierDrop = TIER_RANK[baselineTier] - TIER_RANK[recentTier];
     const percentagePointDrop = (baselineRate - recentRate) * 100;
-    if (tierDrop <= 0 || baselineRate - recentRate < MINIMUM_DECLINE) continue;
+    // Twenty percentage points is exactly one fifth. Compare the original
+    // integer evidence as fractions so equality survives floating point.
+    const declineNumerator = (baselineAttended * recentFacts.length)
+      - (recentAttended * baselineFacts.length);
+    const meetsMinimumDecline = declineNumerator * 5
+      >= baselineFacts.length * recentFacts.length;
+    if (tierDrop <= 0 || !meetsMinimumDecline) continue;
     const baseline = {
       attendedWeeks: baselineAttended,
       opportunityWeeks: baselineFacts.length,

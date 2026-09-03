@@ -370,6 +370,52 @@ test('treats an unrounded attendance change below one percent as steady', async 
   });
 });
 
+test('treats an exact positive one percent attendance change as up', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const gatheringTypeId = await seedGathering(churchId, {
+      name: 'Exact positive boundary', attendanceType: 'headcount',
+    });
+    const dates = sundayWeeksEnding('2026-08-30', 24);
+    for (let index = 0; index < dates.length; index += 1) {
+      const count = index < 8 || (index >= 12 && index < 19) ? 8 : 9;
+      await seedSession(churchId, userId, gatheringTypeId, dates[index], {
+        headcounts: [count],
+      });
+    }
+
+    const overview = await buildContextualLongTermOverview(churchId, [gatheringTypeId], {
+      asOf: AS_OF,
+    });
+    assert.equal(overview.direction.percentChange, 1);
+    assert.equal(overview.direction.status, 'up');
+  });
+});
+
+test('treats an exact negative one percent attendance change as down', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const gatheringTypeId = await seedGathering(churchId, {
+      name: 'Exact negative boundary', attendanceType: 'headcount',
+    });
+    const dates = sundayWeeksEnding('2026-08-30', 24);
+    for (const [index, count] of [
+      [0, 166], [5, 167], [11, 167],
+      [12, 165], [17, 165], [23, 165],
+    ]) {
+      await seedSession(churchId, userId, gatheringTypeId, dates[index], {
+        headcounts: [count],
+      });
+    }
+
+    const overview = await buildContextualLongTermOverview(churchId, [gatheringTypeId], {
+      asOf: AS_OF,
+    });
+    assert.equal(overview.direction.percentChange, -1);
+    assert.equal(overview.direction.status, 'down');
+  });
+});
+
 test('finds conservative declines, summarizes evidence plainly, and binds paginated tokens', async () => {
   await withTestChurchDb(async (churchId) => {
     const userId = await seedUser(churchId);
@@ -489,6 +535,44 @@ test('finds conservative declines, summarizes evidence plainly, and binds pagina
       listContextualPeople(churchId, { segment: mismatchedSelector }),
       DrilldownTokenError,
     );
+  });
+});
+
+test('includes a decline at the exact twenty-percentage-point boundary', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const gatheringTypeId = await seedGathering(churchId, { name: 'Exact decline boundary' });
+    const individualId = await seedPerson(churchId, {
+      firstName: 'Exact', lastName: 'Boundary',
+    });
+    await assign(churchId, gatheringTypeId, individualId);
+
+    const dates = sundayWeeksEnding('2026-08-30', 18);
+    for (let week = 0; week < dates.length; week += 1) {
+      const records = [];
+      if (week < 15) {
+        records.push({
+          individualId,
+          present: week < 6 || (week >= 10 && week < 12) ? 1 : 0,
+        });
+      }
+      await seedSession(churchId, userId, gatheringTypeId, dates[week], { records });
+    }
+
+    const overview = await buildContextualLongTermOverview(churchId, [gatheringTypeId], {
+      asOf: AS_OF,
+    });
+    assert.equal(overview.declines.total, 1);
+    assert.deepEqual(overview.declines.rows[0].baseline, {
+      attendedWeeks: 6,
+      opportunityWeeks: 10,
+      rate: 60,
+    });
+    assert.deepEqual(overview.declines.rows[0].recent, {
+      attendedWeeks: 2,
+      opportunityWeeks: 5,
+      rate: 40,
+    });
   });
 });
 
