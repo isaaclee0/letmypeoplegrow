@@ -13,7 +13,6 @@ const DEFAULT_ENGAGEMENT_SETTINGS = Object.freeze({
 });
 
 const TIER_KEYS = Object.freeze(['core', 'casual', 'irregular']);
-const VALID_GATHERING_ROLES = new Set(['primary', 'community', 'other', null]);
 const CSS_HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 
 class EngagementSettingsValidationError extends Error {
@@ -34,7 +33,7 @@ function validateInput(input) {
     invalid('A complete engagement settings object is required.');
   }
 
-  const { coreMinimum, casualMinimum, tiers, gatheringRoles } = input;
+  const { coreMinimum, casualMinimum, tiers } = input;
   if (!Number.isInteger(coreMinimum) || !Number.isInteger(casualMinimum)
       || casualMinimum < 0 || coreMinimum > 100 || casualMinimum >= coreMinimum) {
     invalid('Tier thresholds must be integer percentages satisfying 0 <= casual < core <= 100.');
@@ -58,48 +57,31 @@ function validateInput(input) {
     normalizedTiers[key] = { label: tier.label.trim(), colour: tier.colour };
   }
 
-  if (!Array.isArray(gatheringRoles)) {
-    invalid('The complete gathering role list is required.');
-  }
-  const seenIds = new Set();
-  const normalizedRoles = gatheringRoles.map((assignment) => {
-    if (!assignment || typeof assignment !== 'object' || Array.isArray(assignment)
-        || !Number.isInteger(assignment.gatheringTypeId) || assignment.gatheringTypeId <= 0
-        || !VALID_GATHERING_ROLES.has(assignment.role)) {
-      invalid('Each gathering role must contain a valid gatheringTypeId and role.');
-    }
-    if (seenIds.has(assignment.gatheringTypeId)) {
-      invalid('The gathering role list must not contain duplicate gathering IDs.');
-    }
-    seenIds.add(assignment.gatheringTypeId);
-    return { gatheringTypeId: assignment.gatheringTypeId, role: assignment.role };
-  });
+  return { coreMinimum, casualMinimum, tiers: normalizedTiers };
+}
 
-  return { coreMinimum, casualMinimum, tiers: normalizedTiers, gatheringRoles: normalizedRoles };
+function cloneDefaultTiers() {
+  return {
+    core: { ...DEFAULT_ENGAGEMENT_SETTINGS.tiers.core },
+    casual: { ...DEFAULT_ENGAGEMENT_SETTINGS.tiers.casual },
+    irregular: { ...DEFAULT_ENGAGEMENT_SETTINGS.tiers.irregular },
+  };
+}
+
+function persistedTiers(row) {
+  return {
+    core: { label: row.coreLabel, colour: row.coreColour },
+    casual: { label: row.casualLabel, colour: row.casualColour },
+    irregular: { label: row.irregularLabel, colour: row.irregularColour },
+  };
 }
 
 function settingsFromRow(row) {
-  if (!row) {
-    return {
-      coreMinimum: DEFAULT_ENGAGEMENT_SETTINGS.coreMinimum,
-      casualMinimum: DEFAULT_ENGAGEMENT_SETTINGS.casualMinimum,
-      tiers: {
-        core: { ...DEFAULT_ENGAGEMENT_SETTINGS.tiers.core },
-        casual: { ...DEFAULT_ENGAGEMENT_SETTINGS.tiers.casual },
-        irregular: { ...DEFAULT_ENGAGEMENT_SETTINGS.tiers.irregular },
-      },
-      calculationRulesVersion: 1,
-    };
-  }
   return {
-    coreMinimum: row.coreMinimum,
-    casualMinimum: row.casualMinimum,
-    tiers: {
-      core: { label: row.coreLabel, colour: row.coreColour },
-      casual: { label: row.casualLabel, colour: row.casualColour },
-      irregular: { label: row.irregularLabel, colour: row.irregularColour },
-    },
-    calculationRulesVersion: row.calculationRulesVersion,
+    coreMinimum: row?.coreMinimum ?? DEFAULT_ENGAGEMENT_SETTINGS.coreMinimum,
+    casualMinimum: row?.casualMinimum ?? DEFAULT_ENGAGEMENT_SETTINGS.casualMinimum,
+    tiers: row ? persistedTiers(row) : cloneDefaultTiers(),
+    calculationRulesVersion: row?.calculationRulesVersion ?? 1,
   };
 }
 
@@ -123,60 +105,11 @@ async function loadSettingsRow(query, churchId) {
   return rows[0] || null;
 }
 
-async function loadGatheringRoles(query, churchId) {
-  const rows = await query(
-    `SELECT id AS gatheringTypeId,
-            name,
-            attendance_type AS attendanceType,
-            is_active AS isActive,
-            engagement_role AS role
-     FROM gathering_types
-     WHERE church_id = ?
-     ORDER BY id`,
-    [churchId],
-  );
-  return rows.map((row) => ({ ...row, isActive: Boolean(row.isActive) }));
-}
-
-async function loadAssignmentPreview(query, churchId) {
-  const rows = await query(
-    `SELECT
-       COUNT(DISTINCT CASE WHEN gt.engagement_role = 'primary' THEN i.id END)
-         AS primaryAssigned,
-       COUNT(DISTINCT CASE WHEN gt.engagement_role = 'community' THEN i.id END)
-         AS communityAssigned,
-       COUNT(DISTINCT i.id) AS activeRegulars
-     FROM individuals i
-     LEFT JOIN gathering_lists gl
-       ON gl.individual_id = i.id
-      AND gl.church_id = ?
-     LEFT JOIN gathering_types gt
-       ON gt.id = gl.gathering_type_id
-      AND gt.church_id = ?
-      AND gt.is_active = 1
-      AND gt.attendance_type = 'standard'
-     WHERE i.church_id = ?
-       AND i.is_active = 1
-       AND i.people_type = 'regular'`,
-    [churchId, churchId, churchId],
-  );
-  const row = rows[0] || { primaryAssigned: 0, communityAssigned: 0, activeRegulars: 0 };
-  return {
-    primaryAssigned: row.primaryAssigned,
-    communityAssigned: row.communityAssigned,
-    primaryNotAssigned: row.activeRegulars - row.primaryAssigned,
-  };
-}
-
 async function getEngagementSettings(churchId) {
   if (!churchId) throw new Error('A church ID is required to read engagement settings.');
   const query = (sql, params) => Database.queryForChurch(churchId, sql, params);
-  const [row, gatheringRoles, assignmentPreview] = await Promise.all([
-    loadSettingsRow(query, churchId),
-    loadGatheringRoles(query, churchId),
-    loadAssignmentPreview(query, churchId),
-  ]);
-  return { ...settingsFromRow(row), gatheringRoles, assignmentPreview };
+  const row = await loadSettingsRow(query, churchId);
+  return settingsFromRow(row);
 }
 
 async function updateEngagementSettings(churchId, actorId, input) {
@@ -187,26 +120,11 @@ async function updateEngagementSettings(churchId, actorId, input) {
   let rulesChanged = false;
   await Database.transactionForChurch(churchId, async (connection) => {
     const query = (sql, params) => connection.query(sql, params);
-    const [currentRow, currentRoles] = await Promise.all([
-      loadSettingsRow(query, churchId),
-      loadGatheringRoles(query, churchId),
-    ]);
-    const churchGatheringIds = new Set(currentRoles.map((assignment) => assignment.gatheringTypeId));
-    const submittedIds = new Set(normalized.gatheringRoles.map((assignment) => assignment.gatheringTypeId));
-    if (churchGatheringIds.size !== submittedIds.size
-        || [...churchGatheringIds].some((id) => !submittedIds.has(id))) {
-      invalid('Gathering roles must provide exactly one assignment for every church gathering.');
-    }
+    const currentRow = await loadSettingsRow(query, churchId);
 
     const current = settingsFromRow(currentRow);
-    const currentRoleById = new Map(
-      currentRoles.map((assignment) => [assignment.gatheringTypeId, assignment.role]),
-    );
     rulesChanged = current.coreMinimum !== normalized.coreMinimum
-      || current.casualMinimum !== normalized.casualMinimum
-      || normalized.gatheringRoles.some(
-        (assignment) => currentRoleById.get(assignment.gatheringTypeId) !== assignment.role,
-      );
+      || current.casualMinimum !== normalized.casualMinimum;
     const calculationRulesVersion = current.calculationRulesVersion + (rulesChanged ? 1 : 0);
 
     await query(
@@ -240,27 +158,6 @@ async function updateEngagementSettings(churchId, actorId, input) {
         calculationRulesVersion,
       ],
     );
-
-    const gatheringRolesJson = JSON.stringify(normalized.gatheringRoles);
-    const rolesResult = await query(
-      `UPDATE gathering_types
-       SET engagement_role = (
-             SELECT json_extract(role.value, '$.role')
-             FROM json_each(?) role
-             WHERE CAST(json_extract(role.value, '$.gatheringTypeId') AS INTEGER)
-               = gathering_types.id
-           ),
-           updated_at = datetime('now')
-       WHERE church_id = ?
-         AND id IN (
-           SELECT CAST(json_extract(role.value, '$.gatheringTypeId') AS INTEGER)
-           FROM json_each(?) role
-         )`,
-      [gatheringRolesJson, churchId, gatheringRolesJson],
-    );
-    if (rolesResult.affectedRows !== normalized.gatheringRoles.length) {
-      invalid('A gathering role no longer belongs to this church.');
-    }
   });
 
   return {
@@ -274,4 +171,5 @@ module.exports = {
   EngagementSettingsValidationError,
   getEngagementSettings,
   updateEngagementSettings,
+  validateInput,
 };

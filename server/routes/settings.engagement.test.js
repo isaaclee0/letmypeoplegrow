@@ -52,16 +52,15 @@ async function startApp(churchId, role, dependencies) {
   };
 }
 
-function inputFor(gatheringTypeId) {
+function inputFor(overrides = {}) {
   return {
-    coreMinimum: 60,
-    casualMinimum: 20,
-    tiers: {
-      core: { label: 'Core', colour: '#16A34A' },
-      casual: { label: 'Casual', colour: '#D97706' },
-      irregular: { label: 'Irregular', colour: '#DC2626' },
+    coreMinimum: overrides.coreMinimum ?? 60,
+    casualMinimum: overrides.casualMinimum ?? 20,
+    tiers: overrides.tiers || {
+      core: { label: 'Regular', colour: '#16A34A' },
+      casual: { label: 'Occasional', colour: '#D97706' },
+      irregular: { label: 'Infrequent', colour: '#DC2626' },
     },
-    gatheringRoles: [{ gatheringTypeId, role: 'primary' }],
   };
 }
 
@@ -72,17 +71,14 @@ test('admins and coordinators can read engagement settings, but attendance taker
     ['attendance_taker', 403],
   ]) {
     await withTestChurchDb(async (churchId) => {
-      await Database.query(
-        `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
-        [churchId],
-      );
       const app = await startApp(churchId, role);
       try {
         const response = await app.request('GET');
         assert.equal(response.status, expectedStatus);
         if (expectedStatus === 200) {
           assert.equal(response.body.settings.coreMinimum, 60);
-          assert.equal(response.body.settings.gatheringRoles[0].role, null);
+          assert.equal('gatheringRoles' in response.body.settings, false);
+          assert.equal('assignmentPreview' in response.body.settings, false);
         }
       } finally {
         await app.close();
@@ -91,57 +87,27 @@ test('admins and coordinators can read engagement settings, but attendance taker
   }
 });
 
-test('engagement settings include display metadata for every active, inactive, and headcount gathering', async () => {
-  await withTestChurchDb(async (churchId) => {
-    await Database.query(
-      `INSERT INTO gathering_types
-         (name, attendance_type, is_active, engagement_role, church_id)
-       VALUES
-         ('Sunday', 'standard', 1, 'primary', ?),
-         ('Old Youth', 'standard', 0, 'community', ?),
-         ('Conference', 'headcount', 1, 'other', ?)`,
-      [churchId, churchId, churchId],
-    );
-    const app = await startApp(churchId, 'coordinator');
-    try {
-      const response = await app.request('GET');
-      assert.equal(response.status, 200);
-      assert.deepEqual(response.body.settings.gatheringRoles.map((gathering) => ({
-        name: gathering.name,
-        attendanceType: gathering.attendanceType,
-        isActive: gathering.isActive,
-        role: gathering.role,
-      })), [
-        { name: 'Sunday', attendanceType: 'standard', isActive: true, role: 'primary' },
-        { name: 'Old Youth', attendanceType: 'standard', isActive: false, role: 'community' },
-        { name: 'Conference', attendanceType: 'headcount', isActive: true, role: 'other' },
-      ]);
-    } finally {
-      await app.close();
-    }
-  });
-});
-
-test('only admins can atomically write the complete engagement settings object', async () => {
+test('only admins can write threshold and tier settings without changing gathering roles', async () => {
   for (const [role, expectedStatus] of [
     ['admin', 200],
     ['coordinator', 403],
   ]) {
     await withTestChurchDb(async (churchId) => {
       const gathering = await Database.query(
-        `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
+        `INSERT INTO gathering_types (name, engagement_role, church_id)
+         VALUES ('Sunday', 'primary', ?)`,
         [churchId],
       );
       const app = await startApp(churchId, role);
       try {
-        const response = await app.request('PUT', inputFor(gathering.insertId));
+        const response = await app.request('PUT', inputFor({ coreMinimum: 65 }));
         assert.equal(response.status, expectedStatus);
         const [stored] = await Database.query(
           `SELECT engagement_role AS role FROM gathering_types
            WHERE id = ? AND church_id = ?`,
           [gathering.insertId, churchId],
         );
-        assert.equal(stored.role, expectedStatus === 200 ? 'primary' : null);
+        assert.equal(stored.role, 'primary');
       } finally {
         await app.close();
       }
@@ -149,25 +115,17 @@ test('only admins can atomically write the complete engagement settings object',
   }
 });
 
-test('invalid complete settings receive a client error without partial writes', async () => {
+test('invalid settings receive a client error without partial writes', async () => {
   await withTestChurchDb(async (churchId) => {
-    const gathering = await Database.query(
-      `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
-      [churchId],
-    );
     const app = await startApp(churchId, 'admin');
     try {
-      const input = inputFor(gathering.insertId);
-      input.casualMinimum = 60;
-      const response = await app.request('PUT', input);
+      const response = await app.request('PUT', inputFor({ casualMinimum: 60 }));
       assert.equal(response.status, 400);
       assert.equal(response.body.code, 'INVALID_ENGAGEMENT_SETTINGS');
-      const [stored] = await Database.query(
-        `SELECT engagement_role AS role FROM gathering_types
-         WHERE id = ? AND church_id = ?`,
-        [gathering.insertId, churchId],
+      assert.deepEqual(
+        await Database.query('SELECT * FROM engagement_settings WHERE church_id = ?', [churchId]),
+        [],
       );
-      assert.equal(stored.role, null);
     } finally {
       await app.close();
     }
@@ -176,17 +134,12 @@ test('invalid complete settings receive a client error without partial writes', 
 
 test('a label or colour-only engagement settings save does not request a baseline', async () => {
   await withTestChurchDb(async (churchId) => {
-    const gathering = await Database.query(
-      `INSERT INTO gathering_types (name, engagement_role, church_id)
-       VALUES ('Sunday', 'primary', ?)`,
-      [churchId],
-    );
     const baselines = [];
     const app = await startApp(churchId, 'admin', {
       evaluateEngagementTierConfirmations: async (...args) => baselines.push(args),
     });
     try {
-      const input = inputFor(gathering.insertId);
+      const input = inputFor();
       input.tiers.core.label = 'Committed';
       input.tiers.casual.colour = '#123456';
 
@@ -204,11 +157,6 @@ test('a label or colour-only engagement settings save does not request a baselin
 
 test('a threshold-only change requests a successful immediate baseline', async () => {
   await withTestChurchDb(async (churchId) => {
-    const gathering = await Database.query(
-      `INSERT INTO gathering_types (name, engagement_role, church_id)
-       VALUES ('Sunday', 'primary', ?)`,
-      [churchId],
-    );
     const baselines = [];
     const app = await startApp(churchId, 'admin', {
       evaluateEngagementTierConfirmations: async (baselineChurchId, options) => {
@@ -216,10 +164,7 @@ test('a threshold-only change requests a successful immediate baseline', async (
       },
     });
     try {
-      const input = inputFor(gathering.insertId);
-      input.coreMinimum = 65;
-
-      const response = await app.request('PUT', input);
+      const response = await app.request('PUT', inputFor({ coreMinimum: 65 }));
 
       assert.equal(response.status, 200);
       assert.equal(response.body.baselinePending, false);
@@ -233,36 +178,11 @@ test('a threshold-only change requests a successful immediate baseline', async (
   });
 });
 
-test('a gathering-role-only change requests an immediate baseline', async () => {
-  await withTestChurchDb(async (churchId) => {
-    const gathering = await Database.query(
-      `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
-      [churchId],
-    );
-    const baselines = [];
-    const app = await startApp(churchId, 'admin', {
-      evaluateEngagementTierConfirmations: async (baselineChurchId, options) => {
-        baselines.push({ baselineChurchId, options });
-      },
-    });
-    try {
-      const response = await app.request('PUT', inputFor(gathering.insertId));
-
-      assert.equal(response.status, 200);
-      assert.equal(response.body.baselinePending, false);
-      assert.equal(baselines.length, 1);
-      assert.equal(baselines[0].baselineChurchId, churchId);
-      assert.equal(baselines[0].options.baselineOnly, true);
-    } finally {
-      await app.close();
-    }
-  });
-});
-
 test('a failed immediate baseline leaves the committed settings save available for weekly retry', async () => {
   await withTestChurchDb(async (churchId) => {
     const gathering = await Database.query(
-      `INSERT INTO gathering_types (name, church_id) VALUES ('Sunday', ?)`,
+      `INSERT INTO gathering_types (name, engagement_role, church_id)
+       VALUES ('Sunday', 'primary', ?)`,
       [churchId],
     );
     const app = await startApp(churchId, 'admin', {
@@ -271,10 +191,7 @@ test('a failed immediate baseline leaves the committed settings save available f
       },
     });
     try {
-      const input = inputFor(gathering.insertId);
-      input.coreMinimum = 65;
-
-      const response = await app.request('PUT', input);
+      const response = await app.request('PUT', inputFor({ coreMinimum: 65 }));
       const [stored] = await Database.query(
         `SELECT core_minimum AS coreMinimum, engagement_role AS role
          FROM engagement_settings es
