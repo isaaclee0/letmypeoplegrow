@@ -61,6 +61,8 @@ function inputFor(overrides = {}) {
       casual: { label: 'Occasional', colour: '#D97706' },
       irregular: { label: 'Infrequent', colour: '#DC2626' },
     },
+    // Legacy clients still submit this field; the service must ignore it.
+    gatheringRoles: overrides.gatheringRoles || [{ gatheringTypeId: 999999, role: 'other' }],
   };
 }
 
@@ -71,14 +73,35 @@ test('admins and coordinators can read engagement settings, but attendance taker
     ['attendance_taker', 403],
   ]) {
     await withTestChurchDb(async (churchId) => {
+      const gathering = await Database.query(
+        `INSERT INTO gathering_types (name, engagement_role, church_id)
+         VALUES ('Sunday', 'primary', ?)`,
+        [churchId],
+      );
+      const person = await Database.query(
+        `INSERT INTO individuals (first_name, last_name, people_type, is_active, church_id)
+         VALUES ('Regular', 'Person', 'regular', 1, ?)`,
+        [churchId],
+      );
+      await Database.query(
+        `INSERT INTO gathering_lists (gathering_type_id, individual_id, church_id)
+         VALUES (?, ?, ?)`,
+        [gathering.insertId, person.insertId, churchId],
+      );
       const app = await startApp(churchId, role);
       try {
         const response = await app.request('GET');
         assert.equal(response.status, expectedStatus);
         if (expectedStatus === 200) {
           assert.equal(response.body.settings.coreMinimum, 60);
-          assert.equal('gatheringRoles' in response.body.settings, false);
-          assert.equal('assignmentPreview' in response.body.settings, false);
+          assert.deepEqual(response.body.settings.gatheringRoles.map(({ name, role }) => ({ name, role })), [
+            { name: 'Sunday', role: 'primary' },
+          ]);
+          assert.deepEqual(response.body.settings.assignmentPreview, {
+            primaryAssigned: 1,
+            communityAssigned: 0,
+            primaryNotAssigned: 0,
+          });
         }
       } finally {
         await app.close();

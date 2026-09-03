@@ -31,23 +31,63 @@ async function seedGathering(churchId, name, overrides = {}) {
   return result.insertId;
 }
 
+async function seedIndividual(churchId, name, overrides = {}) {
+  const result = await Database.query(
+    `INSERT INTO individuals
+       (first_name, last_name, people_type, is_active, church_id)
+     VALUES (?, 'Person', ?, ?, ?)`,
+    [
+      name,
+      overrides.peopleType || 'regular',
+      overrides.isActive === undefined ? 1 : overrides.isActive,
+      churchId,
+    ],
+  );
+  return result.insertId;
+}
+
 function completeInput(overrides = {}) {
   return {
     coreMinimum: overrides.coreMinimum ?? DEFAULT_ENGAGEMENT_SETTINGS.coreMinimum,
     casualMinimum: overrides.casualMinimum ?? DEFAULT_ENGAGEMENT_SETTINGS.casualMinimum,
     tiers: overrides.tiers || structuredClone(DEFAULT_ENGAGEMENT_SETTINGS.tiers),
+    gatheringRoles: overrides.gatheringRoles,
   };
 }
 
-test('defaults expose only thresholds, tier styles, and calculation version', async () => {
+test('defaults preserve legacy gathering roles and assignment preview fields', async () => {
   await withTestChurchDb(async (churchId) => {
-    await seedGathering(churchId, 'Sunday Primary Worship', { role: 'primary' });
+    const gatheringId = await seedGathering(churchId, 'Sunday Primary Worship', { role: 'primary' });
+    const regularId = await seedIndividual(churchId, 'Active');
+    await Database.query(
+      `INSERT INTO gathering_lists (gathering_type_id, individual_id, church_id)
+       VALUES (?, ?, ?)`,
+      [gatheringId, regularId, churchId],
+    );
 
     const settings = await getEngagementSettings(churchId);
 
-    assert.deepEqual(settings, { ...DEFAULT_ENGAGEMENT_SETTINGS, calculationRulesVersion: 1 });
-    assert.equal('gatheringRoles' in settings, false);
-    assert.equal('assignmentPreview' in settings, false);
+    assert.deepEqual(
+      settings,
+      {
+        ...DEFAULT_ENGAGEMENT_SETTINGS,
+        calculationRulesVersion: 1,
+        gatheringRoles: [
+          {
+            gatheringTypeId: gatheringId,
+            name: 'Sunday Primary Worship',
+            attendanceType: 'standard',
+            isActive: true,
+            role: 'primary',
+          },
+        ],
+        assignmentPreview: {
+          primaryAssigned: 1,
+          communityAssigned: 0,
+          primaryNotAssigned: 0,
+        },
+      },
+    );
   });
 });
 
@@ -62,6 +102,7 @@ test('an update persists threshold and tier styles without modifying gathering r
       completeInput({
         coreMinimum: 70,
         casualMinimum: 30,
+        gatheringRoles: [{ gatheringTypeId: primaryId, role: 'other' }],
         tiers: {
           core: { label: 'Committed', colour: '#0f0' },
           casual: { label: 'Connected', colour: '#D97706CC' },
@@ -75,8 +116,15 @@ test('an update persists threshold and tier styles without modifying gathering r
     assert.equal(updated.coreMinimum, 70);
     assert.equal(updated.casualMinimum, 30);
     assert.equal(updated.tiers.core.label, 'Committed');
-    assert.equal('gatheringRoles' in updated, false);
-    assert.equal('assignmentPreview' in updated, false);
+    assert.deepEqual(updated.gatheringRoles.map(({ gatheringTypeId, role }) => ({ gatheringTypeId, role })), [
+      { gatheringTypeId: primaryId, role: 'primary' },
+      { gatheringTypeId: communityId, role: 'community' },
+    ]);
+    assert.deepEqual(updated.assignmentPreview, {
+      primaryAssigned: 0,
+      communityAssigned: 0,
+      primaryNotAssigned: 0,
+    });
 
     assert.deepEqual(
       await Database.query(

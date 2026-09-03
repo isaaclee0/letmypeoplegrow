@@ -105,11 +105,60 @@ async function loadSettingsRow(query, churchId) {
   return rows[0] || null;
 }
 
+async function loadGatheringRoles(query, churchId) {
+  const rows = await query(
+    `SELECT id AS gatheringTypeId,
+            name,
+            attendance_type AS attendanceType,
+            is_active AS isActive,
+            engagement_role AS role
+     FROM gathering_types
+     WHERE church_id = ?
+     ORDER BY id`,
+    [churchId],
+  );
+  return rows.map((row) => ({ ...row, isActive: Boolean(row.isActive) }));
+}
+
+async function loadAssignmentPreview(query, churchId) {
+  const rows = await query(
+    `SELECT
+       COUNT(DISTINCT CASE WHEN gt.engagement_role = 'primary' THEN i.id END)
+         AS primaryAssigned,
+       COUNT(DISTINCT CASE WHEN gt.engagement_role = 'community' THEN i.id END)
+         AS communityAssigned,
+       COUNT(DISTINCT i.id) AS activeRegulars
+     FROM individuals i
+     LEFT JOIN gathering_lists gl
+       ON gl.individual_id = i.id
+      AND gl.church_id = ?
+     LEFT JOIN gathering_types gt
+       ON gt.id = gl.gathering_type_id
+      AND gt.church_id = ?
+      AND gt.is_active = 1
+      AND gt.attendance_type = 'standard'
+     WHERE i.church_id = ?
+       AND i.is_active = 1
+       AND i.people_type = 'regular'`,
+    [churchId, churchId, churchId],
+  );
+  const row = rows[0] || { primaryAssigned: 0, communityAssigned: 0, activeRegulars: 0 };
+  return {
+    primaryAssigned: row.primaryAssigned,
+    communityAssigned: row.communityAssigned,
+    primaryNotAssigned: row.activeRegulars - row.primaryAssigned,
+  };
+}
+
 async function getEngagementSettings(churchId) {
   if (!churchId) throw new Error('A church ID is required to read engagement settings.');
   const query = (sql, params) => Database.queryForChurch(churchId, sql, params);
-  const row = await loadSettingsRow(query, churchId);
-  return settingsFromRow(row);
+  const [row, gatheringRoles, assignmentPreview] = await Promise.all([
+    loadSettingsRow(query, churchId),
+    loadGatheringRoles(query, churchId),
+    loadAssignmentPreview(query, churchId),
+  ]);
+  return { ...settingsFromRow(row), gatheringRoles, assignmentPreview };
 }
 
 async function updateEngagementSettings(churchId, actorId, input) {
