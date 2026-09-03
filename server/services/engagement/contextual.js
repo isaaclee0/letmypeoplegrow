@@ -585,6 +585,14 @@ function availableWeeks(source) {
   return new Set(source.sessions.filter(isHeld).map((session) => mondayFor(session.sessionDate))).size;
 }
 
+function availableSessionRange(source) {
+  const dates = source.sessions.filter(isHeld).map((session) => session.sessionDate).sort();
+  return {
+    firstSessionDate: dates[0] ?? null,
+    lastSessionDate: dates.at(-1) ?? null,
+  };
+}
+
 async function buildState(churchId, gatheringTypeIds, { completedWeekEnd, asOf } = {}) {
   if (!churchId) throw new Error('A church ID is required to calculate contextual trends.');
   const ids = canonicalGatheringIds(gatheringTypeIds);
@@ -654,6 +662,7 @@ async function buildContextualLongTermOverview(churchId, gatheringTypeIds, optio
     settings: state.settings,
     dataAvailability: {
       availableWeeks: availableWeeks(state.source),
+      ...availableSessionRange(state.source),
       validOpportunityWeeks: state.evidence.validWeeks.length,
       excludedWeeks: state.evidence.excludedWeeks.length,
       unclassifiedBecauseNoEvidence: state.evidence.profiles.filter(

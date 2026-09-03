@@ -78,6 +78,8 @@ export interface ContextualLongTermOverviewDto {
   settings: ContextualEngagementSettingsDto;
   dataAvailability: {
     availableWeeks: number;
+    firstSessionDate: string | null;
+    lastSessionDate: string | null;
     validOpportunityWeeks: number;
     excludedWeeks: number;
     unclassifiedBecauseNoEvidence: number;

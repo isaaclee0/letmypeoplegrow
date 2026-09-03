@@ -98,6 +98,8 @@ const overview = ({
     },
     dataAvailability: {
       availableWeeks,
+      firstSessionDate: availableWeeks === 52 ? '2025-09-01' : '2026-02-08',
+      lastSessionDate: '2026-08-23',
       validOpportunityWeeks: availableWeeks,
       excludedWeeks: 0,
       unclassifiedBecauseNoEvidence: 0,
@@ -187,7 +189,7 @@ describe('LongTermTrends', () => {
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
 
     expect(await screen.findByText(/based on 31 weeks of available attendance history/i)).toBeInTheDocument();
-    expect(screen.getByText(/2 Feb 2026 – 30 Aug 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/8 Feb 2026 – 23 Aug 2026/)).toBeInTheDocument();
   });
 
   it.each([
@@ -273,7 +275,7 @@ describe('LongTermTrends', () => {
     viewAll.focus();
     fireEvent.click(viewAll);
     const panel = await within(declineRegion).findByRole('region', { name: 'People attending less often' });
-    expect(within(panel).getByRole('columnheader', { name: 'Recent change' })).toBeInTheDocument();
+    expect(within(panel).getByRole('columnheader', { name: 'Recent attendance' })).toBeInTheDocument();
     expect(within(panel).getByText('1 of 6 recent weeks (16.7%)')).toBeInTheDocument();
   });
 
@@ -318,13 +320,15 @@ describe('LongTermTrends', () => {
     expect(screen.getByRole('button', { name: 'Core: 0 people (0%)' })).toBeInTheDocument();
   });
 
-  it('labels the latest attendance-session bucket with its exact date range', async () => {
+  it('lets users choose and open every nonempty attendance-session bucket', async () => {
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: overview() } as never);
     vi.mocked(reportsAPI.getEngagementSessions).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'View Sunday attendance sessions for 1 Dec 2025 – 7 Dec 2025' }));
-    expect(await screen.findByRole('dialog', { name: 'Sunday attendance sessions — 1 Dec 2025 – 7 Dec 2025' })).toBeInTheDocument();
+    const period = await screen.findByRole('combobox', { name: 'Attendance period for Sunday' });
+    fireEvent.change(period, { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'View Sunday attendance sessions' }));
+    expect(await screen.findByRole('dialog', { name: 'Sunday attendance sessions — 22 Sept 2025 – 28 Sept 2025' })).toBeInTheDocument();
   });
 
   it('opens decline attendance history from the keyboard and scopes it to selected gatherings', async () => {

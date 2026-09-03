@@ -97,6 +97,10 @@ function isContextualOverview(value: unknown): value is ContextualLongTermOvervi
   const availability = value.dataAvailability;
   if (!['availableWeeks', 'validOpportunityWeeks', 'excludedWeeks', 'unclassifiedBecauseNoEvidence', 'standardGatherings', 'headcountGatherings']
     .every((field) => isNonNegativeInteger(availability[field]))) return false;
+  if (!(availability.firstSessionDate === null || isCanonicalDate(availability.firstSessionDate))
+      || !(availability.lastSessionDate === null || isCanonicalDate(availability.lastSessionDate))
+      || (availability.availableWeeks > 0
+        && (availability.firstSessionDate === null || availability.lastSessionDate === null))) return false;
 
   const direction = value.direction;
   if (direction.comparisonWeeks !== 12
@@ -226,8 +230,19 @@ export function writeLongTermTrendsCache(overview: ContextualLongTermOverviewDto
   if (!isContextualOverview(canonicalOverview)) return;
   try {
     localStorage.setItem(longTermTrendsKey(canonicalOverview), JSON.stringify(canonicalOverview));
-    const keys = longTermTrendsKeys(canonicalOverview.churchId).sort().reverse();
-    keys.slice(LONG_TERM_TRENDS_CACHE_LIMIT).forEach(removeCacheEntry);
+    const snapshots = longTermTrendsKeys(canonicalOverview.churchId).map((key) => {
+      try {
+        const value = JSON.parse(localStorage.getItem(key) || 'null') as unknown;
+        return isContextualOverview(value) ? { key, value } : null;
+      } catch { return null; }
+    }).filter((entry): entry is { key: string; value: ContextualLongTermOverviewDto } => entry !== null)
+      .sort((left, right) => right.value.window.completedWeekEnd.localeCompare(left.value.window.completedWeekEnd));
+    const retainedSelections = new Set<string>();
+    for (const { key, value } of snapshots) {
+      const selection = value.gatheringTypeIds.join(',');
+      if (retainedSelections.has(selection) || retainedSelections.size >= LONG_TERM_TRENDS_CACHE_LIMIT) removeCacheEntry(key);
+      else retainedSelections.add(selection);
+    }
   } catch {
     // Cache persistence is an optional optimisation; server data remains authoritative.
   }

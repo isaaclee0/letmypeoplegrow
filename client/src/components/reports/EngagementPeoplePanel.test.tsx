@@ -63,4 +63,18 @@ describe('EngagementPeoplePanel contextual declines', () => {
     expect(within(panel).getByText(/Sep 1, 2026/)).toHaveTextContent('Sunday');
     expect(within(panel).queryByText(/Aug 31, 2026/)).not.toBeInTheDocument();
   });
+
+  it('preserves decline relevance order initially and labels earlier and recent attendance accurately', async () => {
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [
+      { rowType: 'contextual_decline', individualId: 2, firstName: 'Zoe', lastName: 'Zulu', familyId: null, baseline: { attendedWeeks: 4, opportunityWeeks: 4, rate: 100 }, recent: { attendedWeeks: 0, opportunityWeeks: 4, rate: 0 }, summary: 'Largest decline' },
+      { rowType: 'contextual_decline', individualId: 1, firstName: 'Amy', lastName: 'Able', familyId: null, baseline: { attendedWeeks: 3, opportunityWeeks: 4, rate: 75 }, recent: { attendedWeeks: 2, opportunityWeeks: 4, rate: 50 }, summary: 'Smaller decline' },
+    ], nextCursor: null } } as never);
+
+    render(<EngagementPeoplePanel token="declines" title="People attending less often" onClose={vi.fn()} />);
+    const panel = await screen.findByRole('region', { name: 'People attending less often' });
+    const names = within(panel).getAllByRole('rowheader').map((cell) => cell.textContent);
+    expect(names).toEqual(['Zoe Zulu', 'Amy Able']);
+    expect(within(panel).getByRole('columnheader', { name: 'Earlier attendance' })).toBeInTheDocument();
+    expect(within(panel).getByRole('columnheader', { name: 'Recent attendance' })).toBeInTheDocument();
+  });
 });

@@ -14,7 +14,7 @@ interface EngagementPeoplePanelProps {
 }
 type PeopleRow = ContextualPeopleDrilldownRow;
 
-type SortKey = 'surname' | 'attendance';
+type SortKey = 'relevance' | 'surname' | 'earlier' | 'recent';
 type SortDirection = 'ascending' | 'descending';
 
 function surnameCompare(left: PeopleRow, right: PeopleRow): number {
@@ -22,8 +22,9 @@ function surnameCompare(left: PeopleRow, right: PeopleRow): number {
     || left.firstName.localeCompare(right.firstName, undefined, { sensitivity: 'base' });
 }
 
-function attendanceRate(row: PeopleRow): number {
-  return row.rowType === 'contextual_regularity' ? row.rate : row.recent.rate;
+function attendanceRate(row: PeopleRow, period: 'earlier' | 'recent'): number {
+  if (row.rowType === 'contextual_regularity') return row.rate;
+  return period === 'earlier' ? row.baseline.rate : row.recent.rate;
 }
 
 const formatPercent = (value: number) => Number(value.toFixed(1));
@@ -33,7 +34,7 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('surname');
+  const [sortKey, setSortKey] = useState<SortKey>('relevance');
   const [sortDirection, setSortDirection] = useState<SortDirection>('ascending');
   const headingRef = useRef<HTMLHeadingElement>(null);
 
@@ -65,8 +66,9 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
 
   const showRecentChange = rows.some((row) => row.rowType === 'contextual_decline');
   const sortedRows = useMemo(() => [...rows].sort((left, right) => {
+    if (sortKey === 'relevance') return 0;
     if (sortKey === 'surname') return surnameCompare(left, right) * (sortDirection === 'ascending' ? 1 : -1);
-    return (attendanceRate(left) - attendanceRate(right)) * (sortDirection === 'ascending' ? 1 : -1)
+    return (attendanceRate(left, sortKey) - attendanceRate(right, sortKey)) * (sortDirection === 'ascending' ? 1 : -1)
       || surnameCompare(left, right);
   }), [rows, sortDirection, sortKey]);
   const toggleSort = (key: SortKey) => {
@@ -94,8 +96,8 @@ const EngagementPeoplePanel: React.FC<EngagementPeoplePanelProps> = ({ token, ti
           <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-600 dark:bg-gray-900/60 dark:text-gray-400">
             <tr>
               <th scope="col" aria-sort={sortKey === 'surname' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('surname')} aria-label={`Sort by name ${nextDirection('surname')}`} className="font-medium hover:underline">Name</button></th>
-              <th scope="col" aria-sort={sortKey === 'attendance' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('attendance')} aria-label={`Sort by attendance ${nextDirection('attendance')}`} className="font-medium hover:underline">Attendance</button></th>
-              {showRecentChange && <th scope="col" className="px-4 py-2 font-medium">Recent change</th>}
+              <th scope="col" aria-sort={sortKey === 'earlier' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('earlier')} aria-label={`Sort by ${showRecentChange ? 'earlier attendance' : 'attendance'} ${nextDirection('earlier')}`} className="font-medium hover:underline">{showRecentChange ? 'Earlier attendance' : 'Attendance'}</button></th>
+              {showRecentChange && <th scope="col" aria-sort={sortKey === 'recent' ? sortDirection : 'none'} className="px-4 py-2 font-medium"><button type="button" onClick={() => toggleSort('recent')} aria-label={`Sort by recent attendance ${nextDirection('recent')}`} className="font-medium hover:underline">Recent attendance</button></th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">

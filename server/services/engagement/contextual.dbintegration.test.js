@@ -217,6 +217,8 @@ test('scopes selection, population, weekly evidence, availability, and mixed/hea
     assert.equal(overview.window.completedWeekEnd, '2026-08-30');
     assert.equal(overview.regularity.population, 2);
     assert.equal(overview.dataAvailability.availableWeeks, 2);
+    assert.equal(overview.dataAvailability.firstSessionDate, '2026-08-10');
+    assert.equal(overview.dataAvailability.lastSessionDate, '2026-08-30');
     assert.equal(overview.dataAvailability.validOpportunityWeeks, 1);
     assert.equal(overview.dataAvailability.excludedWeeks, 1);
     assert.equal(overview.dataAvailability.unclassifiedBecauseNoEvidence, 0);
@@ -356,6 +358,8 @@ test('reports shorter history exactly, caps old history at 52 weeks, and compare
       asOf: AS_OF,
     });
     assert.equal(overview.dataAvailability.availableWeeks, 31);
+    assert.equal(overview.dataAvailability.firstSessionDate, dates[0]);
+    assert.equal(overview.dataAvailability.lastSessionDate, dates.at(-1));
     assert.deepEqual(
       {
         comparisonWeeks: overview.direction.comparisonWeeks,

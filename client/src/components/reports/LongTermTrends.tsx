@@ -81,6 +81,32 @@ function directionSummary(direction: ContextualLongTermOverviewDto['direction'])
   return `Average attendance is ${direction.status} ${formatPercent(direction.percentChange)}% compared with the previous ${direction.comparisonWeeks} weeks.`;
 }
 
+interface SessionBucketPickerProps {
+  series: ContextualLongTermOverviewDto['direction']['series'][number];
+  onOpen: (sessions: OpenSessions) => void;
+}
+
+const SessionBucketPicker: React.FC<SessionBucketPickerProps> = ({ series, onOpen }) => {
+  const buckets = series.buckets.filter(({ heldSessions }) => heldSessions > 0);
+  const [bucketIndex, setBucketIndex] = useState(() => buckets.at(-1)?.index ?? 0);
+  const bucket = buckets.find(({ index }) => index === bucketIndex) ?? buckets.at(-1);
+  if (!bucket) return <p className="rounded border border-gray-200 px-3 py-2 text-gray-500 dark:border-gray-700 dark:text-gray-400">{series.name}: no held sessions</p>;
+  const range = `${formatDate(bucket.startDate)} – ${formatDate(bucket.endDate)}`;
+  return <div className="flex flex-wrap items-center gap-2 rounded border border-gray-200 p-2 dark:border-gray-700">
+    <label htmlFor={`session-bucket-${series.gatheringTypeId}`} className="font-medium text-gray-700 dark:text-gray-200">{series.name}</label>
+    <select
+      id={`session-bucket-${series.gatheringTypeId}`}
+      aria-label={`Attendance period for ${series.name}`}
+      value={bucket.index}
+      onChange={(event) => setBucketIndex(Number(event.target.value))}
+      className="min-w-48 rounded border border-gray-300 bg-white px-2 py-1.5 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+    >
+      {buckets.map((option) => <option key={option.index} value={option.index}>{formatDate(option.startDate)} – {formatDate(option.endDate)}</option>)}
+    </select>
+    <button type="button" onClick={() => onOpen({ token: bucket.sessionsToken, title: `${series.name} attendance sessions — ${range}` })} className="rounded bg-indigo-50 px-3 py-1.5 font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-gray-700 dark:text-indigo-300 dark:hover:bg-gray-600">View {series.name} attendance sessions</button>
+  </div>;
+};
+
 const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGatherings, canConfigure }) => {
   const selectionKey = useMemo(
     () => selectedGatherings.map(({ id }) => id).sort((a, b) => a - b).join(','),
@@ -203,7 +229,9 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
         {selectionKey && overview && (
           <div className="mt-2 space-y-1 text-sm text-slate-200">
             {overview.dataAvailability.availableWeeks < overview.window.maximumWeeks ? (
-              <p>Based on {overview.dataAvailability.availableWeeks} weeks of available attendance history. {formatDate(overview.window.startDate)} – {formatDate(overview.window.endDate)}.</p>
+              <p>Based on {overview.dataAvailability.availableWeeks} weeks of available attendance history. {overview.dataAvailability.firstSessionDate && overview.dataAvailability.lastSessionDate
+                ? `${formatDate(overview.dataAvailability.firstSessionDate)} – ${formatDate(overview.dataAvailability.lastSessionDate)}.`
+                : 'No held sessions are available.'}</p>
             ) : (
               <p>Based on the latest 52 completed weeks. {formatDate(overview.window.startDate)} – {formatDate(overview.window.endDate)}.</p>
             )}
@@ -236,16 +264,9 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
             <h3 id="attendance-direction-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Attendance direction</h3>
             <p className="mt-1 text-sm font-medium text-gray-800 dark:text-gray-200">{directionSummary(overview.direction)}</p>
             <div className="mt-5 min-h-56"><Line aria-label="Attendance direction chart" data={trendData} /></div>
-            <ul className="mt-4 flex flex-wrap gap-2 text-sm">
-              {overview.direction.series.map((series) => {
-                const latest = [...series.buckets].reverse().find(({ heldSessions }) => heldSessions > 0);
-                if (!latest) return <li key={series.gatheringTypeId} className="rounded border border-gray-200 px-3 py-2 text-gray-500 dark:border-gray-700 dark:text-gray-400">{series.name}: no held sessions</li>;
-                const bucketRange = `${formatDate(latest.startDate)} – ${formatDate(latest.endDate)}`;
-                return <li key={series.gatheringTypeId}>
-                  <button type="button" onClick={() => setSessions({ token: latest.sessionsToken, title: `${series.name} attendance sessions — ${bucketRange}` })} className="rounded border border-gray-200 px-3 py-2 text-indigo-700 hover:bg-indigo-50 dark:border-gray-700 dark:text-indigo-300 dark:hover:bg-gray-700">View {series.name} attendance sessions for {bucketRange}</button>
-                </li>;
-              })}
-            </ul>
+            <div className="mt-4 flex flex-wrap gap-2 text-sm">
+              {overview.direction.series.map((series) => <SessionBucketPicker key={series.gatheringTypeId} series={series} onOpen={setSessions} />)}
+            </div>
           </section>
 
           <section className="rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="regularity-heading">

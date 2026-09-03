@@ -75,6 +75,8 @@ test('admin and coordinator can view the overview while attendance takers are de
           assert.equal(response.body.schemaVersion, 4);
           assert.equal(response.body.churchId, churchId);
           assert.deepEqual(response.body.gatheringTypeIds, [gathering.insertId]);
+          assert.equal(response.body.dataAvailability.firstSessionDate, null);
+          assert.equal(response.body.dataAvailability.lastSessionDate, null);
         }
       } finally {
         await app.close();

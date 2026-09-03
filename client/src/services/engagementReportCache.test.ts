@@ -32,6 +32,8 @@ const contextualOverview = ({
   },
   dataAvailability: {
     availableWeeks: 31,
+    firstSessionDate: '2026-02-08',
+    lastSessionDate: '2026-08-23',
     validOpportunityWeeks: 29,
     excludedWeeks: 2,
     unclassifiedBecauseNoEvidence: 1,
@@ -146,5 +148,15 @@ describe('contextual long-term trends cache', () => {
     expect(readLongTermTrendsCache('church-a', [1])).toBeNull();
     expect(readLongTermTrendsCache('church-a', [2])).not.toBeNull();
     expect(readLongTermTrendsCache('church-b', [1])).not.toBeNull();
+  });
+
+  it('keeps the newest snapshot for each selection before retaining older snapshots', () => {
+    for (let id = 1; id <= 3; id += 1) {
+      writeLongTermTrendsCache(contextualOverview({ gatheringTypeIds: [id], completedWeekEnd: '2026-08-23' }));
+      writeLongTermTrendsCache(contextualOverview({ gatheringTypeIds: [id], completedWeekEnd: '2026-08-30' }));
+    }
+
+    expect(readLongTermTrendsCache('church-a', [1])?.window.completedWeekEnd).toBe('2026-08-30');
+    expect(readLongTermTrendsCache('church-a', [3])?.window.completedWeekEnd).toBe('2026-08-30');
   });
 });
