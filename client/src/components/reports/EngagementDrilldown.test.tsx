@@ -58,4 +58,26 @@ describe('EngagementDrilldown', () => {
     expect(await screen.findByText(/17 May 2026/)).toBeInTheDocument();
     expect(screen.queryByText(/2026-05-17/)).not.toBeInTheDocument();
   });
+
+  it('names a session drill-down for the selected gatherings', async () => {
+    vi.mocked(reportsAPI.getEngagementSessions).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
+
+    render(<EngagementDrilldown
+      kind="sessions"
+      token="sessions"
+      title="Sessions"
+      selectedGatheringNames={['Sunday Morning', 'Sunday Evening']}
+      settings={{
+        coreMinimum: 60, casualMinimum: 20,
+        tiers: { core: { label: 'Core', colour: '#166534' }, casual: { label: 'Casual', colour: '#b45309' }, irregular: { label: 'Irregular', colour: '#b91c1c' } },
+        gatheringRoles: [], calculationRulesVersion: 2,
+        assignmentPreview: { primaryAssigned: 0, communityAssigned: 0, primaryNotAssigned: 0 },
+      }}
+      onClose={vi.fn()}
+    />);
+
+    const title = 'Sunday Morning and Sunday Evening attendance sessions';
+    expect(await screen.findByRole('dialog', { name: title })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
+  });
 });

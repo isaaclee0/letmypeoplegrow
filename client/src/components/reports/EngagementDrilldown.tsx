@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type {
+  ContextualEngagementSettingsDto,
   EngagementDrilldownPage,
   EngagementPersonDrilldownRow,
   EngagementSessionDrilldownRow,
@@ -20,11 +21,16 @@ interface EngagementDrilldownProps {
   kind: 'people' | 'sessions';
   token: string;
   title: string;
-  settings: EngagementSettingsDto;
+  selectedGatheringNames?: string[];
+  settings: EngagementSettingsDto | ContextualEngagementSettingsDto;
   onClose: () => void;
 }
 
-const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, title, settings, onClose }) => {
+function gatheringList(names: string[]): string {
+  return new Intl.ListFormat('en-AU', { style: 'long', type: 'conjunction' }).format(names);
+}
+
+const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, title, selectedGatheringNames, settings, onClose }) => {
   const [rows, setRows] = useState<DrilldownRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,11 +55,15 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
 
   useEffect(() => { void load(); }, [load]);
 
+  const displayedTitle = kind === 'sessions' && selectedGatheringNames?.length
+    ? `${gatheringList(selectedGatheringNames)} attendance sessions`
+    : title;
+
   return (
-    <AccessibleDialog className="z-50" label={title} onClose={onClose}>
+    <AccessibleDialog className="z-50" label={displayedTitle} onClose={onClose}>
       <div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-gray-800">
         <div className="flex items-start justify-between gap-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{displayedTitle}</h2>
           <button type="button" onClick={onClose} aria-label="Close details" className="rounded px-2 py-1 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700">Close</button>
         </div>
         {error && <p role="alert" className="mt-4 text-sm text-red-700 dark:text-red-300">{error}</p>}
@@ -68,8 +78,8 @@ const EngagementDrilldown: React.FC<EngagementDrilldownProps> = ({ kind, token, 
                 <strong>{name}</strong>
                 {row.rowType === 'engagement_profile' && (
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <div>Primary: <EngagementTierBadge status={row.primary} settings={settings} /> <EngagementEvidence status={row.primary} /></div>
-                    {row.community.status !== 'not_assigned' && <div>Other participation: <EngagementTierBadge status={row.community} settings={settings} /> <EngagementEvidence status={row.community} /></div>}
+                    <div>Primary: <EngagementTierBadge status={row.primary} settings={settings as EngagementSettingsDto} /> <EngagementEvidence status={row.primary} /></div>
+                    {row.community.status !== 'not_assigned' && <div>Other participation: <EngagementTierBadge status={row.community} settings={settings as EngagementSettingsDto} /> <EngagementEvidence status={row.community} /></div>}
                   </div>
                 )}
                 {row.rowType === 'visitor_journey' && <div className="mt-1 text-sm">First attendance {formatDate(row.firstAttendanceDate)}</div>}
