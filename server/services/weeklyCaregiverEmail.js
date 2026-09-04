@@ -2,6 +2,7 @@
 
 const Database = require('../config/database');
 const { sendWeeklyCaregiverDigestEmail } = require('../utils/email');
+const { resolveMainAdminReplyTo } = require('./emailReplyTo');
 const { calculateConsecutiveAbsenceStreaks } = require('./attendancePeriodStreaks');
 const { getPastoralInsights } = require('./engagement/pastoral');
 const {
@@ -351,6 +352,9 @@ async function sendWeeklyCaregiverDigests(churchId, options = {}) {
   const emailProvider = options.sendEmail || sendWeeklyCaregiverDigestEmail;
   let sent = 0;
   try {
+    const replyTo = options.replyTo === undefined
+      ? await resolveMainAdminReplyTo(churchId)
+      : options.replyTo;
     const [settings] = await Database.query(
       `SELECT church_name, timezone FROM church_settings WHERE church_id = ? LIMIT 1`, [churchId],
     );
@@ -383,6 +387,7 @@ async function sendWeeklyCaregiverDigests(churchId, options = {}) {
         await emailProvider(digest.caregiver.email, digest.caregiver.first_name,
           settings.church_name, digest.entries, {
             timeZone: settings.timezone || 'UTC', now, testMode, messageKey,
+            replyTo,
             recipientIds: digest.recipientIds,
           });
         if (!testMode) await updateAttempt(churchId, digest.deliveryIds, true);

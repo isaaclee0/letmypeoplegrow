@@ -5,6 +5,29 @@ const apiKey = process.env.BREVO_API_KEY || 'your_brevo_api_key_here';
 
 const brevo = new BrevoClient({ apiKey });
 
+const createEmailData = (to, subject, htmlContent, textContent = null, options = {}) => {
+  const fromEmail = options.fromEmail || process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au';
+  const fromName = process.env.EMAIL_FROM_NAME || process.env.CHURCH_NAME || 'Let My People Grow';
+  const emailData = {
+    to: [{ email: to }],
+    subject,
+    htmlContent,
+    sender: { email: fromEmail, name: fromName },
+    headers: {
+      'List-Unsubscribe': `<mailto:${fromEmail}?subject=unsubscribe>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      'Precedence': 'bulk',
+      'X-Auto-Response-Suppress': 'OOF, AutoReply',
+      'X-Mailer': 'Let My People Grow'
+    }
+  };
+  if (textContent) emailData.textContent = textContent;
+  if (options.replyTo) emailData.replyTo = { email: options.replyTo };
+  if (options.messageId) emailData.messageId = options.messageId;
+  if (options.messageKey) emailData.headers['X-LMPG-Message-Key'] = options.messageKey;
+  return emailData;
+};
+
 const sendEmail = async (to, subject, htmlContent, textContent = null, options = {}) => {
   try {
     // Dev email redirect: if set, redirect all emails to the first listed address
@@ -18,42 +41,7 @@ const sendEmail = async (to, subject, htmlContent, textContent = null, options =
       }
     }
 
-    // Anti-spam best practices: Proper sender configuration
-    const fromEmail = process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au';
-    const fromName = process.env.EMAIL_FROM_NAME || process.env.CHURCH_NAME || 'Let My People Grow';
-
-    const emailData = {
-      to: [{ email: to }],
-      subject,
-      htmlContent,
-      sender: {
-        email: fromEmail,
-        name: fromName
-      },
-      headers: {
-        'List-Unsubscribe': `<mailto:${fromEmail}?subject=unsubscribe>`,
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-        'Precedence': 'bulk',
-        'X-Auto-Response-Suppress': 'OOF, AutoReply',
-        'X-Mailer': 'Let My People Grow'
-      }
-    };
-
-    if (textContent) {
-      emailData.textContent = textContent;
-    }
-
-    if (options.replyTo) {
-      emailData.replyTo = { email: options.replyTo };
-    }
-
-    if (options.messageId) {
-      emailData.messageId = options.messageId;
-    }
-
-    if (options.messageKey) {
-      emailData.headers['X-LMPG-Message-Key'] = options.messageKey;
-    }
+    const emailData = createEmailData(to, subject, htmlContent, textContent, options);
 
     const response = await brevo.transactionalEmails.sendTransacEmail(emailData);
     console.log('Email sent successfully:', response);
@@ -610,7 +598,8 @@ To stop receiving these emails, ask your admin to update your notification prefe
   `;
 
   return sendEmail(email, subject, htmlContent, textContent, {
-    replyTo: process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au',
+    fromEmail: 'no-reply@letmypeoplegrow.app',
+    replyTo: options.replyTo,
     messageId: `weekly-review-${Date.now()}-${Math.random().toString(36).substr(2, 9)}@${process.env.EMAIL_DOMAIN || 'letmypeoplegrow.com.au'}`
   });
 };
@@ -893,10 +882,15 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
 
   const textContent = `Hi ${firstName},\n\n${options.testMode ? 'TEST SEND — no pastoral follow-up items were consumed.\n\n' : ''}Here ${introText} you're caring for who may need a check-in this week:\n\n${entriesText}\n\nResearch shows that a personal follow-up from someone who knows them makes a real difference.\n\nView attendance reports: ${appUrl}/app/reports\n\nBlessings,\n${churchName}\n\n---\nYou're receiving this because you've been assigned as a caregiver in ${churchName}'s attendance system.`;
 
-  await sendEmail(email, subject, htmlContent, textContent, { messageKey: options.messageKey });
+  await sendEmail(email, subject, htmlContent, textContent, {
+    fromEmail: 'no-reply@letmypeoplegrow.app',
+    messageKey: options.messageKey,
+    replyTo: options.replyTo,
+  });
 };
 
 module.exports = {
+  createEmailData,
   sendEmail,
   sendInvitationEmail,
   sendOTCEmail,

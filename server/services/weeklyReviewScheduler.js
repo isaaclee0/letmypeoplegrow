@@ -4,6 +4,7 @@ const { generateWeeklyReviewData, detectSendDay } = require('./weeklyReview');
 const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewInsight');
 const { sendWeeklyReviewEmail } = require('../utils/email');
 const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
+const { resolveMainAdminReplyTo } = require('./emailReplyTo');
 const { evaluateEngagementTierConfirmations } = require('./engagement/tierConfirmationEvaluator');
 const { backfillPendingChurches } = require('./engagement/historyBackfillCoordinator');
 const { processConfirmedPrimaryTransitions } = require('./engagement/declines');
@@ -102,6 +103,7 @@ async function processChurch(church, options = {}) {
   const resolveSendDay = deps.detectSendDay || detectSendDay;
   const sendReview = deps.sendWeeklyReviewEmail || sendWeeklyReviewEmail;
   const sendCaregiverDigests = deps.sendWeeklyCaregiverDigests || sendWeeklyCaregiverDigests;
+  const resolveReplyTo = deps.resolveMainAdminReplyTo || resolveMainAdminReplyTo;
   const checkMainGatheringData = deps.hasMainGatheringData || hasMainGatheringData;
   const createInsight = deps.generateInsight || generateInsight;
   const saveInsight = deps.saveInsightAsConversation || saveInsightAsConversation;
@@ -234,9 +236,13 @@ async function processChurch(church, options = {}) {
       // Send to each recipient and save insight as conversation
       let sentCount = 0;
       const weekLabel = `${reviewData.weekStartDate} to ${reviewData.weekEndDate}`;
+      const replyTo = await resolveReplyTo(churchId);
       for (const recipient of reviewData.recipients) {
         try {
-          await sendReview(recipient.email, recipient.first_name, reviewData, insight, { showGuidanceNudge: nudgeGuidance });
+          await sendReview(recipient.email, recipient.first_name, reviewData, insight, {
+            showGuidanceNudge: nudgeGuidance,
+            replyTo,
+          });
           sentCount++;
           // Save insight as AI conversation so user can follow up
           if (insight) {
@@ -278,7 +284,7 @@ async function processChurch(church, options = {}) {
       }
 
       // Send caregiver digest emails on the same day
-      await sendCaregiverDigests(churchId, { now });
+      await sendCaregiverDigests(churchId, { now, replyTo });
     });
   } catch (err) {
     console.error(`Weekly review: Error processing church ${churchId}:`, err.message);

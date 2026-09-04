@@ -524,6 +524,23 @@ test('delivery success and failure are persisted per recipient and only the fail
   });
 });
 
+test('caregiver digests use the church main admin as the reply-to address', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedDeclineFixture(churchId, { email: 'caregiver@example.test' });
+    const sends = [];
+
+    assert.equal(await sendWeeklyCaregiverDigests(churchId, {
+      now: NOW,
+      sendEmail: async (_email, _firstName, _churchName, _entries, options) => {
+        sends.push(options.replyTo);
+      },
+    }), 1);
+
+    assert.equal(sends.length, 1);
+    assert.match(sends[0], /^admin-.*@example\.test$/);
+  });
+});
+
 test('revalidates each queued recipient immediately before its provider call', async (t) => {
   const scenarios = [
     {

@@ -79,7 +79,11 @@ function schedulerHarness({
       recipients: [{ id: 7, email: 'admin@example.test', first_name: 'Admin' }],
       churchId,
     }) : reviewData,
-    sendWeeklyReviewEmail: async (email) => calls.reviews.push(email),
+    resolveMainAdminReplyTo: async () => 'main-admin@example.test',
+    sendWeeklyReviewEmail: async (email, _firstName, _reviewData, _insight, options) => calls.reviews.push({
+      email,
+      replyTo: options.replyTo,
+    }),
     sendWeeklyCaregiverDigests: async (churchId, options) => calls.digests.push({
       churchId,
       now: options.now.toISOString(),
@@ -116,7 +120,10 @@ test('retry day sends enabled emails without rerunning the primary-day evaluatio
 
   assert.deepEqual(calls.evaluations, []);
   assert.deepEqual(calls.pastorals, []);
-  assert.deepEqual(calls.reviews, ['admin@example.test']);
+  assert.deepEqual(calls.reviews, [{
+    email: 'admin@example.test',
+    replyTo: 'main-admin@example.test',
+  }]);
   assert.deepEqual(calls.digests, [{
     churchId: 'church-a',
     now: '2026-08-14T21:15:00.000Z',
@@ -203,7 +210,10 @@ test('a confirmation failure does not suppress pastoral, weekly, or absence emai
   assert.equal(calls.evaluations.length, 1);
   assert.deepEqual(calls.stages, ['confirm', 'pastoral']);
   assert.deepEqual(calls.pastorals, [{ churchId: 'church-a', throughWeekEnd: undefined }]);
-  assert.deepEqual(calls.reviews, ['admin@example.test']);
+  assert.deepEqual(calls.reviews, [{
+    email: 'admin@example.test',
+    replyTo: 'main-admin@example.test',
+  }]);
   assert.deepEqual(calls.digests, [{
     churchId: 'church-a',
     now: '2026-08-13T21:15:00.000Z',
@@ -221,7 +231,10 @@ test('a pastoral processing failure does not suppress the ordinary weekly or abs
   await processChurch({ church_id: 'church-a' }, { now });
 
   assert.deepEqual(calls.stages, ['confirm', 'pastoral']);
-  assert.deepEqual(calls.reviews, ['admin@example.test']);
+  assert.deepEqual(calls.reviews, [{
+    email: 'admin@example.test',
+    replyTo: 'main-admin@example.test',
+  }]);
   assert.deepEqual(calls.digests, [{
     churchId: 'church-a',
     now: '2026-08-13T21:15:00.000Z',

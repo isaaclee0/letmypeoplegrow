@@ -673,6 +673,7 @@ router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
   try {
     const { generateWeeklyReviewData } = require('../services/weeklyReview');
     const { generateInsight, saveInsightAsConversation } = require('../services/weeklyReviewInsight');
+    const { resolveMainAdminReplyTo } = require('../services/emailReplyTo');
     const { sendWeeklyReviewEmail } = require('../utils/email');
 
     // Get requesting user's info
@@ -703,7 +704,8 @@ router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
       insight = await generateInsight(reviewData, { forceAlgorithmic: !isDev });
     }
 
-    await sendWeeklyReviewEmail(users[0].email, users[0].first_name, reviewData, insight);
+    const replyTo = await resolveMainAdminReplyTo(req.user.church_id);
+    await sendWeeklyReviewEmail(users[0].email, users[0].first_name, reviewData, insight, { replyTo });
 
     // Save insight as AI conversation for follow-up
     if (insight) {
