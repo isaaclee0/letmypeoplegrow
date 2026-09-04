@@ -6,10 +6,10 @@ const pcoSync = require('./planningCenterSync');
 const { PcoSourceError } = require('./planningCenter/readClient');
 
 test('isDueToday retains daily, weekly, and monthly scheduling semantics', () => {
-  assert.equal(pcoSync.isDueToday('daily', 1, new Date('2026-07-06T02:00:00')), true);
-  assert.equal(pcoSync.isDueToday('weekly', 1, new Date('2026-07-06T02:00:00')), true);
-  assert.equal(pcoSync.isDueToday('weekly', 1, new Date('2026-07-07T02:00:00')), false);
-  assert.equal(pcoSync.isDueToday('monthly', 31, new Date('2026-04-30T02:00:00')), true);
+  assert.equal(pcoSync.isDueToday('daily', 1, new Date('2026-07-06T02:00:00Z')), true);
+  assert.equal(pcoSync.isDueToday('weekly', 1, new Date('2026-07-06T02:00:00Z')), true);
+  assert.equal(pcoSync.isDueToday('weekly', 1, new Date('2026-07-07T02:00:00Z')), false);
+  assert.equal(pcoSync.isDueToday('monthly', 31, new Date('2026-04-30T02:00:00Z')), true);
 });
 
 test('Planning Center batches persist only a provider-owned source draft', async () => {

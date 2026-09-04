@@ -76,10 +76,12 @@ function person(id: number) {
 function renderPeoplePage({
   role = 'admin',
   authorityProvider = 'none',
+  peopleEditingLocked = authorityProvider !== 'none',
   people = [],
 }: {
   role?: string;
   authorityProvider?: AuthorityProvider;
+  peopleEditingLocked?: boolean;
   people?: ReturnType<typeof person>[];
 } = {}) {
   authState.role = role;
@@ -90,7 +92,7 @@ function renderPeoplePage({
   } as never);
   vi.spyOn(gatheringsAPI, 'getAll').mockResolvedValue({ data: { gatherings: [] } } as never);
   vi.spyOn(peopleSyncAPI, 'getSettings').mockResolvedValue({
-    data: { settings: { authorityProvider } },
+    data: { settings: { authorityProvider, peopleEditingLocked } },
   } as never);
   vi.spyOn(visitorConfigAPI, 'getConfig').mockResolvedValue({
     data: { localVisitorServiceLimit: 6, travellerVisitorServiceLimit: 2 },
@@ -119,9 +121,16 @@ describe('PeoplePage provider import', () => {
     ['empty Elvanto-managed roster', 'elvanto', []],
     ['populated Elvanto-managed roster', 'elvanto', [person(1)]],
   ] as const)('offers administrators an import action for an %s', async (_description, authorityProvider, people) => {
-    renderPeoplePage({ authorityProvider, people: [...people] });
+    renderPeoplePage({ authorityProvider, peopleEditingLocked: false, people: [...people] });
 
     expect(await screen.findByRole('button', { name: 'Import people' })).toBeEnabled();
+  });
+
+  it('does not offer provider import while managed-roster people editing is locked', async () => {
+    renderPeoplePage({ authorityProvider: 'planning_center', peopleEditingLocked: true, people: [person(1)] });
+
+    await screen.findByRole('heading', { name: 'Manage People' });
+    expect(screen.queryByRole('button', { name: 'Import people' })).not.toBeInTheDocument();
   });
 
   it.each(['coordinator', 'attendance_taker'])('does not offer provider import to a %s', async (role) => {
@@ -140,7 +149,7 @@ describe('PeoplePage provider import', () => {
 
   it('refreshes people and families once and confirms success after an import applies', async () => {
     const user = userEvent.setup();
-    renderPeoplePage({ authorityProvider: 'planning_center', people: [person(1)] });
+    renderPeoplePage({ authorityProvider: 'planning_center', peopleEditingLocked: false, people: [person(1)] });
     vi.spyOn(peopleImportAPI, 'listSources').mockResolvedValue({
       data: { success: true, allOption: { kind: 'all', name: 'Everyone' }, sources: [] },
     } as never);

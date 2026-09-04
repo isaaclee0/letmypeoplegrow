@@ -17,7 +17,7 @@ const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { isDueToday, runChurch, runAllChurches } = require('./scheduler');
 
-const MONDAY = new Date('2026-07-06T02:00:00'); // matches a weekly schedule with scheduleDay=1
+const MONDAY = new Date('2026-07-06T02:00:00Z'); // Monday in the UTC timezone used by these tests
 
 function baseBatch(overrides = {}) {
   return {
@@ -73,7 +73,7 @@ test('isDueToday behaves exactly as the original planningCenterSync implementati
   assert.equal(isDueToday('daily', 1, MONDAY), true);
   assert.equal(isDueToday('weekly', 1, MONDAY), true);
   assert.equal(isDueToday('weekly', 2, MONDAY), false);
-  assert.equal(isDueToday('monthly', 6, new Date('2026-07-06T02:00:00')), true);
+  assert.equal(isDueToday('monthly', 6, new Date('2026-07-06T02:00:00Z')), true);
 });
 
 test('isDueToday uses the church weekday across UTC midnight', () => {

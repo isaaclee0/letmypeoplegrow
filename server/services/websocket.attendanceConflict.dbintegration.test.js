@@ -28,6 +28,11 @@ async function seedGatheringType(churchId, createdBy) {
     `INSERT INTO gathering_types (name, church_id, created_by) VALUES ('Sunday Service', ?, ?)`,
     [churchId, createdBy]
   );
+  await Database.query(
+    `INSERT INTO user_gathering_assignments (user_id, gathering_type_id, church_id)
+     VALUES (?, ?, ?)`,
+    [createdBy, res.insertId, churchId]
+  );
   return res.insertId;
 }
 

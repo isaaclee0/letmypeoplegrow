@@ -65,7 +65,25 @@ function ensureMigrationTrackingSchema(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_migrations_version ON migrations(version)');
 }
 
+function ensureChurchTimezoneColumns(db) {
+  const columns = new Set(db.prepare('PRAGMA table_info(church_settings)').all().map((column) => column.name));
+  const additions = [
+    ['timezone', "TEXT DEFAULT 'Australia/Sydney'"],
+    ['location_name', 'TEXT'],
+    ['location_lat', 'REAL'],
+    ['location_lng', 'REAL'],
+    ['updated_at', 'TEXT'],
+  ];
+
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) {
+      db.exec(`ALTER TABLE church_settings ADD COLUMN ${name} ${definition}`);
+    }
+  }
+}
+
 function migrateChurchTimezoneFromLocation(db, churchId) {
+  ensureChurchTimezoneColumns(db);
   ensureMigrationTrackingSchema(db);
   db.transaction(() => {
     const applied = db.prepare(
@@ -112,6 +130,24 @@ function markScheduledPcoAuthorityMigrationApplied(db) {
     SCHEDULED_PCO_AUTHORITY_MIGRATION.version,
     SCHEDULED_PCO_AUTHORITY_MIGRATION.name,
     SCHEDULED_PCO_AUTHORITY_MIGRATION.description
+  );
+}
+
+function markLegacyBatchAuthorityMigrationApplied(db) {
+  ensureMigrationTrackingSchema(db);
+  db.prepare(`INSERT INTO migrations
+    (version, name, description, execution_time_ms, status, executed_at)
+    VALUES (?, ?, ?, 0, 'success', datetime('now'))
+    ON CONFLICT(version) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      execution_time_ms = excluded.execution_time_ms,
+      status = excluded.status,
+      executed_at = excluded.executed_at,
+      error_message = NULL`).run(
+    LEGACY_BATCH_AUTHORITY_MIGRATION.version,
+    LEGACY_BATCH_AUTHORITY_MIGRATION.name,
+    LEGACY_BATCH_AUTHORITY_MIGRATION.description
   );
 }
 
@@ -534,6 +570,7 @@ class Database {
       // batch. Only databases that predate this marker receive the legacy
       // inference in backfillProviderNeutralSync().
       markScheduledPcoAuthorityMigrationApplied(db);
+      markLegacyBatchAuthorityMigrationApplied(db);
       console.log(`✅ Created church database: ${churchId}`);
     }
 
