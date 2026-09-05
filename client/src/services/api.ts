@@ -93,6 +93,7 @@ export interface ContextualLongTermOverviewDto {
     percentChange: number | null;
     status: ContextualDirectionStatus;
     series: Array<{
+      comparison?: Pick<ContextualLongTermOverviewDto['direction'], 'comparisonWeeks' | 'previousAverage' | 'recentAverage' | 'percentChange' | 'status'>;
       gatheringTypeId: number;
       name: string;
       attendanceType: 'standard' | 'headcount';
@@ -115,6 +116,7 @@ export interface ContextualLongTermOverviewDto {
       peopleToken: string;
     }>;
   } | null;
+  increases?: ContextualLongTermOverviewDto['declines'];
   declines: {
     total: number;
     rows: Array<{
@@ -141,7 +143,7 @@ export interface ContextualRegularityDrilldownRow {
   evidence: { attendedWeeks: number; opportunityWeeks: number };
 }
 export interface ContextualDeclineDrilldownRow {
-  rowType: 'contextual_decline';
+  rowType: 'contextual_decline' | 'contextual_increase';
   individualId: number;
   firstName: string;
   lastName: string;
@@ -716,6 +718,9 @@ export const kioskAPI = {
 
   deleteSession: (gatheringTypeId: number, date: string) =>
     api.delete(`/kiosk/history/${gatheringTypeId}/${date}`),
+
+  addPersonToGathering: (gatheringTypeId: number, individualId: number) =>
+    api.post(`/kiosk/${gatheringTypeId}/roster/${individualId}`),
 };
 
 // Users API

@@ -5,10 +5,14 @@ import type { ContextualLongTermOverviewDto, GatheringType } from '../../service
 import { individualsAPI, reportsAPI, settingsAPI } from '../../services/api';
 import { readLongTermTrendsCache, writeLongTermTrendsCache } from '../../services/engagementReportCache';
 import LongTermTrends from './LongTermTrends';
+import { ReportPanelGrid } from './ReportPanelGrid';
+import { defaultReportLayout } from './reportLayout';
+
+const chartRender = vi.hoisted(() => vi.fn());
 
 vi.mock('react-chartjs-2', () => ({
-  Doughnut: () => <div aria-label="Regularity chart" />,
-  Line: () => <div aria-label="Attendance direction chart" />,
+  Doughnut: () => <div aria-label="Regularity distribution" />,
+  Line: (props: unknown) => { chartRender(props); return <div aria-label="Attendance direction chart" />; },
 }));
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -116,6 +120,7 @@ const overview = ({
         gatheringTypeId: gathering.id,
         name: gathering.name,
         attendanceType: gathering.attendanceType,
+        comparison: { comparisonWeeks: 12, previousAverage: directionStatus === 'unavailable' ? null : 50, recentAverage: directionStatus === 'unavailable' ? null : 46.5, percentChange, status: directionStatus },
         buckets: makeBuckets(`sessions-${gathering.id}`),
       })),
     },
@@ -155,16 +160,18 @@ describe('LongTermTrends', () => {
     expect(reportsAPI.getLongTermTrends).not.toHaveBeenCalled();
   });
 
-  it('requests canonical selected IDs and explains the fixed window and weekly alternatives', async () => {
+  it('requests canonical selected IDs and keeps the trends header concise', async () => {
     const gatherings = [selected(2, 'Evening'), selected(1, 'Morning')];
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: overview({ gatherings }) } as never);
 
     render(<LongTermTrends churchId="church-a" selectedGatherings={gatherings} canConfigure={false} />);
 
     await waitFor(() => expect(reportsAPI.getLongTermTrends).toHaveBeenCalledWith([1, 2]));
-    expect(await screen.findByText(/latest 52 completed weeks/i)).toBeInTheDocument();
+    expect(await screen.findByText(/based on 52 weeks of available attendance history/i)).toBeInTheDocument();
     expect(screen.getByText(/date range above does not affect these trends/i)).toBeInTheDocument();
-    expect(screen.getByText('Attendance at any selected gathering counts once per week.')).toBeInTheDocument();
+    expect(screen.queryByText('Attendance at any selected gathering counts once per week.')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Long-term trends' }).parentElement).toHaveTextContent('Long-term trendsBased on 52 weeks of available attendance history.The date range above does not affect these trends.');
+    expect(screen.queryByText('Completed-week view')).not.toBeInTheDocument();
   });
 
   it('ignores a late response after the gathering selection changes', async () => {
@@ -189,7 +196,7 @@ describe('LongTermTrends', () => {
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
 
     expect(await screen.findByText(/based on 31 weeks of available attendance history/i)).toBeInTheDocument();
-    expect(screen.getByText(/8 Feb 2026 – 23 Aug 2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/8 Feb 2026 – 23 Aug 2026/)).not.toBeInTheDocument();
   });
 
   it.each([
@@ -204,6 +211,8 @@ describe('LongTermTrends', () => {
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
 
     expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Attendance direction chart')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View attendance history' }));
     expect(screen.getByLabelText('Attendance direction chart')).toBeInTheDocument();
   });
 
@@ -216,35 +225,75 @@ describe('LongTermTrends', () => {
 
     expect(await screen.findByText(/person-level trends require a standard attendance gathering/i)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Attendance direction' })).toBeInTheDocument();
-    expect(screen.queryByLabelText('Regularity chart')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Regularity distribution')).not.toBeInTheDocument();
     first.unmount();
 
     const mixed = [selected(1, 'Sunday'), headcount];
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValueOnce({ data: overview({ gatherings: mixed }) } as never);
     render(<LongTermTrends churchId="church-a" selectedGatherings={mixed} canConfigure={false} />);
-    expect(await screen.findByText(/attendance direction includes all selected gatherings/i)).toBeInTheDocument();
-    expect(screen.getByText(/person-level results use only the selected standard gathering/i)).toBeInTheDocument();
-    expect(screen.getByLabelText('Regularity chart')).toBeInTheDocument();
+    await screen.findByRole('region', { name: 'Regularity' });
+    expect(screen.queryByText(/attendance direction includes all selected gatherings/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/person-level results use only the selected standard gathering/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Regularity distribution')).toBeInTheDocument();
   });
 
-  it('shows labelled tier counts and visibly opens a focused contextual people panel', async () => {
+  it('opens a regularity tier as a focused full-width section below the regularity row', async () => {
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: overview() } as never);
     vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [{
       rowType: 'contextual_regularity', individualId: 1, firstName: 'Alex', lastName: 'Able', familyId: null,
       tier: 'core', rate: 75, evidence: { attendedWeeks: 9, opportunityWeeks: 12 },
     }], nextCursor: null } } as never);
-    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
+    render(
+      <ReportPanelGrid layout={defaultReportLayout()} editing={false} unavailable={{}} onReorder={vi.fn()} onHide={vi.fn()}>
+        <LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} embedded />
+      </ReportPanelGrid>,
+    );
 
     const trigger = await screen.findByRole('button', { name: 'Core: 4 people (50%)' });
     trigger.focus();
     fireEvent.click(trigger);
     const panel = await screen.findByRole('region', { name: 'Core people' });
-    expect(within(panel).getByRole('columnheader', { name: 'Name' })).toBeInTheDocument();
-    expect(within(panel).getByRole('columnheader', { name: 'Attendance' })).toBeInTheDocument();
+    expect(within(panel).getByRole('list', { name: 'People' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Sort by name ascending' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Sort by attendance descending' })).toBeInTheDocument();
     expect(within(panel).getByText('9 of 12 weeks (75%)')).toBeInTheDocument();
     expect(within(panel).getByRole('heading', { name: 'Core people' })).toHaveFocus();
+    expect(panel.closest('[data-report-panel="regularity"]')).toBeNull();
+    expect(panel.parentElement).toHaveClass('lg:col-span-2');
+    expect(panel.parentElement).toHaveStyle({ order: 14 });
     fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
     expect(trigger).toHaveFocus();
+  });
+
+  it('refreshes an expired regularity token and reopens the requested tier', async () => {
+    const staleOverview = overview();
+    const freshOverview = overview();
+    freshOverview.regularity!.tiers = freshOverview.regularity!.tiers.map((tier) => (
+      tier.tier === 'core' ? { ...tier, peopleToken: 'fresh-core-token' } : tier
+    ));
+    vi.mocked(reportsAPI.getLongTermTrends)
+      .mockResolvedValueOnce({ data: staleOverview } as never)
+      .mockResolvedValueOnce({ data: freshOverview } as never);
+    vi.mocked(reportsAPI.getEngagementPeople)
+      .mockRejectedValueOnce({
+        isAxiosError: true,
+        response: { data: { code: 'INVALID_DRILLDOWN_TOKEN' } },
+      })
+      .mockResolvedValueOnce({ data: { rows: [{
+        rowType: 'contextual_regularity', individualId: 1, firstName: 'Alex', lastName: 'Able', familyId: null,
+        tier: 'core', rate: 75, evidence: { attendedWeeks: 9, opportunityWeeks: 12 },
+      }], nextCursor: null } } as never);
+
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Core: 4 people (50%)' }));
+
+    expect(await screen.findByText('Alex Able')).toBeInTheDocument();
+    const panel = screen.getByRole('region', { name: 'Core people' });
+    expect(reportsAPI.getLongTermTrends).toHaveBeenCalledTimes(2);
+    expect(reportsAPI.getEngagementPeople).toHaveBeenLastCalledWith({
+      segment: 'fresh-core-token', cursor: undefined, limit: 50,
+    });
+    expect(within(panel).queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps contextual column labels visible while people are still loading', async () => {
@@ -258,7 +307,7 @@ describe('LongTermTrends', () => {
     expect(within(panel).getByRole('columnheader', { name: 'Attendance' })).toBeInTheDocument();
   });
 
-  it('limits the decline preview to ten plain evidence rows and opens View all', async () => {
+  it('limits the decline preview to four person cards and opens View all', async () => {
     const rows = declineRows(10);
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({
       data: { ...overview({ declines: rows }), declines: { total: 11, rows, peopleToken: 'decline-token' } },
@@ -269,14 +318,101 @@ describe('LongTermTrends', () => {
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
 
     const declineRegion = await screen.findByRole('region', { name: 'People attending less often' });
-    expect(within(declineRegion).getAllByRole('listitem')).toHaveLength(10);
-    expect(within(declineRegion).getAllByText('Usually attends 3 weeks in 4; attended 1 of the last 6 weeks.')).toHaveLength(10);
+    expect(within(declineRegion).getAllByRole('listitem')).toHaveLength(4);
+    expect(within(declineRegion).getAllByText('Usually attends 3 weeks in 4; attended 1 of the last 6 weeks.')).toHaveLength(4);
     const viewAll = within(declineRegion).getByRole('button', { name: 'View all 11 people' });
     viewAll.focus();
     fireEvent.click(viewAll);
     const panel = await within(declineRegion).findByRole('region', { name: 'People attending less often' });
     expect(within(panel).getByRole('columnheader', { name: 'Recent attendance' })).toBeInTheDocument();
     expect(within(panel).getByText('1 of 6 recent weeks (16.7%)')).toBeInTheDocument();
+  });
+
+  it('switches between attendance changes with keyboard navigation and opens all increases', async () => {
+    const row = { ...declineRows(1)[0], individualId: 99, firstName: 'Growing',
+      baseline: { attendedWeeks: 1, opportunityWeeks: 6, rate: 16.7 },
+      recent: { attendedWeeks: 5, opportunityWeeks: 6, rate: 83.3 },
+      summary: 'Previously attended 1 week in 6; attended 5 of the last 6 weeks.' };
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: {
+      ...overview(), increases: { total: 5, rows: [row], peopleToken: 'increase-token' },
+    } } as never);
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: {
+      rows: [{ rowType: 'contextual_increase', ...row }], nextCursor: null,
+    } } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
+    const more = await screen.findByRole('tab', { name: 'Attending more often 5' });
+    const less = screen.getByRole('tab', { name: 'Attending less often 1' });
+    expect(less).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(less, { key: 'ArrowLeft' });
+    expect(more).toHaveFocus();
+    expect(more).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Growing Example')).toBeInTheDocument();
+    expect(screen.queryByText('Person1 Example')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View all 5 people' }));
+    expect(await screen.findByText('5 of 6 recent weeks (83.3%)')).toBeInTheDocument();
+    fireEvent.click(less);
+    expect(screen.queryByText('Growing Example')).not.toBeInTheDocument();
+  });
+
+  it('shows separate gathering averages and changes instead of the combined average', async () => {
+    const result = overview({ gatherings: [selected(1, 'Sunday'), selected(2, 'Youth')] });
+    result.direction.series[0].comparison = { comparisonWeeks: 12, previousAverage: 100.4, recentAverage: 119.5, percentChange: 20, status: 'up' };
+    result.direction.series[1].comparison = { comparisonWeeks: 12, previousAverage: 20, recentAverage: 10, percentChange: -50, status: 'down' };
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: result } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday'), selected(2, 'Youth')]} canConfigure={false} />);
+    const sunday = await screen.findByRole('region', { name: 'Sunday attendance trend' });
+    expect(within(sunday).getByText('120')).toBeInTheDocument();
+    expect(within(sunday).getByText('100')).toBeInTheDocument();
+    expect(within(sunday).getByText('↑ 20%')).toBeInTheDocument();
+    const youth = screen.getByRole('region', { name: 'Youth attendance trend' });
+    expect(within(youth).getByText('10')).toBeInTheDocument();
+    expect(within(youth).getByText('↓ 50%')).toBeInTheDocument();
+    expect(screen.queryByText('46.5')).not.toBeInTheDocument();
+  });
+
+  it('uses separate named Y scales and month labels while retaining exact dates in tooltips', async () => {
+    const result = overview({ gatherings: [selected(1, 'Sunday'), selected(2, 'Youth')] });
+    result.direction.series[0].buckets.forEach((bucket) => { bucket.averageAttendance = 200; });
+    result.direction.series[1].buckets.forEach((bucket) => { bucket.averageAttendance = 20; });
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: result } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday'), selected(2, 'Youth')]} canConfigure={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'View attendance history' }));
+    const { data, options } = chartRender.mock.lastCall![0];
+    expect(data.datasets.map((dataset: { yAxisID: string }) => dataset.yAxisID)).toEqual(['yRight', 'y']);
+    expect(options.scales.y.title.text).toBe('Youth');
+    expect(options.scales.yRight.title.text).toBe('Sunday');
+    expect(options.scales.yRight.position).toBe('right');
+    expect(data.labels[0]).toBe('Sept 2025');
+    expect(options.scales.x.ticks.callback(1, 1)).toBe('');
+    expect(options.plugins.tooltip.callbacks.title([{ datasetIndex: 0, dataIndex: 0 }])).toBe('1 Sept 2025 – 7 Sept 2025');
+  });
+
+  it('trims empty chart edges across gatherings while retaining internal gaps and zero attendance', async () => {
+    const result = overview({ gatherings: [selected(1, 'Sunday'), selected(2, 'Youth')] });
+    result.direction.series.forEach((series) => series.buckets.forEach((bucket) => {
+      bucket.averageAttendance = null;
+      bucket.heldSessions = 0;
+    }));
+    Object.assign(result.direction.series[0].buckets[4], { averageAttendance: 0, heldSessions: 1 });
+    Object.assign(result.direction.series[1].buckets[6], { averageAttendance: 20, heldSessions: 1 });
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: result } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday'), selected(2, 'Youth')]} canConfigure={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'View attendance history' }));
+    const { data, options } = chartRender.mock.lastCall![0];
+    expect(data.labels).toHaveLength(3);
+    expect(data.labels[0]).toBe('Oct 2025');
+    expect(data.datasets[0].data).toEqual([0, null, null]);
+    expect(data.datasets[1].data).toEqual([null, null, 20]);
+    expect(options.plugins.tooltip.callbacks.title([{ datasetIndex: 1, dataIndex: 2 }])).toBe('15 Oct 2025 – 21 Oct 2025');
+  });
+
+  it('does not show empty dates when no gathering has history', async () => {
+    const result = overview();
+    result.direction.series[0].buckets.forEach((bucket) => { bucket.averageAttendance = null; bucket.heldSessions = 0; });
+    vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: result } as never);
+    render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'View attendance history' }));
+    expect(chartRender.mock.lastCall![0].data.labels).toEqual([]);
   });
 
   it('shows matching cached data while refreshing and warns when that refresh fails', async () => {
@@ -309,26 +445,26 @@ describe('LongTermTrends', () => {
     expect(readLongTermTrendsCache('church-a', [2])).toBeNull();
   });
 
-  it('explains people without evidence even when every classified tier is zero', async () => {
+  it('omits the missing attendance warning even when every classified tier is zero', async () => {
     const result = overview({ population: 3 });
     result.dataAvailability.unclassifiedBecauseNoEvidence = 3;
     result.regularity!.tiers = result.regularity!.tiers.map((tier) => ({ ...tier, count: 0, rate: 0 }));
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: result } as never);
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
 
-    expect(await screen.findByText('3 people could not be classified because they have no reliable attendance evidence.')).toBeInTheDocument();
+    await screen.findByRole('region', { name: 'Regularity' });
+    expect(screen.queryByText(/could not be classified/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Core: 0 people (0%)' })).toBeInTheDocument();
   });
 
-  it('lets users choose and open every nonempty attendance-session bucket', async () => {
+  it('shows attendance history without session selectors or session buttons', async () => {
     vi.mocked(reportsAPI.getLongTermTrends).mockResolvedValue({ data: overview() } as never);
-    vi.mocked(reportsAPI.getEngagementSessions).mockResolvedValue({ data: { rows: [], nextCursor: null } } as never);
     render(<LongTermTrends churchId="church-a" selectedGatherings={[selected(1, 'Sunday')]} canConfigure={false} />);
-
-    const period = await screen.findByRole('combobox', { name: 'Attendance period for Sunday' });
-    fireEvent.change(period, { target: { value: '3' } });
-    fireEvent.click(screen.getByRole('button', { name: 'View Sunday attendance sessions' }));
-    expect(await screen.findByRole('dialog', { name: 'Sunday attendance sessions — 22 Sept 2025 – 28 Sept 2025' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'View attendance history' }));
+    const history = screen.getByRole('region', { name: 'Attendance history' });
+    expect(within(history).getByLabelText('Attendance direction chart')).toBeInTheDocument();
+    expect(within(history).queryByRole('combobox')).not.toBeInTheDocument();
+    expect(within(history).queryByRole('button', { name: /attendance sessions/i })).not.toBeInTheDocument();
   });
 
   it('opens decline attendance history from the keyboard and scopes it to selected gatherings', async () => {

@@ -856,21 +856,14 @@ const UsersPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-32">
-      {/* Header */}
-      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                Manage Users
-              </h1>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Manage users, send invitations, and assign gathering access
-              </p>
-            </div>
-          </div>
-        </div>
+    <div className="space-y-4 pb-32">
+      <div className="px-1">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+          Manage Users
+        </h1>
+        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+          Manage users, send invitations, and assign gathering access
+        </p>
       </div>
 
       {/* Alerts */}
@@ -897,27 +890,29 @@ const UsersPage: React.FC = () => {
       )}
 
       {/* Tab switcher */}
-      <div className="flex border-b border-gray-200 dark:border-gray-700">
+      <div className="flex border-b border-gray-200 pb-4 dark:border-gray-700">
+        <div className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-transparent p-0.5 shadow-none dark:border-gray-600 dark:bg-gray-900/50 dark:shadow-sm">
         <button
           onClick={() => setActiveTab('users')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+          className={`h-full rounded-md border px-4 text-sm font-medium transition-colors ${
             activeTab === 'users'
-              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+              ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
+              : 'border-gray-200 bg-gray-50 text-gray-700 shadow-sm hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-700 dark:hover:text-white'
           }`}
         >
           Users
         </button>
         <button
           onClick={() => setActiveTab('contacts')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ml-4 ${
+          className={`ml-1 h-full rounded-md border px-4 text-sm font-medium transition-colors ${
             activeTab === 'contacts'
-              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+              ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
+              : 'border-gray-200 bg-gray-50 text-gray-700 shadow-sm hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-700 dark:hover:text-white'
           }`}
         >
           Contacts
         </button>
+        </div>
       </div>
 
       {activeTab === 'contacts' && (

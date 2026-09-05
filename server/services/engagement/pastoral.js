@@ -118,7 +118,7 @@ async function loadPastoralSource(churchId, window, rulesVersion) {
            ON gt.id = s.gathering_type_id AND gt.church_id = ?
          WHERE ar.church_id = ?
            AND ar.present = 1
-           AND s.session_status = 'held'
+           AND s.session_status != 'cancelled'
            AND s.excluded_from_stats = 0
            AND s.session_date <= ?
        )
@@ -150,7 +150,7 @@ async function loadPastoralSource(churchId, window, rulesVersion) {
          ON gt.id = s.gathering_type_id AND gt.church_id = ?
        WHERE ar.church_id = ?
          AND ar.present = 1
-         AND s.session_status = 'held'
+         AND s.session_status != 'cancelled'
          AND s.excluded_from_stats = 0
          AND gt.attendance_type = 'standard'
          AND gt.engagement_role = 'primary'

@@ -231,7 +231,7 @@ function provenanceForSession(session) {
 }
 
 function includedTrendSession(session, window) {
-  return session.sessionStatus === 'held'
+  return session.sessionStatus !== 'cancelled'
     && Number(session.excludedFromStats) !== 1
     && session.sessionDate >= window.currentStart
     && session.sessionDate <= window.currentEnd;
@@ -467,6 +467,22 @@ async function loadOverviewSource(churchId, window) {
        JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.church_id = ?
        WHERE s.church_id = ?
          AND s.session_date >= ? AND s.session_date <= ?
+         AND (
+           (gt.attendance_type = 'standard' AND EXISTS (
+             SELECT 1
+             FROM attendance_records report_ar
+             WHERE report_ar.session_id = s.id
+               AND report_ar.church_id = s.church_id
+               AND report_ar.present = 1
+           ))
+           OR (gt.attendance_type = 'headcount' AND EXISTS (
+             SELECT 1
+             FROM headcount_records report_hr
+             WHERE report_hr.session_id = s.id
+               AND report_hr.church_id = s.church_id
+               AND report_hr.headcount > 0
+           ))
+         )
        ORDER BY s.session_date, s.id`,
       [churchId, churchId, window.sourceStart, window.sourceEnd],
     ),
@@ -505,7 +521,7 @@ async function loadOverviewSource(churchId, window) {
          ON i.id = ar.individual_id AND i.church_id = ?
        WHERE ar.church_id = ?
          AND ar.present = 1
-         AND s.session_status = 'held'
+         AND s.session_status != 'cancelled'
          AND s.excluded_from_stats = 0
          AND gt.attendance_type = 'standard'
          AND s.session_date <= ?

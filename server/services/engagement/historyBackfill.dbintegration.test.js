@@ -69,7 +69,7 @@ test('backfillEngagementHistory atomically marks and deduplicates a completed re
     const session = await Database.query(
       `INSERT INTO attendance_sessions
          (gathering_type_id, session_date, created_by, roster_snapshotted, session_status, church_id)
-       VALUES (?, '2026-01-04', ?, 1, 'held', ?)`, [gathering.insertId, actor.insertId, churchId],
+       VALUES (?, '2026-01-04', ?, 1, 'open', ?)`, [gathering.insertId, actor.insertId, churchId],
     );
     await Database.query(
       `INSERT INTO attendance_records
@@ -125,10 +125,19 @@ test('backfillEngagementHistory leaves no completion marker when calculation fai
          (name, attendance_type, is_active, engagement_role, church_id)
        VALUES ('Primary', 'standard', 1, 'primary', ?)`, [churchId],
     );
-    await Database.query(
+    const person = await Database.query(
+      `INSERT INTO individuals (first_name, last_name, people_type, is_active, church_id)
+       VALUES ('Historical', 'Person', 'regular', 1, ?)`, [churchId],
+    );
+    const session = await Database.query(
       `INSERT INTO attendance_sessions
          (gathering_type_id, session_date, created_by, roster_snapshotted, session_status, church_id)
-       VALUES (?, '2026-01-04', ?, 1, 'held', ?)`, [gathering.insertId, actor.insertId, churchId],
+       VALUES (?, '2026-01-04', ?, 1, 'open', ?)`, [gathering.insertId, actor.insertId, churchId],
+    );
+    await Database.query(
+      `INSERT INTO attendance_records
+         (session_id, individual_id, present, church_id, eligible_at_snapshot)
+       VALUES (?, ?, 1, ?, 1)`, [session.insertId, person.insertId, churchId],
     );
 
     await assert.rejects(

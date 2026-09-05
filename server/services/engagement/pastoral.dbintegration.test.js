@@ -306,6 +306,9 @@ test('community-connected primary-irregular episodes can resolve and recur withi
   await withTestChurchDb(async (churchId) => {
     const actorId = await seedActor(churchId);
     const subject = await seedFamilyPerson(churchId, actorId, { firstName: 'Morgan' });
+    const serviceMarker = await seedFamilyPerson(churchId, actorId, {
+      firstName: 'Session Marker', peopleType: 'local_visitor',
+    });
     const primaryId = await seedGathering(churchId, actorId, 'Primary', 'primary');
     const communityId = await seedGathering(churchId, actorId, 'Community', 'community');
     await assign(churchId, actorId, primaryId, subject.personId);
@@ -316,6 +319,10 @@ test('community-connected primary-irregular episodes can resolve and recur withi
     ];
     for (const date of dates) {
       await seedAttendance(churchId, actorId, primaryId, subject.personId, date, { present: false });
+      await seedAttendance(churchId, actorId, primaryId, serviceMarker.personId, date, {
+        present: true,
+        peopleType: 'local_visitor',
+      });
       await seedAttendance(churchId, actorId, communityId, subject.personId, date, { present: true });
     }
 

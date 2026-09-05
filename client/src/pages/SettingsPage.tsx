@@ -509,24 +509,23 @@ const SettingsPage: React.FC = () => {
   }, [fetchLocation]);
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Manage your account settings and system preferences
-          </p>
-        </div>
+    <div className="min-w-0 space-y-4 pb-32">
+      <div className="px-1">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
+        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+          Manage your account settings and system preferences
+        </p>
+      </div>
 
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         {/* Tabs */}
-        <div className="border-b border-gray-200 dark:border-gray-700">
-          <nav className="-mb-px flex space-x-8 px-6">
+        <div className="overflow-x-auto border-b border-gray-200 dark:border-gray-700">
+          <nav aria-label="Settings sections" className="flex gap-4 px-4 sm:gap-8 sm:px-6">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                className={`shrink-0 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
                   activeTab === tab.id
                     ? 'border-primary-500 text-primary-600'
                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
@@ -540,7 +539,7 @@ const SettingsPage: React.FC = () => {
         </div>
 
         {/* Tab Content */}
-        <div className="p-6">
+        <div className="px-4 py-5 sm:p-6">
           {activeTab === 'general' && (
             <div className="space-y-6">
               {/* Church Location */}
@@ -821,14 +820,14 @@ const SettingsPage: React.FC = () => {
                             value={childBadgeColor}
                             onChange={(e) => setChildBadgeColor(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="h-10 w-20 rounded border border-gray-300 dark:border-gray-600 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-10 w-20 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           />
                           <input
                             type="text"
                             value={childBadgeColor}
                             onChange={(e) => setChildBadgeColor(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed uppercase font-mono"
+                            className="block w-32 rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed uppercase font-mono"
                             placeholder="#RRGGBB"
                             maxLength={7}
                           />
@@ -941,14 +940,14 @@ const SettingsPage: React.FC = () => {
                             value={adultBadgeColor || '#c5aefb'}
                             onChange={(e) => setAdultBadgeColor(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="h-10 w-20 rounded border border-gray-300 dark:border-gray-600 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-10 w-20 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           />
                           <input
                             type="text"
                             value={adultBadgeColor}
                             onChange={(e) => setAdultBadgeColor(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed uppercase font-mono"
+                            className="block w-32 rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed uppercase font-mono"
                             placeholder="#RRGGBB"
                             maxLength={7}
                           />

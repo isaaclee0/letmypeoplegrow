@@ -68,11 +68,18 @@ async function performBackfill(churchId, { asOf = new Date(), __deps = {} } = {}
        ON gathering.id = session.gathering_type_id
       AND gathering.church_id = session.church_id
      WHERE session.church_id = ?
-       AND session.session_status = 'held'
+       AND session.session_status != 'cancelled'
        AND session.excluded_from_stats = 0
        AND gathering.attendance_type = 'standard'
        AND gathering.engagement_role IN ('primary', 'community')
-       AND (session.roster_provenance_version >= 1 OR session.roster_snapshotted = 1)`,
+       AND (session.roster_provenance_version >= 1 OR session.roster_snapshotted = 1)
+       AND EXISTS (
+         SELECT 1
+         FROM attendance_records report_ar
+         WHERE report_ar.session_id = session.id
+           AND report_ar.church_id = session.church_id
+           AND report_ar.present = 1
+       )`,
     [churchId],
   );
   const firstSessionDate = firstRows[0]?.firstSessionDate || null;

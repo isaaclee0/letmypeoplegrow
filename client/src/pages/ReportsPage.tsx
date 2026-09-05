@@ -22,18 +22,7 @@ const ReportsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <header className="rounded-lg bg-white shadow dark:bg-gray-800">
-        <div className="px-4 py-5 sm:p-6">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Reports &amp; Analytics</h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            View attendance trends and insights
-          </p>
-        </div>
-      </header>
-
-      <SelectedPeriodReport />
-    </div>
+    <SelectedPeriodReport />
   );
 };
 

@@ -99,6 +99,8 @@ vi.mock('../../services/api', () => ({
     getEngagementSessions: vi.fn(),
   },
   usersAPI: {
+    getPreferences: vi.fn().mockResolvedValue({ data: { preferences: {} } }),
+    savePreference: vi.fn().mockResolvedValue({}),
     getAll: vi.fn().mockResolvedValue({
       data: {
         users: [{
@@ -175,6 +177,10 @@ describe('ReportsPage selected period workspace', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Export CSV' })).toBeInTheDocument();
+    const gatheringHelp = screen.getByRole('button', { name: 'About gathering selection' });
+    const gatheringTooltip = screen.getByRole('tooltip');
+    expect(gatheringHelp).toHaveAttribute('aria-describedby', gatheringTooltip.id);
+    expect(gatheringTooltip).toHaveClass('absolute');
     expect(screen.getByRole('heading', { name: 'Regulars With Recent Absences' })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Assign caregiver' }));
     expect(await screen.findByRole('heading', { name: 'Caregivers' })).toBeInTheDocument();

@@ -14,8 +14,6 @@ import {
   GatheringType,
   Individual,
   Visitor,
-  type AttendanceSessionState,
-  type AttendanceSessionStatus,
 } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
@@ -28,7 +26,6 @@ import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInter
 import logger from '../utils/logger';
 import SampleDataBanner from '../components/SampleDataBanner';
 import { useBadgeSettings } from '../hooks/useBadgeSettings';
-import { useTabSlider } from '../hooks/useTabSlider';
 import { useGatheringReorder } from '../hooks/useGatheringReorder';
 import { useOfflineAttendance } from '../hooks/useOfflineAttendance';
 import { 
@@ -75,147 +72,13 @@ interface VisitorFormState {
   familyName: string;
 }
 
-interface SessionStatusControlProps {
-  status: AttendanceSessionStatus;
-  canManage: boolean;
-  onChange: (status: AttendanceSessionStatus) => Promise<void>;
-}
-
-interface SessionExclusionControlProps {
-  excluded: boolean;
-  canManage: boolean;
-  onChange: (excluded: boolean) => Promise<void>;
-}
-
-const SESSION_STATUS_STYLES: Record<AttendanceSessionStatus, string> = {
-  open: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-200',
-  held: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200',
-  cancelled: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-200',
-};
-
-export const SessionStatusControl: React.FC<SessionStatusControlProps> = ({
-  status,
-  canManage,
-  onChange,
-}) => {
-  const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState('');
-  const availableActions: Array<{ status: AttendanceSessionStatus; label: string }> = status === 'open'
-    ? [{ status: 'held', label: 'Confirm held' }]
-    : status === 'held'
-      ? []
-      : [{ status: 'open', label: 'Restore gathering' }];
-
-  const handleChange = async (nextStatus: AttendanceSessionStatus) => {
-    setIsSaving(true);
-    setError('');
-    try {
-      await onChange(nextStatus);
-    } catch (requestError: any) {
-      setError(requestError?.response?.data?.error || 'Could not update the gathering status.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${SESSION_STATUS_STYLES[status]}`}>
-        {status === 'open' ? 'Open' : status === 'held' ? 'Held' : 'Cancelled'}
-      </span>
-      {canManage && availableActions.map((action) => (
-        <button
-          key={action.status}
-          type="button"
-          onClick={() => handleChange(action.status)}
-          disabled={isSaving}
-          className="text-xs font-medium text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-900 disabled:cursor-wait disabled:opacity-60 dark:text-gray-300 dark:hover:text-white"
-        >
-          {isSaving ? 'Saving…' : action.label}
-        </button>
-      ))}
-      {error && (
-        <p role="alert" className="basis-full text-xs font-medium text-rose-700 dark:text-rose-300">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-};
-
-export const SessionExclusionControl: React.FC<SessionExclusionControlProps> = ({
-  excluded,
-  canManage,
-  onChange,
-}) => {
-  const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  if (!canManage) return null;
-
-  const handleChange = async (nextExcluded: boolean) => {
-    if (nextExcluded && !window.confirm(
-      'Exclude this meeting? It will remain in attendance history but will not affect reports or engagement calculations. You can include it again later.',
-    )) return;
-
-    setIsSaving(true);
-    setError('');
-    try {
-      await onChange(nextExcluded);
-    } catch (requestError: any) {
-      setError(requestError?.response?.data?.error || 'Could not update the meeting exclusion.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  if (!excluded) {
-    return (
-      <div className="flex flex-col items-end gap-1">
-        <button
-          type="button"
-          onClick={() => handleChange(true)}
-          disabled={isSaving}
-          className="flex items-center space-x-1 text-xs text-gray-500 hover:text-amber-600 disabled:cursor-wait disabled:opacity-60 dark:text-gray-400 dark:hover:text-amber-400"
-        >
-          <XMarkIcon className="h-3.5 w-3.5" />
-          <span>{isSaving ? 'Excluding…' : 'Exclude'}</span>
-        </button>
-        {error && <p role="alert" className="text-xs font-medium text-rose-700 dark:text-rose-300">{error}</p>}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
-      <div className="flex items-center space-x-2">
-        <XMarkIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-        <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
-          This meeting is excluded from reports and engagement calculations
-        </span>
-      </div>
-      <button
-        type="button"
-        onClick={() => handleChange(false)}
-        disabled={isSaving}
-        className="text-sm text-amber-700 underline hover:text-amber-900 disabled:cursor-wait disabled:opacity-60 dark:text-amber-300 dark:hover:text-amber-100"
-      >
-        {isSaving ? 'Including…' : 'Include'}
-      </button>
-      {error && <p role="alert" className="text-xs font-medium text-rose-700 dark:text-rose-300">{error}</p>}
-    </div>
-  );
-};
-
 export async function recordAttendanceViaRest(
   record: typeof attendanceAPI.record,
   gatheringTypeId: number,
   date: string,
   data: Parameters<typeof attendanceAPI.record>[2],
-  onSessionState: (state: AttendanceSessionState) => void,
 ) {
   const response = await record(gatheringTypeId, date, data);
-  if (response.data.sessionState) onSessionState(response.data.sessionState);
   return response.data;
 }
 
@@ -242,11 +105,8 @@ const AttendancePage: React.FC = () => {
   const [headcountValue, setHeadcountValue] = useState<number>(0);
   const [headcountFullscreen, setHeadcountFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [excludedFromStats, setExcludedFromStats] = useState(false);
-  const [sessionState, setSessionState] = useState<AttendanceSessionState | null>(null);
   const [showBackgroundCheckStatus, setShowBackgroundCheckStatus] = useState(false);
   const [medicalNotesIndicator, setMedicalNotesIndicator] = useState<{ icon: BadgeIconType; color: string } | null>(null);
-  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
@@ -326,7 +186,6 @@ const AttendancePage: React.FC = () => {
       
       // Also clear visitor attendance for consistency
       setVisitorAttendance({});
-      setSessionState(null);
     }
     
     // Update refs for next comparison
@@ -723,7 +582,7 @@ const AttendancePage: React.FC = () => {
             'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
             'Thursday': 4, 'Friday': 5, 'Saturday': 6
           };
-          
+
           if (pattern.daysOfWeek && pattern.daysOfWeek.length > 0) {
             const targetDays = pattern.daysOfWeek.map(day => dayMap[day]).filter(day => day !== undefined);
             let currentDate = scheduleStart;
@@ -1195,9 +1054,6 @@ const AttendancePage: React.FC = () => {
     
     const loadRegularAttendance = async () => {
       if (!selectedGathering || !selectedDate) {
-        setExcludedFromStats(false);
-        setCurrentSessionId(null);
-        setSessionState(null);
         return;
       }
       
@@ -1223,7 +1079,6 @@ const AttendancePage: React.FC = () => {
           if (isRelevantCache && cacheAge < 7 * 24 * 60 * 60 * 1000) { // Cache valid for 7 days
             logger.log('⚡ Loading from cache immediately for instant UI');
             setAttendanceList(parsed.attendanceList || []);
-            setSessionState(parsed.sessionState || null);
             setMedicalNotesIndicator(parsed.medicalNotesIndicator || null);
             const cachedVisitors = (parsed.visitors || []).map((v: any) => ({
               ...v,
@@ -1288,7 +1143,6 @@ const AttendancePage: React.FC = () => {
         
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
-        setSessionState(response.sessionState || null);
         setMedicalNotesIndicator(response.medicalNotesIndicator || null);
 
         // Normalize visitors from any source (WebSocket or REST) to a consistent format
@@ -1356,7 +1210,6 @@ const AttendancePage: React.FC = () => {
           attendanceList: attendanceListForCache,
           visitors: response.visitors || [],
           medicalNotesIndicator: response.medicalNotesIndicator || null,
-          sessionState: response.sessionState || null,
           timestamp: Date.now(),
           hasPendingChanges: pendingChanges.some(change => 
             change.gatheringId === currentGatheringId && change.date === currentDate
@@ -1364,9 +1217,7 @@ const AttendancePage: React.FC = () => {
         };
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
-        setExcludedFromStats(response.excludedFromStats || false);
         setShowBackgroundCheckStatus(!!response.showBackgroundCheckStatus);
-        setCurrentSessionId(response.sessionId || null);
 
         logger.log('✅ Fresh data loaded from server and cached');
         setError('');
@@ -1396,7 +1247,6 @@ const AttendancePage: React.FC = () => {
             if (parsed.gatheringId === currentGatheringId && parsed.date === currentDate) {
                 logger.log('📦 Loading attendance data from cache due to server error');
               setAttendanceList(parsed.attendanceList || []);
-              setSessionState(parsed.sessionState || null);
               setMedicalNotesIndicator(parsed.medicalNotesIndicator || null);
               setVisitors(parsed.visitors || []);
               
@@ -1508,11 +1358,6 @@ const AttendancePage: React.FC = () => {
   // Simple queue to serialize attendance writes per individual and reduce API thrash
   const pendingWritesRef = useRef<Map<number, Promise<void>>>(new Map());
 
-  const applyReturnedSessionState = useCallback((state: AttendanceSessionState) => {
-    setSessionState(state);
-    setCurrentSessionId(state.id);
-  }, []);
-
   // Helper function to send attendance updates based on configuration
   const sendAttendanceChange = async (
     gatheringId: number,
@@ -1531,7 +1376,7 @@ const AttendancePage: React.FC = () => {
       return recordAttendanceViaRest(attendanceAPI.record, gatheringId, date, {
         attendanceRecords: recordsWithTimestamps,
         visitors: []
-      }, applyReturnedSessionState);
+      });
     }
 
     // Check if WebSocket is available and connected
@@ -1541,7 +1386,7 @@ const AttendancePage: React.FC = () => {
       return recordAttendanceViaRest(attendanceAPI.record, gatheringId, date, {
         attendanceRecords: recordsWithTimestamps,
         visitors: []
-      }, applyReturnedSessionState);
+      });
     }
 
     // WebSocket enabled and connected - try WebSocket first
@@ -1554,7 +1399,7 @@ const AttendancePage: React.FC = () => {
         const data = await recordAttendanceViaRest(attendanceAPI.record, gatheringId, date, {
           attendanceRecords: recordsWithTimestamps,
           visitors: []
-        }, applyReturnedSessionState);
+        });
         logger.log(`✅ Successfully saved attendance via API fallback`);
         return data;
       } else {
@@ -1793,10 +1638,6 @@ const AttendancePage: React.FC = () => {
           setVisitors(data.visitors);
         }
 
-        // Handle session exclusion updates
-        if (data.type === 'session_excluded') {
-          setExcludedFromStats(data.excludedFromStats);
-        }
       }
     };
 
@@ -2694,23 +2535,6 @@ const AttendancePage: React.FC = () => {
     saveReorder,
   } = useGatheringReorder({ gatherings, userId: user?.id });
 
-  // Tab slider hook
-  const {
-    tabSliderRef,
-    desktopTabSliderRef,
-    showRightFade,
-    showDesktopRightFade,
-    showLeftFade,
-    showDesktopLeftFade,
-    handleMouseDown,
-    handleMouseLeave,
-    handleMouseUp,
-    handleMouseMove,
-    handleTouchStart,
-    handleTouchMove,
-    handleTouchEnd,
-  } = useTabSlider([gatherings, orderedGatherings]);
-
   // Helper functions for responsive grid layout
   const getPersonDisplayName = (person: any, familyName?: string) => {
     // For visitors with .name property
@@ -2792,47 +2616,30 @@ const AttendancePage: React.FC = () => {
     setError,
   });
 
-  const handleSessionStateChange = useCallback(async (status: AttendanceSessionStatus) => {
-    if (!selectedGathering || !selectedDate) return;
-    const response = await attendanceAPI.setSessionState({
-      gatheringTypeId: selectedGathering.id,
-      sessionDate: selectedDate,
-      status,
-    });
-    setSessionState(response.data.sessionState);
-    setCurrentSessionId(response.data.sessionState.id);
-    showSuccess(status === 'held'
-      ? 'Gathering confirmed as held'
-      : status === 'cancelled'
-        ? 'Gathering cancelled'
-        : 'Gathering restored');
-  }, [selectedGathering, selectedDate, showSuccess]);
-
   return (
-    <div className="space-y-6 pb-32">
+    <div className="space-y-4 pb-32">
       <SampleDataBanner />
       {/* Header */}
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Take Attendance</h1>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Record attendance for your gathering
-              </p>
-            </div>
-            <div className="flex items-center space-x-3">
-            </div>
-          </div>
-        </div>
+      <div className="px-1">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Take Attendance</h1>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          Record attendance for your gathering
+        </p>
       </div>
 
       {/* Gathering Type Tabs and Controls */}
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-            {/* Mobile: Dropdown selector */}
-            <div className="block md:hidden">
+        <div className="px-4 py-4 sm:p-5">
+          {selectedGathering && validDates.length > 0 && selectedGathering.attendanceType === 'standard' && isAttendanceLocked && (
+            <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
+              Editing is locked for attendance takers for services older than 2 weeks.
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-6">
+              <div className="w-full min-w-0">
+            {/* Gathering selector */}
+            <div>
               <div className="flex items-center space-x-2">
                 <select
                   value={selectedGathering?.id || ''}
@@ -2841,7 +2648,7 @@ const AttendancePage: React.FC = () => {
                       .find(g => g.id === parseInt(e.target.value));
                     if (gathering) handleGatheringChange(gathering);
                   }}
-                  className="flex-1 h-10 px-3 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500"
+                  className="flex-1 h-10 px-3 text-center text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900/50 text-gray-900 dark:text-gray-100 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 focus:ring-primary-500 focus:border-primary-500"
                 >
                   {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
                     <option key={gathering.id} value={gathering.id}>
@@ -2853,7 +2660,7 @@ const AttendancePage: React.FC = () => {
                 {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
                   <button
                     onClick={() => openReorderModal()}
-                    className="h-10 w-10 flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    className="h-10 w-10 flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                     title="Edit gathering order"
                   >
                     <PencilIcon className="h-4 w-4" />
@@ -2861,403 +2668,190 @@ const AttendancePage: React.FC = () => {
                 )}
               </div>
             </div>
-            
-            {/* Desktop: Horizontal scrollable tabs with fade indicators */}
-            <nav className="hidden md:flex -mb-px items-center w-full" aria-label="Tabs">
-              <div className="relative flex-1 overflow-hidden">
-                <div 
-                  ref={desktopTabSliderRef}
-                  className="flex items-center space-x-2 overflow-x-auto scrollbar-hide cursor-grab select-none w-full tab-slider" 
-                  style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}
-                  onMouseDown={(e) => handleMouseDown(e, desktopTabSliderRef)}
-                  onMouseLeave={() => handleMouseLeave(desktopTabSliderRef)}
-                  onMouseUp={() => handleMouseUp(desktopTabSliderRef)}
-                  onMouseMove={(e) => handleMouseMove(e, desktopTabSliderRef)}
-                >
-                  {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
-                    <div key={gathering.id} className="shrink-0">
-                      <button
-                        draggable={false}
-                        onClick={() => handleGatheringChange(gathering)}
-                        className={`h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
-                          selectedGathering?.id === gathering.id
-                            ? 'bg-primary-500 text-white'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                        }`}
-                        title={gathering.name}
-                      >
-                        <div className="flex items-center justify-center h-full">
-                          <span className="text-center leading-tight whitespace-nowrap">
-                            {gathering.name}
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                  ))}
-                  
-                  {/* Edit Tab - Only show when there are multiple gatherings */}
-                  {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
-                    <div className="shrink-0">
-                      <button
-                        draggable={false}
-                        onClick={() => openReorderModal()}
-                        className="h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
-                        title="Edit gathering order"
-                      >
-                        <div className="flex items-center justify-center h-full">
-                          <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
-                            <PencilIcon className="h-3 w-3" />
-                            <span>Edit Order</span>
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                  )}
-                  
-                </div>
-                
-                {/* Fade indicators */}
-                {showDesktopLeftFade && (
-                  <div className="absolute top-0 left-0 w-10 h-12 bg-gradient-to-r from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 left-3 -translate-y-1/2 w-5 h-5 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
-                      <svg viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M12.5 5L7.5 10L12.5 15" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  </div>
-                )}
-                {showDesktopRightFade && (
-                  <div className="absolute top-0 right-0 w-10 h-12 bg-gradient-to-l from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 right-3 -translate-y-1/2 w-5 h-5 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
-                      <svg viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M7.5 5L12.5 10L7.5 15" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </nav>
           </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Date Selection */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Meeting Date
-                {selectedDate && (() => {
-                  const status = getDateStatus(selectedDate);
-                  if (status.type === 'past') {
-                    return (
-                      <span className="ml-2 px-2 py-1 text-xs bg-amber-100 text-amber-800 rounded-full">
-                        {status.daysDiff === 1 ? 'Yesterday' : `${status.daysDiff} days ago`}
-                      </span>
-                    );
-                  } else if (status.type === 'future') {
-                    return (
-                      <span className="ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
-                        {status.daysDiff === 1 ? 'Tomorrow' : `In ${status.daysDiff} days`}
-                      </span>
-                    );
-                  }
-                  return null;
-                })()}
-              </label>
-              <div className="relative">
-                {validDates.length > 0 ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setShowDatePicker(!showDatePicker)}
-                      className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full px-3 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-left hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-900 dark:text-gray-100">
+
+            {/* Date navigation and selection */}
+            <div className="w-full min-w-0">
+              <div className="flex h-10 items-stretch divide-x divide-gray-300 dark:divide-gray-600 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50 shadow-sm">
+                <button
+                  type="button"
+                  onClick={navigateToPreviousDate}
+                  disabled={!canNavigatePrevious}
+                  className="flex w-20 shrink-0 items-center justify-center gap-1 px-2 py-2 rounded-l-lg text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                  title="Previous gathering"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  <span>Previous</span>
+                </button>
+
+                <div className="relative min-w-0 flex-1">
+                  {validDates.length > 0 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowDatePicker(!showDatePicker)}
+                        aria-expanded={showDatePicker}
+                        aria-label="Choose meeting date"
+                        className="flex h-full w-full items-center justify-center gap-1.5 px-2 py-2 text-xs font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 transition-colors"
+                      >
+                        <span className="min-w-0 truncate">
                           {selectedDate ? (
                             (() => {
-                              const isToday = selectedDate === today();
-                              return isToday 
-                                ? `Today (${formatDateOnly(selectedDate, { month: 'short', day: 'numeric', year: 'numeric' })})`
-                                : formatDateOnly(selectedDate, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+                              const status = getDateStatus(selectedDate);
+                              const relativeDate = status.type === 'past'
+                                ? (status.daysDiff === 1 ? 'Yesterday' : `${status.daysDiff} days ago`)
+                                : status.type === 'future'
+                                  ? (status.daysDiff === 1 ? 'Tomorrow' : `In ${status.daysDiff} days`)
+                                  : 'Today';
+                              const formattedDate = formatDateOnly(selectedDate, {
+                                weekday: 'long',
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric'
+                              });
+                              return `${formattedDate} (${relativeDate})`;
                             })()
                           ) : (
                             'Select a date'
                           )}
                         </span>
-                        <CalendarIcon className="h-5 w-5 text-gray-400" />
-                      </div>
-                    </button>
-                    
-                    {showDatePicker && (
-                      <div ref={datePickerRef} className="absolute top-full left-0 mt-2 z-50">
-                        <AttendanceDatePicker
-                          selectedDate={selectedDate}
-                          onDateChange={(date) => {
-                            logger.log('📅 User selected new date via date picker:', { from: selectedDate, to: date });
-                            setSelectedDate(date);
-                            setShowDatePicker(false);
-                          }}
-                          validDates={validDates}
-                          gatheringName={selectedGathering?.name}
-                        />
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-sm text-gray-500 dark:text-gray-400 py-2 px-3 border border-gray-300 rounded-md bg-gray-50">
-                    No valid dates available for this gathering schedule
-                  </div>
-                )}
-              </div>
-              {selectedGathering && selectedDate && (
-                <SessionStatusControl
-                  status={sessionState?.status || 'open'}
-                  canManage={user?.role === 'admin' || user?.role === 'coordinator'}
-                  onChange={handleSessionStateChange}
-                />
-              )}
-            </div>
+                        <CalendarIcon className="hidden sm:block h-4 w-4 shrink-0 text-gray-400 dark:text-gray-300" />
+                      </button>
 
-            {/* Search/Filter Bar - Only show for standard gatherings with members */}
-            {selectedGathering?.attendanceType === 'standard' && attendanceList.length > 0 && (
-              <div>
-                <label htmlFor="search" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Filter Families & Visitors
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
-                  </div>
-                  <input
-                    type="text"
-                    id="search"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Search by family member or visitor name..."
-                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-10 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md"
-                  />
-                  {searchTerm && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchTerm('')}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                      aria-label="Clear search"
-                    >
-                      <XMarkIcon className="h-5 w-5" />
-                    </button>
+                      {showDatePicker && (
+                        <div ref={datePickerRef} className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50">
+                          <AttendanceDatePicker
+                            selectedDate={selectedDate}
+                            onDateChange={(date) => {
+                              logger.log('📅 User selected new date via date picker:', { from: selectedDate, to: date });
+                              setSelectedDate(date);
+                              setShowDatePicker(false);
+                            }}
+                            validDates={validDates}
+                            gatheringName={selectedGathering?.name}
+                          />
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="px-3 py-2 text-center text-sm text-gray-500 dark:text-gray-400">
+                      No valid dates available
+                    </div>
                   )}
                 </div>
-              </div>
-            )}
 
-            {/* View, badge, and age filters - Only show for standard gatherings */}
-            {selectedGathering?.attendanceType === 'standard' && (
-              <div
-                className="md:col-span-2 w-full pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-x-4 gap-y-3"
-                role="group"
-                aria-label="Attendance display filters"
-              >
-                <div
-                  className="inline-flex items-center justify-self-center sm:justify-self-start space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
-                  role="group"
-                  aria-label="View people as"
-                >
-                  {(['families', 'individuals'] as const).map((value) => {
-                    const selected = value === 'families' ? groupByFamily : !groupByFamily;
-                    return (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={selected}
-                        onClick={() => handleGroupByFamilyChange(value === 'families')}
-                        className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                          selected
-                            ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                        }`}
-                      >
-                        {value === 'families' ? 'Families' : 'Individuals'}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {showBadgeFilters ? (
-                  <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filter by badge">
-                    {usedBadgeOptions.map((badge) => {
-                      const selected = selectedBadgeKeySet.has(badge.key);
-                      return (
-                        <button
-                          key={badge.key}
-                          type="button"
-                          aria-label={`Filter by badge: ${badge.helperText}`}
-                          aria-pressed={selected}
-                          title={badge.helperText}
-                          onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
-                            ? current.filter((key) => key !== badge.key)
-                            : [...current, badge.key])}
-                          className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
-                            selected
-                              ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
-                              : 'hover:scale-110'
-                          }`}
-                          style={{ backgroundColor: badge.backgroundColor, color: badge.color }}
-                        >
-                          {badge.icon && (
-                            <BadgeIcon type={badge.icon as BadgeIconType} className="h-4 w-4" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div aria-hidden="true" />
-                )}
-
-                <div
-                  className="inline-flex items-center justify-self-center sm:justify-self-end space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
-                  role="group"
-                  aria-label="Filter by age"
-                >
-                  {(['all', 'adult', 'child'] as const).map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      aria-pressed={ageFilter === value}
-                      onClick={() => setAgeFilter(value)}
-                      className={`flex items-center space-x-1.5 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                        ageFilter === value
-                          ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                      }`}
-                    >
-                      {value === 'child' && badgeConfig.child.defaultIcon && (
-                        <BadgeIcon type={badgeConfig.child.defaultIcon as BadgeIconType} className="w-4 h-4" />
-                      )}
-                      <span>{value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {selectedGathering && selectedDate && (
-        <SessionExclusionControl
-          excluded={excludedFromStats}
-          canManage={user?.role === 'admin' || user?.role === 'coordinator'}
-          onChange={async (excluded) => {
-            const response = await attendanceAPI.setSessionExclusion({
-              gatheringTypeId: selectedGathering.id,
-              sessionDate: selectedDate,
-              excluded,
-            });
-            setCurrentSessionId(response.data.sessionId);
-            setExcludedFromStats(response.data.excludedFromStats);
-            showSuccess(excluded ? 'Meeting excluded' : 'Meeting included');
-          }}
-        />
-      )}
-
-      {/* Attendance Summary Bar - Show only for standard gatherings */}
-      {selectedGathering && validDates.length > 0 && selectedGathering.attendanceType === 'standard' && (
-        <div className={`bg-white dark:bg-gray-800 shadow rounded-lg ${excludedFromStats ? 'opacity-50 pointer-events-none' : ''}`}>
-          <div className="px-4 py-5 sm:p-6">
-            {isAttendanceLocked && selectedGathering.attendanceType === 'standard' && (
-              <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
-                Editing is locked for attendance takers for services older than 2 weeks.
-              </div>
-            )}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {/* Total Present */}
-              <div className="text-center relative">
                 <button
-                  onClick={() => setActiveStatBubble(activeStatBubble === 'total' ? null : 'total')}
-                  className="w-full focus:outline-none active:scale-95 transition-transform"
+                  type="button"
+                  onClick={navigateToNextDate}
+                  disabled={!canNavigateNext}
+                  className="flex w-20 shrink-0 items-center justify-center gap-1 px-2 py-2 rounded-r-lg text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                  title="Next gathering"
                 >
-                  <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                    {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Total Present</div>
+                  <span>Next</span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
                 </button>
-                {activeStatBubble === 'total' && (
-                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
-                    <div className="flex gap-3">
-                      <span>Adults: {attendanceBreakdown.total.adults}</span>
-                      <span>Children: {attendanceBreakdown.total.children}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              {/* Regular Attendees */}
-              <div className="text-center relative">
-                <button
-                  onClick={() => setActiveStatBubble(activeStatBubble === 'regular' ? null : 'regular')}
-                  className="w-full focus:outline-none active:scale-95 transition-transform"
-                >
-                  <div className="text-2xl font-bold text-primary-600">
-                    {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Regular Attendees</div>
-                </button>
-                {activeStatBubble === 'regular' && (
-                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
-                    <div className="flex gap-3">
-                      <span>Adults: {attendanceBreakdown.regular.adults}</span>
-                      <span>Children: {attendanceBreakdown.regular.children}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              {/* Visitors */}
-              <div className="text-center relative">
-                <button
-                  onClick={() => setActiveStatBubble(activeStatBubble === 'visitors' ? null : 'visitors')}
-                  className="w-full focus:outline-none active:scale-95 transition-transform"
-                >
-                  <div className="text-2xl font-bold text-green-600">
-                    {getVisitorPeopleCount}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Visitors</div>
-                </button>
-                {activeStatBubble === 'visitors' && (
-                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
-                    <div className="flex gap-3">
-                      <span>Adults: {attendanceBreakdown.visitors.adults}</span>
-                      <span>Children: {attendanceBreakdown.visitors.children}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              {/* Absent */}
-              <div className="text-center relative">
-                <button
-                  onClick={() => setActiveStatBubble(activeStatBubble === 'absent' ? null : 'absent')}
-                  className="w-full focus:outline-none active:scale-95 transition-transform"
-                >
-                  <div className="text-2xl font-bold text-gray-400 dark:text-gray-500">
-                    {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Absent</div>
-                </button>
-                {activeStatBubble === 'absent' && (
-                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
-                    <div className="flex gap-3">
-                      <span>Adults: {attendanceBreakdown.absent.adults}</span>
-                      <span>Children: {attendanceBreakdown.absent.children}</span>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
-          </div>
+            </div>
+
+            {/* Attendance Summary - Show only for standard gatherings */}
+            {selectedGathering && validDates.length > 0 && selectedGathering.attendanceType === 'standard' && (
+              <div className="mt-4 border-t border-gray-200 pt-4 dark:border-gray-700">
+                <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+                  {/* Total Present */}
+                  <div className="order-1 text-center relative rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40">
+                    <button
+                      onClick={() => setActiveStatBubble(activeStatBubble === 'total' ? null : 'total')}
+                      className="w-full px-3 py-2 focus:outline-none active:scale-95 transition-transform"
+                    >
+                      <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                        {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Total Present</div>
+                    </button>
+                    {activeStatBubble === 'total' && (
+                      <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                        <div className="flex gap-3">
+                          <span>Adults: {attendanceBreakdown.total.adults}</span>
+                          <span>Children: {attendanceBreakdown.total.children}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Regular Attendees */}
+                  <div className="order-3 lg:order-2 text-center relative rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40">
+                    <button
+                      onClick={() => setActiveStatBubble(activeStatBubble === 'regular' ? null : 'regular')}
+                      className="w-full px-3 py-2 focus:outline-none active:scale-95 transition-transform"
+                    >
+                      <div className="text-2xl font-bold text-primary-600">
+                        {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Regular Attendees</div>
+                    </button>
+                    {activeStatBubble === 'regular' && (
+                      <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                        <div className="flex gap-3">
+                          <span>Adults: {attendanceBreakdown.regular.adults}</span>
+                          <span>Children: {attendanceBreakdown.regular.children}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Visitors */}
+                  <div className="order-2 lg:order-3 text-center relative rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40">
+                    <button
+                      onClick={() => setActiveStatBubble(activeStatBubble === 'visitors' ? null : 'visitors')}
+                      className="w-full px-3 py-2 focus:outline-none active:scale-95 transition-transform"
+                    >
+                      <div className="text-2xl font-bold text-green-600">
+                        {getVisitorPeopleCount}
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Visitors</div>
+                    </button>
+                    {activeStatBubble === 'visitors' && (
+                      <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                        <div className="flex gap-3">
+                          <span>Adults: {attendanceBreakdown.visitors.adults}</span>
+                          <span>Children: {attendanceBreakdown.visitors.children}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Absent */}
+                  <div className="order-4 text-center relative rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40">
+                    <button
+                      onClick={() => setActiveStatBubble(activeStatBubble === 'absent' ? null : 'absent')}
+                      className="w-full px-3 py-2 focus:outline-none active:scale-95 transition-transform"
+                    >
+                      <div className="text-2xl font-bold text-gray-400 dark:text-gray-500">
+                        {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Absent</div>
+                    </button>
+                    {activeStatBubble === 'absent' && (
+                      <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                        <div className="flex gap-3">
+                          <span>Adults: {attendanceBreakdown.absent.adults}</span>
+                          <span>Children: {attendanceBreakdown.absent.children}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
         </div>
-      )}
+      </div>
 
       {error && (
         <div className="rounded-md bg-red-50 dark:bg-red-900/30 p-4">
@@ -3317,50 +2911,11 @@ const AttendancePage: React.FC = () => {
       )}
 
       {/* Conditional Rendering based on Gathering Type */}
-      <div className={excludedFromStats ? 'opacity-50 pointer-events-none' : ''}>
       {selectedGathering && validDates.length > 0 && (
         <>
           {selectedGathering.attendanceType === 'headcount' ? (
             <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-visible">
               <div className="px-4 py-5 sm:p-6">
-                {/* Navigation Section */}
-                <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100">
-                  <div className="flex items-center space-x-4">
-                    <button
-                      onClick={navigateToPreviousDate}
-                      disabled={!canNavigatePrevious}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                      title="Previous gathering"
-                    >
-                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                      </svg>
-                      <span className="text-sm text-gray-600 dark:text-gray-300">Previous</span>
-                    </button>
-                    
-                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 px-4">
-                      {selectedDate ? formatDateOnly(selectedDate, {
-                        weekday: 'long',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric'
-                      }) : 'Select Date'}
-                    </div>
-                    
-                    <button
-                      onClick={navigateToNextDate}
-                      disabled={!canNavigateNext}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                      title="Next gathering"
-                    >
-                      <span className="text-sm text-gray-600 dark:text-gray-300">Next</span>
-                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                     Headcount - {selectedGathering.name}
@@ -3382,7 +2937,6 @@ const AttendancePage: React.FC = () => {
                   date={selectedDate}
                   gatheringName={selectedGathering.name}
                   onHeadcountChange={setHeadcountValue}
-                  onSessionStateChange={applyReturnedSessionState}
                   isFullscreen={headcountFullscreen}
                   onExitFullscreen={() => setHeadcountFullscreen(false)}
                   socket={socket}
@@ -3392,45 +2946,143 @@ const AttendancePage: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-              <div className="px-4 py-5 sm:p-6">
-                {/* Navigation Section - At the very top */}
-                <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100 -mt-6 -mx-6 px-6 rounded-t-lg">
-                  <div className="flex items-center space-x-4">
-                    <button
-                      onClick={navigateToPreviousDate}
-                      disabled={!canNavigatePrevious}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                      title="Previous gathering"
-                    >
-                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                      </svg>
-                      <span className="text-sm text-gray-600 dark:text-gray-300">Previous</span>
-                    </button>
-                    
-                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 px-4">
-                      {selectedDate ? formatDateOnly(selectedDate, {
-                        weekday: 'long',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric'
-                      }) : 'Select Date'}
+            <>
+              {attendanceList.length > 0 && (
+                <div className="px-4 sm:px-6">
+                  {/* Search and display filters - Keep them close to the names they filter */}
+                  <div className="w-full">
+                    <div className="w-full">
+                      <h3 className="text-base font-medium text-gray-900 dark:text-gray-100 mb-3">
+                        Filter Controls
+                      </h3>
+                      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(20rem,1fr)_auto] lg:items-end lg:gap-6">
+                        <div className="relative w-full">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <MagnifyingGlassIcon className="h-5 w-5 text-gray-400 dark:text-gray-300" />
+                          </div>
+                          <input
+                            type="text"
+                            id="search"
+                            aria-label="Filter families and visitors"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            placeholder="Search by family member or visitor name..."
+                            className="block w-full rounded-md border border-gray-300 dark:border-gray-500 bg-white dark:bg-gray-900/50 py-2 pl-10 pr-10 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                          />
+                          {searchTerm && (
+                            <button
+                              type="button"
+                              onClick={() => setSearchTerm('')}
+                              className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 dark:text-gray-300 hover:text-gray-600 dark:hover:text-white"
+                              aria-label="Clear search"
+                            >
+                              <XMarkIcon className="h-5 w-5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div
+                          className="flex flex-wrap items-end gap-4 lg:flex-nowrap"
+                          role="group"
+                          aria-label="Attendance display filters"
+                        >
+                          <div className="flex flex-col items-start gap-1.5">
+                            <span className="text-xs font-medium text-gray-600 dark:text-gray-300">View</span>
+                            <div
+                              className="inline-flex items-center space-x-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-transparent dark:bg-gray-900/50 p-0.5 shadow-none dark:shadow-sm"
+                              role="group"
+                              aria-label="View people as"
+                            >
+                              {(['families', 'individuals'] as const).map((value) => {
+                                const selected = value === 'families' ? groupByFamily : !groupByFamily;
+                                return (
+                                  <button
+                                    key={value}
+                                    type="button"
+                                    aria-pressed={selected}
+                                    onClick={() => handleGroupByFamilyChange(value === 'families')}
+                                    className={`border px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                                      selected
+                                        ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
+                                        : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/80 text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white'
+                                    }`}
+                                  >
+                                    {value === 'families' ? 'Families' : 'Individuals'}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {showBadgeFilters && (
+                            <div className="flex flex-col items-start gap-1.5">
+                              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Badges</span>
+                              <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by badge">
+                                {usedBadgeOptions.map((badge) => {
+                                  const selected = selectedBadgeKeySet.has(badge.key);
+                                  return (
+                                    <button
+                                      key={badge.key}
+                                      type="button"
+                                      aria-label={`Filter by badge: ${badge.helperText}`}
+                                      aria-pressed={selected}
+                                      title={badge.helperText}
+                                      onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
+                                        ? current.filter((key) => key !== badge.key)
+                                        : [...current, badge.key])}
+                                      className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full shadow-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
+                                        selected
+                                          ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
+                                          : 'ring-1 ring-gray-300 dark:ring-gray-500 hover:scale-105 hover:ring-gray-400 dark:hover:ring-gray-300'
+                                      }`}
+                                      style={{ backgroundColor: badge.backgroundColor, color: badge.color }}
+                                    >
+                                      {badge.icon && (
+                                        <BadgeIcon type={badge.icon as BadgeIconType} className="h-4 w-4" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex flex-col items-start gap-1.5">
+                            <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Age</span>
+                            <div
+                              className="inline-flex items-center space-x-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-transparent dark:bg-gray-900/50 p-0.5 shadow-none dark:shadow-sm"
+                              role="group"
+                              aria-label="Filter by age"
+                            >
+                              {(['all', 'adult', 'child'] as const).map((value) => (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  aria-pressed={ageFilter === value}
+                                  onClick={() => setAgeFilter(value)}
+                                  className={`flex items-center space-x-1.5 border px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                                    ageFilter === value
+                                      ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
+                                      : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/80 text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white'
+                                  }`}
+                                >
+                                  {value === 'child' && badgeConfig.child.defaultIcon && (
+                                    <BadgeIcon type={badgeConfig.child.defaultIcon as BadgeIconType} className="w-4 h-4" />
+                                  )}
+                                  <span>{value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    
-                    <button
-                      onClick={navigateToNextDate}
-                      disabled={!canNavigateNext}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                      title="Next gathering"
-                    >
-                      <span className="text-sm text-gray-600 dark:text-gray-300">Next</span>
-                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
-                    </button>
                   </div>
                 </div>
+              )}
+
+              <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+                <div className="px-4 py-5 sm:p-6">
 
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
@@ -3554,14 +3206,13 @@ const AttendancePage: React.FC = () => {
             )}
           </div>
         </div>
+            </>
           )}
         </>
       )}
-      </div>
-
       {/* Recent Visitors Section - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && filteredGroupedVisitors.length > 0 && (
-        <div className={`bg-white dark:bg-gray-800 shadow rounded-lg ${excludedFromStats ? 'opacity-50 pointer-events-none' : ''}`}>
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
               Recent Visitors
@@ -3724,7 +3375,7 @@ const AttendancePage: React.FC = () => {
 
       {/* All People (people not currently visible in this gathering) - Only show for standard gatherings */}
       {selectedGathering?.attendanceType === 'standard' && (
-        <div className={`bg-white dark:bg-gray-800 shadow rounded-lg ${excludedFromStats ? 'opacity-50 pointer-events-none' : ''}`}>
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">All People</h3>
@@ -3841,7 +3492,7 @@ const AttendancePage: React.FC = () => {
       )}
 
       {/* Floating Add Visitor Button - Only for Standard Gatherings */}
-      {selectedGathering?.attendanceType === 'standard' && !excludedFromStats && (
+      {selectedGathering?.attendanceType === 'standard' && (
         <button
           onClick={handleAddVisitor}
           disabled={isAttendanceLocked}

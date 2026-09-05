@@ -88,6 +88,21 @@ describe('contextual long-term trends cache', () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => vi.restoreAllMocks());
 
+  it('preserves increases while accepting older snapshots and rejecting malformed changes', () => {
+    const overview = contextualOverview();
+    overview.increases = { total: 0, rows: [], peopleToken: 'increase-token' };
+    writeLongTermTrendsCache(overview);
+    expect(readLongTermTrendsCache('church-a', [1, 2])?.increases).toEqual(overview.increases);
+    clearLongTermTrendsCache('church-a');
+    writeLongTermTrendsCache({ ...overview, increases: { ...overview.increases, total: -1 } });
+    expect(readLongTermTrendsCache('church-a', [1, 2])).toBeNull();
+    writeLongTermTrendsCache({ ...overview, declines: undefined } as unknown as ContextualLongTermOverviewDto);
+    expect(readLongTermTrendsCache('church-a', [1, 2])).toBeNull();
+    delete overview.increases;
+    writeLongTermTrendsCache(overview);
+    expect(readLongTermTrendsCache('church-a', [1, 2])).not.toBeNull();
+  });
+
   it('shares a cache entry only with the same canonical gathering selection and church', () => {
     writeLongTermTrendsCache(contextualOverview({ churchId: 'church-a', gatheringTypeIds: [2, 1] }));
 

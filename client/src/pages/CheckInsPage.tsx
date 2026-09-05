@@ -10,7 +10,6 @@ import SelfCheckInMode from '../components/checkins/SelfCheckInMode';
 import LeaderCheckInMode from '../components/checkins/LeaderCheckInMode';
 import {
   UserGroupIcon,
-  ClipboardDocumentCheckIcon,
   UserIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
@@ -247,12 +246,9 @@ const CheckInsPage: React.FC = () => {
 
   return (
     <div className="max-w-2xl mx-auto mt-4">
-      <div className="text-center mb-6">
-        <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 dark:bg-primary-900/30 mb-3">
-          <ClipboardDocumentCheckIcon className="h-7 w-7 text-primary-600" />
-        </div>
+      <div className="mb-4 px-1">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Check-ins</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Select a gathering and check-in mode</p>
+        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Select a gathering and check-in mode</p>
       </div>
 
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 space-y-5">

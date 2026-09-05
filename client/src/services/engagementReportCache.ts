@@ -120,6 +120,13 @@ function isContextualOverview(value: unknown): value is ContextualLongTermOvervi
       && isInteger(series.gatheringTypeId)
       && isString(series.name)
       && isOneOf(series.attendanceType, ATTENDANCE_TYPES)
+      && (series.comparison === undefined || (isRecord(series.comparison)
+        && series.comparison.comparisonWeeks === 12
+        && isNullableNumber(series.comparison.previousAverage)
+        && isNullableNumber(series.comparison.recentAverage)
+        && isNullableNumber(series.comparison.percentChange)
+        && isOneOf(series.comparison.status, ['up', 'down', 'steady', 'unavailable'])
+        && (series.comparison.status === 'unavailable') === (series.comparison.percentChange === null)))
       && Array.isArray(series.buckets)
       && series.buckets.length === 13
       && series.buckets.every((bucket, index) => isRecord(bucket)
@@ -144,14 +151,17 @@ function isContextualOverview(value: unknown): value is ContextualLongTermOvervi
           && isNumber(tier.rate)
           && isString(tier.peopleToken))) return false;
   }
-  if (value.declines !== null) {
-    if (!isRecord(value.declines)
-        || !isNonNegativeInteger(value.declines.total)
-        || !isString(value.declines.peopleToken)
-        || !Array.isArray(value.declines.rows)
-        || value.declines.rows.length > 10
-        || value.declines.total < value.declines.rows.length
-        || !value.declines.rows.every((row) => isRecord(row)
+  if (value.declines === undefined) return false;
+  if (value.increases !== undefined && (value.increases === null) !== standardOnly) return false;
+  for (const change of [value.declines, value.increases]) {
+    if (change === null || change === undefined) continue;
+    if (!isRecord(change)
+        || !isNonNegativeInteger(change.total)
+        || !isString(change.peopleToken)
+        || !Array.isArray(change.rows)
+        || change.rows.length > 10
+        || change.total < change.rows.length
+        || !change.rows.every((row) => isRecord(row)
           && isInteger(row.individualId)
           && row.individualId > 0
           && isString(row.firstName)

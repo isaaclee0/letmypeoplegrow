@@ -844,10 +844,7 @@ async function syncFamilyTypeIfUnified(familyId, churchId) {
   if (!familyId) return;
   
   try {
-    const [{ active }, { peopleEditingLocked }] = await Promise.all([
-      getAuthority(churchId), getPeopleSyncPolicy(churchId),
-    ]);
-    if (!peopleEditingLocked) return;
+    const { active } = await getAuthority(churchId);
     const isFamilyLocked = await getFamilyMembershipAuthorityLock(churchId, [familyId], active);
     if (isFamilyLocked(familyId)) return;
 
@@ -1358,4 +1355,5 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
   }
 });
 
+router.syncFamilyTypeIfUnified = syncFamilyTypeIfUnified;
 module.exports = router;

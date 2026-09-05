@@ -1161,9 +1161,9 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             i.badge_text, i.badge_color, i.badge_icon,
             i.pco_background_check_cleared,
             f.id as family_id, f.family_name, f.family_notes, f.family_type,
-            COALESCE(f.last_attended, f.created_at) as last_activity
+            COALESCE(f.last_attended, i.last_attendance_date, f.created_at, i.created_at) as last_activity
           FROM individuals i
-          JOIN families f ON i.family_id = f.id
+          LEFT JOIN families f ON i.family_id = f.id
           WHERE i.is_active = 1
             AND i.church_id = ?
           ORDER BY f.family_name, i.first_name
@@ -1176,7 +1176,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             name: `${member.first_name} ${member.last_name}`,
             isChild: Boolean(member.is_child),
             visitorType: isVisitor ? (member.people_type === 'local_visitor' ? 'potential_regular' : 'temporary_other') : 'regular',
-            visitorFamilyGroup: member.family_id.toString(),
+            visitorFamilyGroup: member.family_id == null ? undefined : member.family_id.toString(),
             notes: member.family_notes,
             lastAttended: member.last_activity,
             familyId: member.family_id,
@@ -1262,11 +1262,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         JOIN families f ON i.family_id = f.id
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-        WHERE (
-            f.family_type IN ('local_visitor', 'traveller_visitor')
-            OR ar.people_type_at_time IN ('local_visitor', 'traveller_visitor')
-          )
-          AND i.is_active = 1
+        WHERE i.is_active = 1
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1380,9 +1376,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       ? 'COALESCE(ar.people_type_at_time, i.people_type, \'regular\')'
       : 'COALESCE(i.people_type, \'regular\')';
     if (search && search.trim()) {
-      attendanceListQuery += ` AND (
-        (f.family_type = 'regular' OR f.family_type IS NULL) AND ${effectivePeopleTypeFull} = 'regular'
-      ) AND (
+      attendanceListQuery += ` AND ${effectivePeopleTypeFull} = 'regular' AND (
         i.first_name LIKE ? OR
         i.last_name LIKE ? OR
         f.family_name LIKE ?
@@ -1390,9 +1384,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       const searchTerm = `%${search.trim()}%`;
       attendanceListParams.push(searchTerm, searchTerm, searchTerm);
     } else {
-      attendanceListQuery += ` AND (
-        (f.family_type = 'regular' OR f.family_type IS NULL) AND ${effectivePeopleTypeFull} = 'regular'
-      )`;
+      attendanceListQuery += ` AND ${effectivePeopleTypeFull} = 'regular'`;
     }
 
     attendanceListQuery += ` ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)`;
@@ -1419,7 +1411,6 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         WHERE ar.session_id = ?
           AND ar.church_id = ?
           AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
-          AND (f.family_type = 'regular' OR f.family_type IS NULL)
         ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)
       `, [sessionId, req.user.church_id]);
 
@@ -1457,7 +1448,6 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       FROM individuals i
       JOIN families f ON i.family_id = f.id
       WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
-        AND f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.is_active = 1
         AND i.church_id = ?
       ORDER BY f.family_name, i.first_name
@@ -1589,7 +1579,6 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         WHERE ar.session_id = ?
           AND ar.church_id = ?
           AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
-          AND (f.family_type = 'regular' OR f.family_type IS NULL)
       `;
       let snapshotAttendanceParams = [sessionId, req.user.church_id];
 
@@ -1736,8 +1725,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         JOIN families f ON i.family_id = f.id
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-        WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
-          AND i.is_active = 1
+        WHERE i.is_active = 1
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1930,9 +1918,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       const effectivePeopleType = hasPeopleTypeAtTime
         ? 'COALESCE(ar.people_type_at_time, i.people_type, \'regular\')'
         : 'COALESCE(i.people_type, \'regular\')';
-      attendanceListQuery += ` AND (
-        (f.family_type = 'regular' OR f.family_type IS NULL) AND ${effectivePeopleType} = 'regular'
-      ) AND (
+      attendanceListQuery += ` AND ${effectivePeopleType} = 'regular' AND (
         i.first_name LIKE ? OR
         i.last_name LIKE ? OR
         f.family_name LIKE ?
@@ -1946,9 +1932,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       const effectivePeopleType = hasPeopleTypeAtTime
         ? 'COALESCE(ar.people_type_at_time, i.people_type, \'regular\')'
         : 'COALESCE(i.people_type, \'regular\')';
-      attendanceListQuery += ` AND (
-        (f.family_type = 'regular' OR f.family_type IS NULL) AND ${effectivePeopleType} = 'regular'
-      )`;
+      attendanceListQuery += ` AND ${effectivePeopleType} = 'regular'`;
     }
 
     attendanceListQuery += ` ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)`;
@@ -1974,7 +1958,6 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         WHERE ar.session_id = ?
           AND ar.church_id = ?
           AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
-          AND (f.family_type = 'regular' OR f.family_type IS NULL)
         ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)
       `, [sessionId, req.user.church_id]);
 
@@ -2020,7 +2003,6 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         ? `(COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor') OR (ar.people_type_at_time IS NULL AND i.people_type IN ('local_visitor', 'traveller_visitor')))`
         : `i.people_type IN ('local_visitor', 'traveller_visitor')`}
         AND (i.is_active = 1 OR ar.present = 1 OR ar.present = 1)
-        AND f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.church_id = ?
     `;
 

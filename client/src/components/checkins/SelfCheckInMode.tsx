@@ -1209,7 +1209,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                           onChange={() => toggleMember(member.id)}
                           className="h-5 w-5 text-orange-600 focus:ring-orange-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-3 text-base text-gray-900">
+                        <span className="ml-3 text-base text-gray-900 dark:text-gray-100">
                           {member.firstName} {member.lastName}
                         </span>
                       </label>
@@ -1220,7 +1220,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
               {/* Signer name */}
               <div className="mb-6">
-                <label htmlFor="signer-name" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="signer-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Your name
                 </label>
                 <input
@@ -1228,7 +1228,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                   type="text"
                   value={signerName}
                   onChange={(e) => setSignerName(e.target.value)}
-                  className="block w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
+                  className="block w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder:text-gray-500 dark:placeholder:text-gray-400 rounded-lg px-3 py-2 focus:ring-primary-500 focus:border-primary-500"
                   placeholder="Type your name to confirm..."
                   autoComplete="off"
                 />
@@ -1261,7 +1261,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
           {/* Add Visitor Button - only in check-in mode */}
           {!selectedFamily && mode === 'checkin' && (
-            <div className="mt-6 pt-4 border-t border-gray-200">
+            <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
               <button
                 onClick={() => {
                   setShowAddVisitorModal(true);
@@ -1269,7 +1269,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                   setGuardianName('');
                   setGuardianContact('');
                 }}
-                className="w-full flex items-center justify-center px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-primary-300 hover:text-primary-600 transition-colors"
+                className="w-full flex items-center justify-center px-4 py-3 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-300 hover:border-primary-300 dark:hover:border-primary-500 hover:text-primary-600 dark:hover:text-primary-300 transition-colors"
               >
                 <PlusIcon className="h-5 w-5 mr-2" />
                 I'm new here

@@ -7,6 +7,10 @@ import { reportsAPI, gatheringsAPI, GatheringType, attendanceAPI, familiesAPI } 
 import AttendanceHistoryPopover from './AttendanceHistoryPopover';
 import CaregiverPicker from './CaregiverPicker';
 import LongTermTrends from './LongTermTrends';
+import ReportLayoutEditor from './ReportLayoutEditor';
+import { ReportPanel, ReportPanelGrid } from './ReportPanelGrid';
+import { type ReportPanelId } from './reportLayout';
+import { useReportLayout } from './useReportLayout';
 import { userPreferences, PREFERENCE_KEYS } from '../../services/userPreferences';
 import logger from '../../utils/logger';
 import {
@@ -15,7 +19,8 @@ import {
   ArrowTrendingUpIcon,
   ArrowDownTrayIcon,
   XMarkIcon,
-  ChevronDownIcon
+  ChevronDownIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 import 'chart.js/auto';
 import { Bar } from 'react-chartjs-2';
@@ -41,6 +46,9 @@ const EXPORT_FORMATS: { id: ExportFormat; label: string; mime: string }[] = [
 
 const SelectedPeriodReport: React.FC = () => {
   const { user, refreshUserData } = useAuth();
+  const reportLayout = useReportLayout(user?.id && user.church_id
+    ? { userId: user.id, churchId: user.church_id }
+    : null);
   const { today, formatDateOnly } = useChurchTime();
 
   // Detect dark mode for Chart.js label colors
@@ -136,6 +144,11 @@ const SelectedPeriodReport: React.FC = () => {
   // it in that case.
   const shouldShowVisitorInfo = selectedGatherings.length > 0 &&
     selectedGatherings.some(g => g.attendanceType === 'standard');
+  const unavailablePanels: Partial<Record<ReportPanelId, string>> = shouldShowVisitorInfo ? {} : {
+    'period-visitors': 'Requires a standard attendance gathering',
+    'recent-absences': 'Requires a standard attendance gathering',
+    'recent-visitors': 'Requires a standard attendance gathering',
+  };
 
   // Initialize default date range to last 4 weeks on every open
   useEffect(() => {
@@ -814,12 +827,24 @@ const SelectedPeriodReport: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Selected-period export controls stay scoped to this workspace. */}
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="flex items-center justify-end">
-            <div className="flex space-x-3">
+    <div className="space-y-4">
+      <header className="flex flex-col gap-3 px-1 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Reports &amp; Analytics</h1>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            View attendance trends and insights
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={reportLayout.beginEditing}
+          disabled={!reportLayout.canEdit}
+          className="h-10 rounded border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          Customise layout
+        </button>
+        <div className="relative inline-flex rounded-md shadow-sm" ref={exportMenuRef}>
               {/* Commented out Spreadsheet Access functionality for now
               {dataAccessEnabled && (
                 <button
@@ -831,43 +856,58 @@ const SelectedPeriodReport: React.FC = () => {
                 </button>
               )}
               */}
-              <div className="relative inline-flex rounded-md shadow-sm" ref={exportMenuRef}>
-                <button
-                  onClick={() => handleExportData()}
-                  disabled={!canExport || isLoading}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-l-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                  Export {EXPORT_FORMATS.find(f => f.id === exportFormat)?.label}
-                </button>
-                <button
-                  onClick={() => setExportMenuOpen(open => !open)}
-                  disabled={!canExport || isLoading}
-                  className="inline-flex items-center px-2 py-2 -ml-px border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-r-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  title="Choose export format"
-                >
-                  <ChevronDownIcon className="h-4 w-4" />
-                </button>
-                {exportMenuOpen && (
-                  <div className="absolute right-0 top-full z-50 mt-1 w-44 bg-white dark:bg-gray-800 rounded-md shadow-lg ring-1 ring-black dark:ring-gray-700 ring-opacity-5">
-                    <div className="py-1">
-                      {EXPORT_FORMATS.map(f => (
-                        <button
-                          key={f.id}
-                          onClick={() => { setExportMenuOpen(false); handleExportData(f.id); }}
-                          className={`block w-full text-left px-4 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-600 ${f.id === exportFormat ? 'font-semibold text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300'}`}
-                        >
-                          Export as {f.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+          <button
+            onClick={() => handleExportData()}
+            disabled={!canExport || isLoading}
+            className="inline-flex h-10 items-center border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus:ring-offset-gray-800 rounded-l-md"
+          >
+            <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
+            Export {EXPORT_FORMATS.find(f => f.id === exportFormat)?.label}
+          </button>
+          <button
+            onClick={() => setExportMenuOpen(open => !open)}
+            disabled={!canExport || isLoading}
+            className="-ml-px inline-flex h-10 items-center border border-gray-300 bg-white px-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus:ring-offset-gray-800 rounded-r-md"
+            title="Choose export format"
+          >
+            <ChevronDownIcon className="h-4 w-4" />
+          </button>
+          {exportMenuOpen && (
+            <div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 dark:bg-gray-800 dark:ring-gray-700">
+              <div className="py-1">
+                {EXPORT_FORMATS.map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => { setExportMenuOpen(false); handleExportData(f.id); }}
+                    className={`block w-full px-4 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-600 ${f.id === exportFormat ? 'font-semibold text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300'}`}
+                  >
+                    Export as {f.label}
+                  </button>
+                ))}
               </div>
             </div>
-          </div>
+          )}
         </div>
-      </div>
+        </div>
+      </header>
+
+      <ReportLayoutEditor
+        layout={reportLayout.layout}
+        editing={reportLayout.editing}
+        saving={reportLayout.saving}
+        error={reportLayout.error}
+        unavailable={unavailablePanels}
+        onSetVisible={reportLayout.setVisible}
+        onSave={reportLayout.save}
+        onCancel={reportLayout.cancel}
+      />
+
+      {reportLayout.error?.startsWith('Could not load') && !reportLayout.editing && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+          <span>{reportLayout.error}</span>
+          <button type="button" onClick={reportLayout.retry} className="font-medium underline">Retry</button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
@@ -925,12 +965,26 @@ const SelectedPeriodReport: React.FC = () => {
 
             {/* Gathering Selection */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Gathering Types
-              </label>
-              <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
-                Choose the gathering you want to report on. If you choose more than one, attendance at any selected gathering counts as attendance for that week in Long-term trends.
-              </p>
+              <div className="mb-2 flex items-center gap-1.5">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Gathering Types</span>
+                <span className="group relative inline-flex">
+                  <button
+                    type="button"
+                    aria-label="About gathering selection"
+                    aria-describedby="gathering-selection-help"
+                    className="rounded-full text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-400 dark:hover:text-gray-200"
+                  >
+                    <InformationCircleIcon className="h-4 w-4" />
+                  </button>
+                  <span
+                    id="gathering-selection-help"
+                    role="tooltip"
+                    className="pointer-events-none absolute right-0 top-full z-30 mt-2 w-72 rounded-lg bg-gray-900 px-3 py-2 text-xs font-normal leading-relaxed text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 dark:bg-gray-700"
+                  >
+                    Choose the gathering you want to report on. If you choose more than one, attendance at any selected gathering counts as attendance for that week in Long-term trends.
+                  </span>
+                </span>
+              </div>
               <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-3">
                 {gatherings.map((gathering) => (
                   <label key={gathering.id} className="flex items-center">
@@ -959,14 +1013,16 @@ const SelectedPeriodReport: React.FC = () => {
                   </label>
                 ))}
               </div>
+              <div className="mt-1 h-5" aria-live="polite">
               {isLoadingGatherings ? (
-                <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
+                <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 mr-2"></div>
                   Loading gatherings...
                 </div>
               ) : selectedGatherings.length === 0 ? (
-                <p className="mt-1 text-sm text-red-600 dark:text-red-400">Please select at least one gathering</p>
+                <p className="text-sm text-red-600 dark:text-red-400">Please select at least one gathering</p>
               ) : null}
+              </div>
             </div>
           </div>
         </div>
@@ -978,8 +1034,15 @@ const SelectedPeriodReport: React.FC = () => {
         </div>
       )}
 
+      <ReportPanelGrid
+        layout={reportLayout.layout}
+        editing={reportLayout.editing}
+        unavailable={unavailablePanels}
+        onReorder={reportLayout.reorder}
+        onHide={(id) => reportLayout.setVisible(id, false)}
+      >
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <ReportPanel id="summary"><div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
           <div className="p-5">
             <div className="flex items-center">
@@ -995,7 +1058,7 @@ const SelectedPeriodReport: React.FC = () => {
                     }
                   </dt>
                   <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                    {isLoading ? '...' : (metrics?.averageAttendance || 0)}
+                    {isLoading ? '...' : Math.round(metrics?.averageAttendance || 0)}
                   </dd>
                 </dl>
               </div>
@@ -1081,12 +1144,12 @@ const SelectedPeriodReport: React.FC = () => {
             </div>
           </>
         )}
-      </div>
+      </div></ReportPanel>
 
       {/* Charts Section */}
-      <div className={`grid grid-cols-1 gap-6 ${!shouldShowVisitorInfo ? 'lg:grid-cols-1' : 'lg:grid-cols-2'}`}>
+      <div className="contents">
         {/* Attendance over selected period (per session) with trend line */}
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+        <ReportPanel id="period-attendance"><div className="h-full bg-white shadow rounded-lg dark:bg-gray-800">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
               {hasMultipleGatherings
@@ -1094,9 +1157,9 @@ const SelectedPeriodReport: React.FC = () => {
                 : isHeadcountGathering ? 'Headcount Over Selected Period' : 'Attendance Over Selected Period'
               }
             </h3>
-            <div className="mt-6">
+            <div className="mt-6 h-[300px]">
               {isLoading ? (
-                <div className="flex justify-center items-center h-64">
+                <div className="flex justify-center items-center h-full">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
                 </div>
               ) : attendanceChartLabels.length > 0 ? (
@@ -1129,7 +1192,7 @@ const SelectedPeriodReport: React.FC = () => {
                   height={300}
                 />
               ) : (
-                <div className="flex justify-center items-center h-64">
+                <div className="flex justify-center items-center h-full">
                   <div className="text-gray-500 dark:text-gray-400">
                     <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
                     <p className="text-sm">No attendance data available for the selected period</p>
@@ -1138,14 +1201,14 @@ const SelectedPeriodReport: React.FC = () => {
               )}
             </div>
           </div>
-        </div>
+        </div></ReportPanel>
 
         {/* Visitors over selected period (stacked local vs traveller) - Hidden for headcount-only gatherings */}
         {shouldShowVisitorInfo && (
-          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+          <ReportPanel id="period-visitors"><div className="h-full bg-white shadow rounded-lg dark:bg-gray-800">
             <div className="px-4 py-5 sm:p-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">Visitors Over Selected Period</h3>
-              <div className="mt-6">
+              <div className="mt-6 h-[300px]">
                 {visitorsChartLabels.length > 0 ? (
                   <Bar
                     data={visitorsChartData}
@@ -1164,7 +1227,7 @@ const SelectedPeriodReport: React.FC = () => {
                     height={300}
                   />
                 ) : (
-                  <div className="flex justify-center items-center h-64">
+                  <div className="flex justify-center items-center h-full">
                     <div className="text-gray-500 dark:text-gray-400">
                       <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
                       <p className="text-sm">No visitor data available for the selected period</p>
@@ -1173,15 +1236,15 @@ const SelectedPeriodReport: React.FC = () => {
                 )}
               </div>
             </div>
-          </div>
+          </div></ReportPanel>
         )}
       </div>
 
       {/* Absence and Recent Visitors Panels - Hidden for headcount-only gatherings */}
       {shouldShowVisitorInfo && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="contents">
           {/* Regulars Absent Panel */}
-          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+          <ReportPanel id="recent-absences"><div className="h-full bg-white shadow rounded-lg dark:bg-gray-800">
             <div className="px-4 py-5 sm:p-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">Regulars With Recent Absences</h3>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -1271,10 +1334,10 @@ const SelectedPeriodReport: React.FC = () => {
                 )}
               </div>
             </div>
-          </div>
+          </div></ReportPanel>
 
           {/* Recent Visitors Panel */}
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+        <ReportPanel id="recent-visitors"><div className="h-full bg-white shadow rounded-lg dark:bg-gray-800">
           <div className="px-4 py-5 sm:p-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">Recent Visitors (last 6 weeks)</h3>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Shows how many times a visitor has attended this gathering.</p>
@@ -1346,7 +1409,7 @@ const SelectedPeriodReport: React.FC = () => {
                 )}
               </div>
             </div>
-          </div>
+          </div></ReportPanel>
         </div>
       )}
 
@@ -1357,8 +1420,10 @@ const SelectedPeriodReport: React.FC = () => {
           churchId={user.church_id}
           selectedGatherings={selectedGatherings}
           canConfigure={user.role === 'admin'}
+          embedded
         />
       )}
+      </ReportPanelGrid>
 
       <CaregiverPicker
         familyId={caregiverPopoverFamilyId ?? 0}

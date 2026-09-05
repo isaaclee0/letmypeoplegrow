@@ -15,6 +15,7 @@ import {
   PlusIcon,
   XMarkIcon,
   ArrowPathIcon,
+  ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 
 interface FamilyGroup {
@@ -28,6 +29,68 @@ interface LeaderCheckInModeProps {
   gatheringDate: string;
   onBack: () => void;
 }
+
+interface AttendanceRosterResponse {
+  attendanceList?: any[];
+  visitors?: any[];
+  recentVisitors?: any[];
+}
+
+interface ChurchPerson {
+  id: number;
+  name: string;
+  familyId?: number;
+  familyName?: string;
+  visitorType?: 'regular' | 'potential_regular' | 'temporary_other';
+  isChild?: boolean;
+  badgeText?: string | null;
+  badgeColor?: string | null;
+  badgeIcon?: string | null;
+  backgroundCheckCleared?: boolean | null;
+}
+
+const normalizeRosterPerson = (person: any): Individual | null => {
+  const id = Number(person.id || person.individualId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const nameParts = String(person.name || '').trim().split(/\s+/).filter(Boolean);
+  const peopleType = person.peopleType || (
+    person.visitorType === 'temporary_other' ? 'traveller_visitor'
+      : person.visitorType === 'potential_regular' ? 'local_visitor'
+        : 'regular'
+  );
+
+  return {
+    id,
+    firstName: person.firstName || nameParts[0] || '',
+    lastName: person.lastName || nameParts.slice(1).join(' ') || '',
+    peopleType,
+    isChild: Boolean(person.isChild),
+    backgroundCheckCleared: person.backgroundCheckCleared ?? person.pcoBackgroundCheckCleared,
+    badgeText: person.badgeText,
+    badgeColor: person.badgeColor,
+    badgeIcon: person.badgeIcon,
+    familyId: person.familyId,
+    familyName: person.familyName,
+    familyNotes: person.familyNotes || person.notes,
+    present: Boolean(person.present),
+  };
+};
+
+export const buildLeaderCheckInRoster = (response: AttendanceRosterResponse): Individual[] => {
+  const seenIds = new Set<number>();
+  const roster: Individual[] = [];
+  for (const person of [
+    ...(response.attendanceList || []),
+    ...(response.visitors || []),
+    ...(response.recentVisitors || []),
+  ]) {
+    const normalized = normalizeRosterPerson(person);
+    if (!normalized || seenIds.has(normalized.id)) continue;
+    seenIds.add(normalized.id);
+    roster.push(normalized);
+  }
+  return roster;
+};
 
 const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
   selectedGathering,
@@ -46,11 +109,15 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
   const [familyGroups, setFamilyGroups] = useState<FamilyGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showBackgroundCheckStatus, setShowBackgroundCheckStatus] = useState(false);
+  const [allChurchPeople, setAllChurchPeople] = useState<ChurchPerson[]>([]);
 
   // Selection
   const [searchTerm, setSearchTerm] = useState('');
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [checkedMembers, setCheckedMembers] = useState<Set<number>>(new Set());
+  const [showChurchPeople, setShowChurchPeople] = useState(false);
+  const [churchPeopleSearch, setChurchPeopleSearch] = useState('');
+  const [addingChurchPersonId, setAddingChurchPersonId] = useState<number | null>(null);
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -84,40 +151,8 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
       setIsLoading(true);
       const response = await attendanceAPI.getFull(selectedGathering.id, gatheringDate);
       setShowBackgroundCheckStatus(!!response.data.showBackgroundCheckStatus);
-      const regulars: Individual[] = (response.data.attendanceList || []).map((a: any) => ({
-        ...a,
-        present: Boolean(a.present),
-      }));
-
-      const seenIds = new Set(regulars.map(p => p.id));
-      const allPeople = [...regulars];
-
-      const visitors: any[] = response.data.visitors || [];
-      for (const v of visitors) {
-        const id = v.id || v.individualId;
-        if (id && !seenIds.has(id)) {
-          seenIds.add(id);
-          const nameParts = (v.name || '').split(' ');
-          allPeople.push({
-            id,
-            firstName: v.firstName || nameParts[0] || '',
-            lastName: v.lastName || nameParts.slice(1).join(' ') || '',
-            peopleType: v.peopleType || 'local_visitor',
-            isChild: v.isChild,
-            backgroundCheckCleared: v.backgroundCheckCleared,
-            badgeText: v.badgeText,
-            badgeColor: v.badgeColor,
-            badgeIcon: v.badgeIcon,
-            familyId: v.familyId,
-            familyName: v.familyName,
-            familyNotes: v.familyNotes || v.notes,
-            present: Boolean(v.present),
-          });
-        }
-      }
-
-      // potentialVisitors are unassigned visitors — skip them for leader check-in
-      // Only regulars + visitors assigned to this gathering are shown
+      const allPeople = buildLeaderCheckInRoster(response.data);
+      setAllChurchPeople(response.data.allChurchPeople || []);
 
       setAttendanceList(allPeople);
 
@@ -379,6 +414,16 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
     return people;
   }, [filteredFamilies]);
 
+  const availableChurchPeople = useMemo(() => {
+    const rosterIds = new Set(attendanceList.map((person) => person.id));
+    const term = churchPeopleSearch.trim().toLowerCase();
+    if (!term) return [];
+    return allChurchPeople
+      .filter((person) => !rosterIds.has(person.id))
+      .filter((person) => `${person.name} ${person.familyName || ''}`.toLowerCase().includes(term))
+      .slice(0, 12);
+  }, [allChurchPeople, attendanceList, churchPeopleSearch]);
+
   // Toggle member
   const toggleMember = (id: number) => {
     setCheckedMembers(prev => {
@@ -462,6 +507,42 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
     setShowModal(false);
 
     setTimeout(() => setSuccessMessage(null), 4000);
+  };
+
+  const handleAddChurchPerson = async (person: ChurchPerson) => {
+    try {
+      setAddingChurchPersonId(person.id);
+      setError('');
+      await kioskAPI.addPersonToGathering(selectedGathering.id, person.id);
+      const rosterPerson = normalizeRosterPerson(person);
+      if (rosterPerson) {
+        setAttendanceList((current) => current.some((entry) => entry.id === rosterPerson.id)
+          ? current
+          : [...current, rosterPerson]);
+        setFamilyGroups((current) => {
+          const familyId = rosterPerson.familyId || -rosterPerson.id;
+          const existing = current.find((group) => group.familyId === familyId);
+          if (existing) {
+            return current.map((group) => group.familyId === familyId
+              ? { ...group, members: [...group.members, rosterPerson] }
+              : group);
+          }
+          return [...current, {
+            familyId,
+            familyName: rosterPerson.familyName || `${rosterPerson.firstName} ${rosterPerson.lastName}`.trim(),
+            members: [rosterPerson],
+          }];
+        });
+      }
+      setChurchPeopleSearch('');
+      setShowChurchPeople(false);
+      setSuccessMessage(`${person.name} added to ${selectedGathering.name}.`);
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to add person to this gathering.');
+    } finally {
+      setAddingChurchPersonId(null);
+    }
   };
 
   // Handle undo check-in or undo check-out
@@ -1025,6 +1106,72 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
           </div>
         )}
       </div>
+
+      {/* Add an existing church person */}
+      {mode === 'checkin' && (
+        <div className="mt-5 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+          <button
+            type="button"
+            aria-expanded={showChurchPeople}
+            onClick={() => {
+              setShowChurchPeople((current) => !current);
+              setChurchPeopleSearch('');
+            }}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/60"
+          >
+            <span className="flex items-center">
+              <PlusIcon className="mr-2 h-4 w-4 text-primary-600" />
+              Add someone from church
+            </span>
+            <ChevronDownIcon className={`h-4 w-4 text-gray-400 transition-transform ${showChurchPeople ? 'rotate-180' : ''}`} />
+          </button>
+          {showChurchPeople && (
+            <div className="border-t border-gray-200 bg-gray-50/70 px-4 py-4 dark:border-gray-700 dark:bg-gray-900/30">
+              <label htmlFor="church-people-search" className="mb-1.5 block text-xs font-medium text-gray-600 dark:text-gray-300">
+                Find someone in the church
+              </label>
+              <div className="relative">
+                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <input
+                  id="church-people-search"
+                  type="search"
+                  autoFocus
+                  value={churchPeopleSearch}
+                  onChange={(event) => setChurchPeopleSearch(event.target.value)}
+                  placeholder="Type a name or family…"
+                  className="block w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                />
+              </div>
+              {!churchPeopleSearch.trim() ? (
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Search the whole church directory. Adding someone does not check them in.</p>
+              ) : availableChurchPeople.length === 0 ? (
+                <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No additional people found.</p>
+              ) : (
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {availableChurchPeople.map((person) => (
+                    <button
+                      key={person.id}
+                      type="button"
+                      disabled={addingChurchPersonId !== null}
+                      aria-label={`Add ${person.name} to ${selectedGathering.name}`}
+                      onClick={() => handleAddChurchPerson(person)}
+                      className="flex items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-left transition-colors hover:border-primary-300 hover:bg-primary-50 disabled:cursor-wait disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:hover:border-primary-600 dark:hover:bg-primary-900/20"
+                    >
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">{person.name}</span>
+                        {person.familyName && <span className="block text-xs text-gray-500 dark:text-gray-400">{person.familyName}</span>}
+                      </span>
+                      {addingChurchPersonId === person.id
+                        ? <ArrowPathIcon className="h-4 w-4 animate-spin text-primary-600" />
+                        : <PlusIcon className="h-4 w-4 text-primary-600" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add Visitor button */}
       {mode === 'checkin' && (

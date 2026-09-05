@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArcElement,
   CategoryScale,
   Chart as ChartJS,
   Legend,
@@ -9,7 +8,8 @@ import {
   PointElement,
   Tooltip,
 } from 'chart.js';
-import { Doughnut, Line } from 'react-chartjs-2';
+import { Line } from 'react-chartjs-2';
+import type { ChartOptions } from 'chart.js';
 import type {
   ContextualEngagementSettingsDto,
   ContextualLongTermOverviewDto,
@@ -23,16 +23,17 @@ import {
 } from '../../services/engagementReportCache';
 import AccessibleDialog from './AccessibleDialog';
 import AttendanceHistoryPopover from './AttendanceHistoryPopover';
-import EngagementDrilldown from './EngagementDrilldown';
 import EngagementPeoplePanel from './EngagementPeoplePanel';
 import RegularitySettings from './RegularitySettings';
+import { ReportPanel, ReportPanelExpansion, ReportPanelSectionHeading } from './ReportPanelGrid';
 
-ChartJS.register(ArcElement, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
+ChartJS.register( CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
 interface LongTermTrendsProps {
   churchId: string;
   selectedGatherings: GatheringType[];
   canConfigure: boolean;
+  embedded?: boolean;
 }
 
 interface ScopedOverview {
@@ -43,12 +44,8 @@ interface ScopedOverview {
 interface OpenPeoplePanel {
   token: string;
   title: string;
-  placement: 'regularity' | 'declines';
-}
-
-interface OpenSessions {
-  token: string;
-  title: string;
+  placement: 'regularity' | 'changes';
+  selector: 'core' | 'casual' | 'irregular' | 'increases' | 'declines';
 }
 
 const SERIES_COLOURS = ['#2563eb', '#0f766e', '#a16207', '#be123c', '#6d28d9', '#475569'];
@@ -71,7 +68,7 @@ function sameSelection(left: number[], right: number[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
-function directionSummary(direction: ContextualLongTermOverviewDto['direction']): string {
+function directionSummary(direction: Pick<ContextualLongTermOverviewDto['direction'], 'comparisonWeeks' | 'percentChange' | 'status'>): string {
   if (direction.status === 'unavailable' || direction.percentChange === null) {
     return `There is not enough completed attendance history to compare the latest ${direction.comparisonWeeks} weeks.`;
   }
@@ -81,33 +78,16 @@ function directionSummary(direction: ContextualLongTermOverviewDto['direction'])
   return `Average attendance is ${direction.status} ${formatPercent(direction.percentChange)}% compared with the previous ${direction.comparisonWeeks} weeks.`;
 }
 
-interface SessionBucketPickerProps {
-  series: ContextualLongTermOverviewDto['direction']['series'][number];
-  onOpen: (sessions: OpenSessions) => void;
-}
+const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGatherings, canConfigure, embedded = false }) => {
+  const [isDarkMode, setIsDarkMode] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return;
+    const onChange = (event: MediaQueryListEvent) => setIsDarkMode(event.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
 
-const SessionBucketPicker: React.FC<SessionBucketPickerProps> = ({ series, onOpen }) => {
-  const buckets = series.buckets.filter(({ heldSessions }) => heldSessions > 0);
-  const [bucketIndex, setBucketIndex] = useState(() => buckets.at(-1)?.index ?? 0);
-  const bucket = buckets.find(({ index }) => index === bucketIndex) ?? buckets.at(-1);
-  if (!bucket) return <p className="rounded border border-gray-200 px-3 py-2 text-gray-500 dark:border-gray-700 dark:text-gray-400">{series.name}: no held sessions</p>;
-  const range = `${formatDate(bucket.startDate)} – ${formatDate(bucket.endDate)}`;
-  return <div className="flex flex-wrap items-center gap-2 rounded border border-gray-200 p-2 dark:border-gray-700">
-    <label htmlFor={`session-bucket-${series.gatheringTypeId}`} className="font-medium text-gray-700 dark:text-gray-200">{series.name}</label>
-    <select
-      id={`session-bucket-${series.gatheringTypeId}`}
-      aria-label={`Attendance period for ${series.name}`}
-      value={bucket.index}
-      onChange={(event) => setBucketIndex(Number(event.target.value))}
-      className="min-w-48 rounded border border-gray-300 bg-white px-2 py-1.5 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-    >
-      {buckets.map((option) => <option key={option.index} value={option.index}>{formatDate(option.startDate)} – {formatDate(option.endDate)}</option>)}
-    </select>
-    <button type="button" onClick={() => onOpen({ token: bucket.sessionsToken, title: `${series.name} attendance sessions — ${range}` })} className="rounded bg-indigo-50 px-3 py-1.5 font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-gray-700 dark:text-indigo-300 dark:hover:bg-gray-600">View {series.name} attendance sessions</button>
-  </div>;
-};
-
-const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGatherings, canConfigure }) => {
   const selectionKey = useMemo(
     () => selectedGatherings.map(({ id }) => id).sort((a, b) => a - b).join(','),
     [selectedGatherings],
@@ -126,7 +106,8 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
   const [error, setError] = useState('');
   const [retryGeneration, setRetryGeneration] = useState(0);
   const [peoplePanel, setPeoplePanel] = useState<OpenPeoplePanel | null>(null);
-  const [sessions, setSessions] = useState<OpenSessions | null>(null);
+  const [changeTab, setChangeTab] = useState<'increases' | 'declines'>('declines');
+  const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const requestGeneration = useRef(0);
 
@@ -139,8 +120,9 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
   useEffect(() => {
     const generation = ++requestGeneration.current;
     setPeoplePanel(null);
-    setSessions(null);
     setShowSettings(false);
+    setShowHistory(false);
+    setChangeTab('declines');
     setError('');
 
     if (gatheringTypeIds.length === 0) {
@@ -175,34 +157,113 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
     };
   }, [churchId, selectionKey, retryGeneration]); // IDs are represented canonically by selectionKey.
 
+  const historyAxes = useMemo(() => {
+    const series = overview?.direction.series ?? [];
+    const ranked = series.map((item) => {
+      const populated = item.buckets.filter((bucket) => bucket.averageAttendance !== null);
+      const sessions = populated.reduce((total, bucket) => total + bucket.heldSessions, 0);
+      const average = sessions ? populated.reduce((total, bucket) => total + bucket.averageAttendance! * bucket.heldSessions, 0) / sessions : 0;
+      return { id: item.gatheringTypeId, average };
+    }).sort((left, right) => left.average - right.average);
+    let split = 1;
+    let largestGap = -1;
+    for (let index = 1; index < ranked.length; index += 1) {
+      const gap = (ranked[index].average + 1) / (ranked[index - 1].average + 1);
+      if (gap > largestGap) { largestGap = gap; split = index; }
+    }
+    return new Map(ranked.map((item, index) => [item.id, index < split ? 'y' : 'yRight']));
+  }, [overview]);
+
+  const historyRange = useMemo(() => {
+    const series = overview?.direction.series ?? [];
+    const populated = series.flatMap((item) => item.buckets.flatMap((bucket, index) =>
+      bucket.averageAttendance !== null ? [index] : []));
+    return populated.length ? { start: Math.min(...populated), end: Math.max(...populated) + 1 } : { start: 0, end: 0 };
+  }, [overview]);
+
   const trendData = useMemo(() => {
     if (!overview) return { labels: [], datasets: [] };
-    const labels = overview.direction.series[0]?.buckets.map(
-      (bucket) => `${formatDate(bucket.startDate)} – ${formatDate(bucket.endDate)}`,
+    const labels = overview.direction.series[0]?.buckets.slice(historyRange.start, historyRange.end).map(
+      (bucket) => new Intl.DateTimeFormat('en-AU', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${bucket.startDate}T12:00:00Z`)),
     ) || [];
     return {
       labels,
       datasets: overview.direction.series.map((series, index) => ({
         label: series.name,
-        data: series.buckets.map(({ averageAttendance }) => averageAttendance),
+        yAxisID: historyAxes.get(series.gatheringTypeId),
+        data: series.buckets.slice(historyRange.start, historyRange.end).map(({ averageAttendance }) => averageAttendance === null ? null : Math.round(averageAttendance)),
         borderColor: SERIES_COLOURS[index % SERIES_COLOURS.length],
         backgroundColor: SERIES_COLOURS[index % SERIES_COLOURS.length],
         tension: 0.25,
       })),
     };
-  }, [overview]);
+  }, [overview, historyAxes, historyRange]);
 
-  const regularityData = useMemo(() => overview?.regularity ? ({
-    labels: overview.regularity.tiers.map(({ label }) => label),
-    datasets: [{
-      data: overview.regularity.tiers.map(({ count }) => count),
-      backgroundColor: overview.regularity.tiers.map(({ colour }) => colour),
-    }],
-  }) : { labels: [], datasets: [] }, [overview]);
+  const historyOptions = useMemo<ChartOptions<'line'>>(() => {
+    const series = overview?.direction.series ?? [];
+    const axis = (id: string, position: 'left' | 'right') => {
+      const members = series.filter((item) => historyAxes.get(item.gatheringTypeId) === id);
+      const colour = members.length === 1 ? SERIES_COLOURS[series.indexOf(members[0]) % SERIES_COLOURS.length] : '#64748b';
+      return {
+        type: 'linear' as const,
+        position,
+        display: members.length > 0,
+        beginAtZero: true,
+        title: { display: true, text: members.map((item) => item.name).join(' / '), color: colour },
+        ticks: { precision: 0, color: colour },
+        grid: { drawOnChartArea: position === 'left' },
+      };
+    };
+    return {
+      maintainAspectRatio: false,
+      responsive: true,
+      scales: {
+        x: { ticks: { color: isDarkMode ? '#d1d5db' : '#374151', autoSkip: false, maxRotation: 0, callback: (_value, index) => index === 0 || trendData.labels[index] !== trendData.labels[index - 1] ? trendData.labels[index] : '' } },
+        y: axis('y', 'left'),
+        yRight: axis('yRight', 'right'),
+      },
+      plugins: { tooltip: { callbacks: { title: (items) => {
+        const item = items[0];
+        const bucket = item && series[item.datasetIndex]?.buckets[item.dataIndex + historyRange.start];
+        return bucket ? `${formatDate(bucket.startDate)} – ${formatDate(bucket.endDate)}` : '';
+      } } } },
+    };
+  }, [overview, historyAxes, trendData.labels, historyRange.start, isDarkMode]);
 
-  const openPeople = (token: string, title: string, placement: OpenPeoplePanel['placement']) => {
-    setPeoplePanel({ token, title, placement });
+  const changes = overview?.[changeTab];
+  const changeTitle = changeTab === 'increases' ? 'People attending more often' : 'People attending less often';
+  const selectChangeTab = (tab: 'increases' | 'declines') => {
+    setPeoplePanel(null);
+    setChangeTab(tab);
   };
+
+  const openPeople = (token: string, title: string, placement: OpenPeoplePanel['placement'], selector: OpenPeoplePanel['selector']) => {
+    setPeoplePanel({ token, title, placement, selector });
+  };
+  const refreshPeopleToken = useCallback(async (): Promise<boolean> => {
+    const pendingPanel = peoplePanel;
+    if (!pendingPanel) return false;
+    try {
+      const response = await reportsAPI.getLongTermTrends(gatheringTypeIds);
+      const freshOverview = response.data;
+      if (freshOverview.churchId !== churchId
+          || !sameSelection(freshOverview.gatheringTypeIds, gatheringTypeIds)) return false;
+      const freshToken = pendingPanel.placement === 'regularity'
+        ? freshOverview.regularity?.tiers.find((tier) => tier.tier === pendingPanel.selector)?.peopleToken
+        : (pendingPanel.selector === 'increases' || pendingPanel.selector === 'declines'
+          ? freshOverview[pendingPanel.selector]?.peopleToken
+          : null);
+      if (!freshToken) return false;
+      setOverviewState({ scopeKey, data: freshOverview });
+      writeLongTermTrendsCache(freshOverview);
+      setPeoplePanel((current) => current?.token === pendingPanel.token
+        ? { ...current, token: freshToken }
+        : current);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [churchId, gatheringTypeIds, peoplePanel, scopeKey]);
   const renderPeoplePanel = (placement: OpenPeoplePanel['placement']) => peoplePanel?.placement === placement && overview
     ? <EngagementPeoplePanel
         key={peoplePanel.token}
@@ -210,6 +271,7 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
         title={peoplePanel.title}
         gatheringIds={gatheringTypeIds}
         onClose={() => setPeoplePanel(null)}
+        onTokenExpired={refreshPeopleToken}
       />
     : null;
 
@@ -222,54 +284,77 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
   };
 
   return (
-    <section className="space-y-5 border-t border-gray-200 pt-8 dark:border-gray-700" aria-labelledby="long-term-trends-heading">
-      <header className="rounded-xl bg-slate-900 px-5 py-6 text-white shadow-sm dark:bg-slate-950">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-300">Completed-week view</p>
-        <h2 id="long-term-trends-heading" className="mt-1 text-2xl font-bold">Long-term trends</h2>
-        {selectionKey && overview && (
-          <div className="mt-2 space-y-1 text-sm text-slate-200">
-            {overview.dataAvailability.availableWeeks < overview.window.maximumWeeks ? (
-              <p>Based on {overview.dataAvailability.availableWeeks} weeks of available attendance history. {overview.dataAvailability.firstSessionDate && overview.dataAvailability.lastSessionDate
-                ? `${formatDate(overview.dataAvailability.firstSessionDate)} – ${formatDate(overview.dataAvailability.lastSessionDate)}.`
-                : 'No held sessions are available.'}</p>
-            ) : (
-              <p>Based on the latest 52 completed weeks. {formatDate(overview.window.startDate)} – {formatDate(overview.window.endDate)}.</p>
-            )}
+    <section className={embedded ? 'contents' : 'space-y-5 border-t border-gray-200 pt-8 dark:border-gray-700'} aria-labelledby="long-term-trends-heading">
+      {embedded ? (
+        <ReportPanelSectionHeading
+          ids={['attendance-direction', 'regularity', 'attendance-changes']}
+          description={selectionKey && overview ? <>
+            <p>Based on {overview.dataAvailability.availableWeeks} weeks of available attendance history.</p>
             <p>The date range above does not affect these trends.</p>
-            {overview.dataAvailability.standardGatherings > 1 && <p>Attendance at any selected gathering counts once per week.</p>}
-            {overview.dataAvailability.standardGatherings > 0 && overview.dataAvailability.headcountGatherings > 0 && (
-              <p className="text-amber-200">Attendance direction includes all selected gatherings. Person-level results use only the selected standard {overview.dataAvailability.standardGatherings === 1 ? 'gathering' : 'gatherings'}.</p>
-            )}
-          </div>
-        )}
-      </header>
+          </> : undefined}
+        >
+          Long-term trends
+        </ReportPanelSectionHeading>
+      ) : <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-1">
+        <div>
+          <h2 id="long-term-trends-heading" className="text-2xl font-bold text-gray-900 dark:text-gray-100">Long-term trends</h2>
+          {selectionKey && overview && (
+            <div className="mt-2 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+              <p>Based on {overview.dataAvailability.availableWeeks} weeks of available attendance history.</p>
+              <p>The date range above does not affect these trends.</p>
+            </div>
+          )}
+        </div>
+        {updating && overview && <p role="status" className="pt-1 text-sm font-medium text-gray-500 dark:text-gray-400">Updating…</p>}
+      </header>}
 
       {!selectionKey ? (
-        <div className="rounded-xl border border-dashed border-gray-300 bg-white p-6 text-sm text-gray-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300">
+        <ReportPanel id="attendance-direction"><div className="rounded-xl border border-dashed border-gray-300 bg-white p-6 text-sm text-gray-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300">
           Choose one or more gatherings to see long-term trends.
-        </div>
+        </div></ReportPanel>
       ) : !overview && updating ? (
-        <div role="status" className="rounded-xl bg-white p-6 text-sm text-gray-600 shadow-sm dark:bg-gray-800 dark:text-gray-300">Loading long-term trends…</div>
+        <ReportPanel id="attendance-direction"><div role="status" className="rounded-xl bg-white p-6 text-sm text-gray-600 shadow-sm dark:bg-gray-800 dark:text-gray-300">Loading long-term trends…</div></ReportPanel>
       ) : !overview ? (
-        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200">
+        <ReportPanel id="attendance-direction"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200">
           <p>{error || 'Could not load long-term trends.'}</p>
           <button type="button" onClick={() => setRetryGeneration((generation) => generation + 1)} className="mt-3 rounded bg-red-700 px-3 py-2 font-medium text-white hover:bg-red-800">Try again</button>
-        </div>
+        </div></ReportPanel>
       ) : (
         <>
-          {updating && <p role="status" className="text-sm font-medium text-indigo-700 dark:text-indigo-300">Updating…</p>}
           {error && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">{error}</p>}
 
-          <section className="rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="attendance-direction-heading">
+          <div className={embedded ? 'contents' : 'grid items-stretch gap-5 lg:grid-cols-2'}>
+          <ReportPanel id="attendance-direction"><section className="h-full min-w-0 rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="attendance-direction-heading">
             <h3 id="attendance-direction-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Attendance direction</h3>
-            <p className="mt-1 text-sm font-medium text-gray-800 dark:text-gray-200">{directionSummary(overview.direction)}</p>
-            <div className="mt-5 min-h-56"><Line aria-label="Attendance direction chart" data={trendData} /></div>
-            <div className="mt-4 flex flex-wrap gap-2 text-sm">
-              {overview.direction.series.map((series) => <SessionBucketPicker key={series.gatheringTypeId} series={series} onOpen={setSessions} />)}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+              {overview.direction.series.map((series) => {
+                const comparison = series.comparison;
+                return <section key={series.gatheringTypeId} aria-label={`${series.name} attendance trend`} className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                  <h4 className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">{series.name}</h4>
+                  {!comparison ? <p className="text-sm text-gray-500 dark:text-gray-400">Refresh the report to see this gathering’s averages.</p> : <>
+                    <p className={`text-2xl font-semibold tracking-tight ${comparison.status === 'up' ? 'text-emerald-700 dark:text-emerald-300' : comparison.status === 'down' ? 'text-amber-700 dark:text-amber-300' : 'text-gray-900 dark:text-gray-100'}`}>
+                      {comparison.status === 'unavailable' || comparison.percentChange === null ? 'Not enough history'
+                        : comparison.status === 'steady' ? 'Steady'
+                        : `${comparison.status === 'up' ? '↑' : '↓'} ${formatPercent(comparison.percentChange)}%`}
+                    </p>
+                    <p className="sr-only">{directionSummary(comparison)}</p>
+                    <dl className="mt-3 grid grid-cols-2 gap-4">
+                      <div><dt className="text-xs text-gray-500 dark:text-gray-400">Latest {comparison.comparisonWeeks} weeks</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">{comparison.recentAverage === null ? '—' : Math.round(comparison.recentAverage)}<span className="ml-1 text-xs font-normal text-gray-500 dark:text-gray-400">avg.</span></dd></div>
+                      <div><dt className="text-xs text-gray-500 dark:text-gray-400">Previous {comparison.comparisonWeeks} weeks</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">{comparison.previousAverage === null ? '—' : Math.round(comparison.previousAverage)}<span className="ml-1 text-xs font-normal text-gray-500 dark:text-gray-400">avg.</span></dd></div>
+                    </dl>
+                  </>}
+                </section>;
+              })}
             </div>
-          </section>
+            <button type="button" aria-expanded={showHistory} aria-controls="attendance-history-detail" onClick={() => setShowHistory(!showHistory)} className="mt-5 rounded text-sm font-medium text-indigo-700 hover:underline focus-visible:outline focus-visible:outline-2 dark:text-indigo-300">{showHistory ? 'Hide attendance history' : 'View attendance history'}</button>
+          </section></ReportPanel>
+          {showHistory && (
+            <ReportPanelExpansion after="attendance-direction"><section id="attendance-history-detail" aria-label="Attendance history" className="rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800">
+              <div className="h-64 sm:h-72"><Line aria-label="Attendance direction chart" data={trendData} options={historyOptions} /></div>
+            </section></ReportPanelExpansion>
+          )}
 
-          <section className="rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="regularity-heading">
+          <ReportPanel id="regularity"><section className="h-full rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="regularity-heading">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 id="regularity-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Regularity</h3>
@@ -277,66 +362,94 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
               </div>
               {canConfigure && overview.regularity && <button type="button" onClick={() => setShowSettings(true)} className="rounded border border-indigo-600 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 dark:border-indigo-300 dark:text-indigo-300 dark:hover:bg-gray-700">Regularity settings</button>}
             </div>
-            {overview.dataAvailability.unclassifiedBecauseNoEvidence > 0 && (
-              <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
-                {people(overview.dataAvailability.unclassifiedBecauseNoEvidence)} could not be classified because they have no reliable attendance evidence.
-              </p>
-            )}
             {!overview.regularity ? (
               <p className="mt-3 rounded-lg bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">Person-level trends require a standard attendance gathering because headcount gatherings do not identify attendees.</p>
             ) : overview.regularity.population === 0 ? (
               <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">No active regulars are currently assigned to the selected standard gatherings.</p>
             ) : (
-              <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,18rem)_1fr] lg:items-center">
-                <Doughnut aria-label="Regularity chart" data={regularityData} />
+              <div className="mt-5 space-y-4">
+                <div role="img" aria-label="Regularity distribution" className="flex h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+                  {overview.regularity.tiers.map((tier) => <span key={tier.tier} style={{ width: `${tier.rate}%`, backgroundColor: tier.colour }} />)}
+                </div>
                 <div className="space-y-2">
                   {overview.regularity.tiers.map((tier) => (
-                    <button key={tier.tier} type="button" onClick={() => openPeople(tier.peopleToken, `${tier.label} people`, 'regularity')} className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-3 text-left text-gray-900 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700">
+                    <button key={tier.tier} type="button" onClick={() => openPeople(tier.peopleToken, `${tier.label} people`, 'regularity', tier.tier)} className="flex w-full items-center gap-3 rounded-lg border border-gray-200 p-3 text-left text-gray-900 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700">
                       <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: tier.colour }} />
                       <span>{tier.label}: {people(tier.count)} ({formatPercent(tier.rate)}%)</span>
                     </button>
                   ))}
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Each person is counted once. Labels identify every tier without relying on colour.</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Each person with attendance evidence is counted once.</p>
                 </div>
               </div>
             )}
-            {renderPeoplePanel('regularity')}
-          </section>
+          </section></ReportPanel>
+          {peoplePanel?.placement === 'regularity' && (
+            <ReportPanelExpansion after="regularity">
+              {renderPeoplePanel('regularity')}
+            </ReportPanelExpansion>
+          )}
+          </div>
 
-          <section className="rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="declines-heading">
-            <h3 id="declines-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">People attending less often</h3>
-            {!overview.declines ? (
-              <p className="mt-3 rounded-lg bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950/50 dark:text-blue-200">Select a standard attendance gathering to see person-level changes.</p>
-            ) : overview.declines.total === 0 ? (
-              <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">No meaningful recent declines were found in the available history.</p>
+          <ReportPanel id="attendance-changes"><div className="space-y-3"><section className="rounded-xl bg-white p-5 shadow-sm dark:bg-gray-800" aria-labelledby="attendance-changes-heading">
+            <h3 id="attendance-changes-heading" className="text-lg font-semibold text-gray-900 dark:text-gray-100">Attendance changes</h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Notice growing connections and people you may want to check in with.</p>
+            <div role="tablist" aria-label="Attendance changes" className="mt-4 flex gap-1 border-b border-gray-200 dark:border-gray-700">
+              {(['increases', 'declines'] as const).map((tab) => (
+                <button key={tab} type="button" role="tab" id={`attendance-${tab}-tab`} aria-controls="attendance-changes-panel" aria-selected={changeTab === tab} tabIndex={changeTab === tab ? 0 : -1}
+                  onClick={() => selectChangeTab(tab)}
+                  onKeyDown={(event) => {
+                    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                    event.preventDefault();
+                    const next = event.key === 'Home' ? 'increases' : event.key === 'End' ? 'declines' : tab === 'increases' ? 'declines' : 'increases';
+                    selectChangeTab(next);
+                    document.getElementById(`attendance-${next}-tab`)?.focus();
+                  }}
+                  className={`flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${changeTab === tab ? 'border-indigo-600 text-indigo-700 dark:border-indigo-400 dark:text-indigo-300' : 'border-transparent text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'}`}>
+                  {tab === 'increases' ? 'Attending more often' : 'Attending less often'}
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs tabular-nums dark:bg-gray-700">{overview[tab]?.total ?? '—'}</span>
+                </button>
+              ))}
+            </div>
+            <div role="tabpanel" id="attendance-changes-panel" aria-labelledby={`attendance-${changeTab}-tab`} tabIndex={0}>
+            <section aria-label={changeTitle} className="pt-4">
+            {!changes ? (
+              <p className="text-sm text-gray-600 dark:text-gray-300">{overview.dataAvailability.standardGatherings === 0 ? 'Select a standard attendance gathering to see person-level changes.' : 'Refresh this report to load people attending more often.'}</p>
+            ) : changes.total === 0 ? (
+              <p className="text-sm text-gray-600 dark:text-gray-300">No meaningful recent {changeTab === 'increases' ? 'increases' : 'declines'} were found in the available history.</p>
             ) : (
               <>
-                <ul className="mt-4 divide-y divide-gray-200 dark:divide-gray-700">
-                  {overview.declines.rows.slice(0, 10).map((row) => (
-                    <li key={row.individualId} className="py-3">
+                <ul className="grid gap-3 sm:grid-cols-2">
+                  {changes.rows.slice(0, 4).map((row) => (
+                    <li key={`${changeTab}-${row.individualId}`} className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
                       <AttendanceHistoryPopover
                         people={[{ individualId: row.individualId, name: `${row.firstName} ${row.lastName}` }]}
                         gatheringIds={gatheringTypeIds}
                       >
                         <span className="block">
-                          <span className="block font-medium text-gray-900 dark:text-gray-100">{row.firstName} {row.lastName}</span>
-                          <span className="mt-0.5 block text-sm text-gray-600 dark:text-gray-300">{row.summary}</span>
+                          <span className="flex items-start justify-between gap-3">
+                            <span className="font-medium text-gray-900 dark:text-gray-100">{row.firstName} {row.lastName}</span>
+                            <span aria-hidden="true" className={changeTab === 'increases' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{changeTab === 'increases' ? '↗' : '↘'}</span>
+                          </span>
+                          <span className="mt-2 block text-sm leading-relaxed text-gray-600 dark:text-gray-300">{row.summary}</span>
                         </span>
                       </AttendanceHistoryPopover>
                     </li>
                   ))}
                 </ul>
-                {overview.declines.total > overview.declines.rows.length && (
-                  <button type="button" onClick={() => openPeople(overview.declines!.peopleToken, 'People attending less often', 'declines')} className="mt-4 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">View all {overview.declines.total} people</button>
+                {changes.total > Math.min(4, changes.rows.length) && (
+                  <button type="button" onClick={() => openPeople(changes.peopleToken, changeTitle, 'changes', changeTab)} className="mt-4 rounded px-1 py-2 text-sm font-medium text-indigo-700 hover:underline dark:text-indigo-300">View all {changes.total} people</button>
                 )}
               </>
             )}
-            {renderPeoplePanel('declines')}
+            {renderPeoplePanel('changes')}
+            </section>
+            </div>
           </section>
 
           {overview.dataAvailability.excludedWeeks > 0 && (
             <p className="text-xs text-gray-500 dark:text-gray-400">{overview.dataAvailability.excludedWeeks} completed {overview.dataAvailability.excludedWeeks === 1 ? 'week was' : 'weeks were'} excluded from person-level results because reliable attendance evidence was unavailable.</p>
           )}
+          </div></ReportPanel>
         </>
       )}
 
@@ -347,13 +460,6 @@ const LongTermTrends: React.FC<LongTermTrendsProps> = ({ churchId, selectedGathe
             <RegularitySettings settings={overview.settings} onSaved={onSettingsSaved} />
           </div>
         </AccessibleDialog>
-      )}
-      {sessions && overview && (
-        <EngagementDrilldown
-          token={sessions.token}
-          title={sessions.title}
-          onClose={() => setSessions(null)}
-        />
       )}
     </section>
   );

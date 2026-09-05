@@ -18,7 +18,7 @@ const {
 const TIER_KEYS = Object.freeze(['core', 'casual', 'irregular']);
 const MAXIMUM_WEEKS = 52;
 const COMPARISON_WEEKS = 12;
-const RECENT_DECLINE_WEEKS = 8;
+const RECENT_CHANGE_WEEKS = 8;
 const MINIMUM_BASELINE_OPPORTUNITIES = 8;
 const MINIMUM_RECENT_OPPORTUNITIES = 4;
 const PREVIEW_LIMIT = 10;
@@ -137,6 +137,22 @@ async function loadContextualSource(churchId, gatheringTypeIds, window) {
          AND s.gathering_type_id IN (${inClause})
          AND s.session_date >= ?
          AND s.session_date <= ?
+         AND (
+           (gt.attendance_type = 'standard' AND EXISTS (
+             SELECT 1
+             FROM attendance_records report_ar
+             WHERE report_ar.session_id = s.id
+               AND report_ar.church_id = s.church_id
+               AND report_ar.present = 1
+           ))
+           OR (gt.attendance_type = 'headcount' AND EXISTS (
+             SELECT 1
+             FROM headcount_records report_hr
+             WHERE report_hr.session_id = s.id
+               AND report_hr.church_id = s.church_id
+               AND report_hr.headcount > 0
+           ))
+         )
        ORDER BY s.session_date, s.id`,
       [churchId, churchId, ...gatheringTypeIds, window.startDate, window.endDate],
     ),
@@ -191,8 +207,8 @@ function mondayFor(date) {
   return addDateOnly(date, { days: -daysSinceMonday });
 }
 
-function isHeld(session) {
-  return session.sessionStatus === 'held' && Number(session.excludedFromStats) !== 1;
+function isReportableSession(session) {
+  return session.sessionStatus !== 'cancelled' && Number(session.excludedFromStats) !== 1;
 }
 
 function provenanceFor(session) {
@@ -244,7 +260,7 @@ function buildEvidence(source, settings) {
   const populationIds = new Set(source.people.map(({ id }) => Number(id)));
   const recordsBySession = groupedBy(source.records, (record) => Number(record.sessionId));
   const standardHeld = source.sessions.filter(
-    (session) => session.attendanceType === 'standard' && isHeld(session),
+    (session) => session.attendanceType === 'standard' && isReportableSession(session),
   );
   const sessionsByWeek = groupedBy(standardHeld, (session) => mondayFor(session.sessionDate));
   const validWeeks = [];
@@ -397,7 +413,26 @@ function directionStatus(previous, recent) {
 
 function buildDirection({ churchId, gatheringTypeIds, gatherings, source, window, expiresAt }) {
   const facts = buildSessionFacts(source);
-  const heldSessions = source.sessions.filter(isHeld);
+  const heldSessions = source.sessions.filter(isReportableSession);
+  const recentStart = addDateOnly(window.endDate, { days: -83 });
+  const previousEnd = addDateOnly(recentStart, { days: -1 });
+  const previousStart = addDateOnly(previousEnd, { days: -83 });
+  const compareSessions = (sessions) => {
+    const previousSessions = sessions.filter(
+      (session) => session.sessionDate >= previousStart && session.sessionDate <= previousEnd,
+    );
+    const recentSessions = sessions.filter(
+      (session) => session.sessionDate >= recentStart && session.sessionDate <= window.endDate,
+    );
+    const previous = sessionSummary(previousSessions, facts);
+    const recent = sessionSummary(recentSessions, facts);
+    return {
+      comparisonWeeks: COMPARISON_WEEKS,
+      previousAverage: previous.average === null ? null : rounded(previous.average),
+      recentAverage: recent.average === null ? null : rounded(recent.average),
+      ...directionStatus(previous, recent),
+    };
+  };
   const series = gatherings.map((gathering) => {
     const gatheringSessions = heldSessions.filter(
       (session) => Number(session.gatheringTypeId) === gathering.id,
@@ -429,28 +464,12 @@ function buildDirection({ churchId, gatheringTypeIds, gatherings, source, window
       gatheringTypeId: gathering.id,
       name: gathering.name,
       attendanceType: gathering.attendanceType,
+      comparison: compareSessions(gatheringSessions),
       buckets,
     };
   });
 
-  const recentStart = addDateOnly(window.endDate, { days: -83 });
-  const previousEnd = addDateOnly(recentStart, { days: -1 });
-  const previousStart = addDateOnly(previousEnd, { days: -83 });
-  const previousSessions = heldSessions.filter(
-    (session) => session.sessionDate >= previousStart && session.sessionDate <= previousEnd,
-  );
-  const recentSessions = heldSessions.filter(
-    (session) => session.sessionDate >= recentStart && session.sessionDate <= window.endDate,
-  );
-  const previous = sessionSummary(previousSessions, facts);
-  const recent = sessionSummary(recentSessions, facts);
-  return {
-    comparisonWeeks: COMPARISON_WEEKS,
-    previousAverage: previous.average === null ? null : rounded(previous.average),
-    recentAverage: recent.average === null ? null : rounded(recent.average),
-    ...directionStatus(previous, recent),
-    series,
-  };
+  return { ...compareSessions(heldSessions), series };
 }
 
 function gcd(left, right) {
@@ -469,7 +488,7 @@ function declineSummary(baseline, recent) {
   return `Usually attends ${usualAttended} ${usualUnit} in ${usualOpportunities}; attended ${recent.attendedWeeks} of the last ${recent.opportunityWeeks} ${recentUnit}.`;
 }
 
-function publicDecline(candidate) {
+function publicAttendanceChange(candidate) {
   return {
     individualId: candidate.individualId,
     firstName: candidate.firstName,
@@ -484,13 +503,14 @@ function compareNames(left, right) {
   return compareTierKey(tierSortKey(left), tierSortKey(right));
 }
 
-function compareDeclines(left, right) {
-  return compareDeclineKey(declineSortKey(left), declineSortKey(right));
+function compareChanges(left, right) {
+  return compareChangeKey(changeSortKey(left), changeSortKey(right));
 }
 
-function buildDeclineCandidates(evidence, settings) {
-  const recentWeeks = new Set(evidence.validWeeks.slice(-RECENT_DECLINE_WEEKS));
-  const baselineWeeks = new Set(evidence.validWeeks.slice(0, -RECENT_DECLINE_WEEKS));
+function buildChangeCandidates(evidence, settings, direction) {
+  const sign = direction === 'increase' ? -1 : 1;
+  const recentWeeks = new Set(evidence.validWeeks.slice(-RECENT_CHANGE_WEEKS));
+  const baselineWeeks = new Set(evidence.validWeeks.slice(0, -RECENT_CHANGE_WEEKS));
   const candidates = [];
   for (const profile of evidence.profiles) {
     const baselineFacts = profile.facts.filter(({ weekStart }) => baselineWeeks.has(weekStart));
@@ -503,15 +523,15 @@ function buildDeclineCandidates(evidence, settings) {
     const recentRate = recentAttended / recentFacts.length;
     const baselineTier = contextualTier(baselineRate, settings);
     const recentTier = contextualTier(recentRate, settings);
-    const tierDrop = TIER_RANK[baselineTier] - TIER_RANK[recentTier];
-    const percentagePointDrop = (baselineRate - recentRate) * 100;
+    const tierChange = sign * (TIER_RANK[baselineTier] - TIER_RANK[recentTier]);
+    const percentagePointChange = sign * (baselineRate - recentRate) * 100;
     // Twenty percentage points is exactly one fifth. Compare the original
     // integer evidence as fractions so equality survives floating point.
-    const declineNumerator = (baselineAttended * recentFacts.length)
-      - (recentAttended * baselineFacts.length);
-    const meetsMinimumDecline = declineNumerator * 5
+    const changeNumerator = sign * ((baselineAttended * recentFacts.length)
+      - (recentAttended * baselineFacts.length));
+    const meetsMinimumChange = changeNumerator * 5
       >= baselineFacts.length * recentFacts.length;
-    if (tierDrop <= 0 || !meetsMinimumDecline) continue;
+    if (tierChange <= 0 || !meetsMinimumChange) continue;
     const baseline = {
       attendedWeeks: baselineAttended,
       opportunityWeeks: baselineFacts.length,
@@ -527,17 +547,18 @@ function buildDeclineCandidates(evidence, settings) {
       firstName: profile.firstName,
       lastName: profile.lastName,
       familyId: profile.familyId,
-      tierDrop,
-      percentagePointDrop: rounded(percentagePointDrop),
-      sortPercentagePointDrop: percentagePointDrop,
+      tierChange,
+      sortPercentagePointChange: percentagePointChange,
       baselineTier,
       recentTier,
       baseline,
       recent,
-      summary: declineSummary(baseline, recent),
+      summary: direction === 'increase'
+        ? `Previously attended ${baseline.attendedWeeks} of ${baseline.opportunityWeeks} weeks; attended ${recent.attendedWeeks} of the last ${recent.opportunityWeeks} weeks.`
+        : declineSummary(baseline, recent),
     });
   }
-  return candidates.sort(compareDeclines);
+  return candidates.sort(compareChanges);
 }
 
 function contextualSettings(settings) {
@@ -582,11 +603,13 @@ function buildRegularity({
 }
 
 function availableWeeks(source) {
-  return new Set(source.sessions.filter(isHeld).map((session) => mondayFor(session.sessionDate))).size;
+  return new Set(source.sessions.filter(isReportableSession)
+    .map((session) => mondayFor(session.sessionDate))).size;
 }
 
 function availableSessionRange(source) {
-  const dates = source.sessions.filter(isHeld).map((session) => session.sessionDate).sort();
+  const dates = source.sessions.filter(isReportableSession)
+    .map((session) => session.sessionDate).sort();
   return {
     firstSessionDate: dates[0] ?? null,
     lastSessionDate: dates.at(-1) ?? null,
@@ -610,7 +633,8 @@ async function buildState(churchId, gatheringTypeIds, { completedWeekEnd, asOf }
   ]);
   const settings = contextualSettings(rawSettings);
   const evidence = buildEvidence(source, settings);
-  const declineCandidates = buildDeclineCandidates(evidence, settings);
+  const declineCandidates = buildChangeCandidates(evidence, settings, 'decline');
+  const increaseCandidates = buildChangeCandidates(evidence, settings, 'increase');
   return {
     churchId,
     gatheringTypeIds: ids,
@@ -620,6 +644,7 @@ async function buildState(churchId, gatheringTypeIds, { completedWeekEnd, asOf }
     source,
     evidence,
     declineCandidates,
+    increaseCandidates,
   };
 }
 
@@ -643,12 +668,25 @@ async function buildContextualLongTermOverview(churchId, gatheringTypeIds, optio
   }) : null;
   const declines = hasStandard ? {
     total: state.declineCandidates.length,
-    rows: state.declineCandidates.slice(0, PREVIEW_LIMIT).map(publicDecline),
+    rows: state.declineCandidates.slice(0, PREVIEW_LIMIT).map(publicAttendanceChange),
     peopleToken: issueToken({
       churchId,
       kind: 'people',
       gatheringTypeIds: state.gatheringTypeIds,
       selector: { type: 'decline' },
+      completedWeekEnd: state.window.completedWeekEnd,
+      expiresAt,
+    }),
+  } : null;
+
+  const increases = hasStandard ? {
+    total: state.increaseCandidates.length,
+    rows: state.increaseCandidates.slice(0, PREVIEW_LIMIT).map(publicAttendanceChange),
+    peopleToken: issueToken({
+      churchId,
+      kind: 'people',
+      gatheringTypeIds: state.gatheringTypeIds,
+      selector: { type: 'increase' },
       completedWeekEnd: state.window.completedWeekEnd,
       expiresAt,
     }),
@@ -681,6 +719,7 @@ async function buildContextualLongTermOverview(churchId, gatheringTypeIds, optio
     }),
     regularity,
     declines,
+    increases,
   };
 }
 
@@ -737,7 +776,7 @@ function tierRow(profile) {
 }
 
 function declineRow(candidate) {
-  return { rowType: 'contextual_decline', ...publicDecline(candidate) };
+  return { rowType: 'contextual_decline', ...publicAttendanceChange(candidate) };
 }
 
 function tierSortKey(profile) {
@@ -748,10 +787,11 @@ function tierSortKey(profile) {
   };
 }
 
-function declineSortKey(candidate) {
+function changeSortKey(candidate) {
   return {
-    tierDrop: candidate.tierDrop,
-    percentagePointDrop: candidate.sortPercentagePointDrop,
+    // Retain cursor keys so existing decline tokens keep working.
+    tierDrop: candidate.tierChange,
+    percentagePointDrop: candidate.sortPercentagePointChange,
     sortLast: String(candidate.lastName || '').toLocaleLowerCase('en'),
     sortFirst: String(candidate.firstName || '').toLocaleLowerCase('en'),
     individualId: candidate.individualId,
@@ -764,7 +804,7 @@ function compareTierKey(left, right) {
     || left.individualId - right.individualId;
 }
 
-function compareDeclineKey(left, right) {
+function compareChangeKey(left, right) {
   return right.tierDrop - left.tierDrop
     || right.percentagePointDrop - left.percentagePointDrop
     || left.sortLast.localeCompare(right.sortLast, 'en')
@@ -778,6 +818,7 @@ function afterKey(value, after, comparison) {
 
 function validPeopleSelector(selector) {
   return selector?.type === 'decline'
+    || selector?.type === 'increase'
     || (selector?.type === 'tier' && TIER_KEYS.includes(selector.tier));
 }
 
@@ -800,10 +841,12 @@ async function listContextualPeople(churchId, { segment, cursor, limit } = {}) {
     compare = compareTierKey;
     publicRow = tierRow;
   } else {
-    values = [...state.declineCandidates];
-    keyFor = declineSortKey;
-    compare = compareDeclineKey;
-    publicRow = declineRow;
+    values = selector.type === 'increase' ? [...state.increaseCandidates] : [...state.declineCandidates];
+    keyFor = changeSortKey;
+    compare = compareChangeKey;
+    publicRow = selector.type === 'increase'
+      ? (candidate) => ({ rowType: 'contextual_increase', ...publicAttendanceChange(candidate) })
+      : declineRow;
   }
 
   if (cursor) {
@@ -872,7 +915,7 @@ async function listContextualSessions(churchId, { series, cursor, limit } = {}) 
   });
   const startDate = addDateOnly(state.window.startDate, { days: selector.bucketIndex * 28 });
   const endDate = addDateOnly(startDate, { days: 27 });
-  let sessions = state.source.sessions.filter((session) => isHeld(session)
+  let sessions = state.source.sessions.filter((session) => isReportableSession(session)
     && Number(session.gatheringTypeId) === Number(selector.gatheringTypeId)
     && session.sessionDate >= startDate
     && session.sessionDate <= endDate)

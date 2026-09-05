@@ -69,6 +69,24 @@ async function seedRoster(churchId, people) {
     }
   }
 
+  // Keep every synthetic gathering genuinely attended even when all regulars
+  // in a scenario are absent; zero-attendance services are not report input.
+  const marker = await query(
+    `INSERT INTO individuals
+       (first_name, last_name, people_type, is_active, church_id)
+     VALUES ('Session', 'Marker', 'local_visitor', 1, ?)`,
+    [churchId],
+  );
+  for (const sessionId of [...sessions.primary, ...sessions.community]) {
+    await query(
+      `INSERT INTO attendance_records
+         (session_id, individual_id, present, eligible_at_snapshot,
+          people_type_at_time, church_id)
+       VALUES (?, ?, 1, 0, 'local_visitor', ?)`,
+      [sessionId, marker.insertId, churchId],
+    );
+  }
+
   const seeded = [];
   for (const [index, person] of people.entries()) {
     const inserted = await query(

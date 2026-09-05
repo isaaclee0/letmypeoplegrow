@@ -280,7 +280,11 @@ async function seedOverviewFixture(churchId) {
   const standardSessions = [];
   for (let index = 0; index < dates.length; index += 1) {
     const sessionId = await insertSession(
-      churchId, user.insertId, primary.insertId, dates[index],
+      churchId,
+      user.insertId,
+      primary.insertId,
+      dates[index],
+      { sessionStatus: index === 0 ? 'open' : 'held' },
     );
     standardSessions.push(sessionId);
     for (let personIndex = 0; personIndex < regulars.length; personIndex += 1) {
@@ -337,6 +341,30 @@ async function seedOverviewFixture(churchId) {
       [headcountSession, count, counter.insertId, churchId],
     );
   }
+
+  // A session row can exist without the gathering having any attendees. Reports
+  // must not treat those rows as held services or attendance opportunities.
+  const emptyStandardSession = await insertSession(
+    churchId,
+    user.insertId,
+    primary.insertId,
+    '2026-08-15',
+  );
+  for (const id of regulars) {
+    await insertAttendance(churchId, emptyStandardSession, id, 0, 'regular');
+  }
+  const emptyHeadcountSession = await insertSession(
+    churchId,
+    user.insertId,
+    headcount.insertId,
+    '2026-08-15',
+    { rosterSnapshotted: 0, rosterProvenanceVersion: 0 },
+  );
+  await Database.query(
+    `INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
+     VALUES (?, 0, ?, ?)`,
+    [emptyHeadcountSession, user.insertId, churchId],
+  );
 
   return { regulars, localReturn, converted, headcountSession };
 }

@@ -534,8 +534,8 @@ const AiInsightsPage: React.FC = () => {
                     }}
                     className={`group relative p-3 mb-1 rounded-md cursor-pointer transition-colors ${
                       currentConversationId === conv.id
-                        ? 'bg-purple-50 border border-purple-200'
-                        : 'hover:bg-gray-50 border border-transparent'
+                        ? 'bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 border border-transparent'
                     }`}
                   >
                     <div className="flex items-start justify-between">

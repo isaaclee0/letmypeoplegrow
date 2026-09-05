@@ -88,6 +88,22 @@ async function loadOpportunitySource(churchId, window) {
        WHERE s.church_id = ?
          AND s.session_date >= ?
          AND s.session_date <= ?
+         AND (
+           (gt.attendance_type = 'standard' AND EXISTS (
+             SELECT 1
+             FROM attendance_records report_ar
+             WHERE report_ar.session_id = s.id
+               AND report_ar.church_id = s.church_id
+               AND report_ar.present = 1
+           ))
+           OR (gt.attendance_type = 'headcount' AND EXISTS (
+             SELECT 1
+             FROM headcount_records report_hr
+             WHERE report_hr.session_id = s.id
+               AND report_hr.church_id = s.church_id
+               AND report_hr.headcount > 0
+           ))
+         )
        ORDER BY s.session_date, s.id`,
       [churchId, churchId, window.sourceStart, window.sourceEnd],
     ),
@@ -132,7 +148,7 @@ function isCurrentActiveRegular(person) {
 function isIncludedSession(session, start, end) {
   return session?.attendanceType === 'standard'
     && PERSON_LEVEL_ROLES.has(session.engagementRole)
-    && session.sessionStatus === 'held'
+    && session.sessionStatus !== 'cancelled'
     && Number(session.excludedFromStats) !== 1
     && typeof session.sessionDate === 'string'
     && session.sessionDate >= start

@@ -12,7 +12,6 @@ import PeopleImportDialog from '../components/peopleImport/PeopleImportDialog';
 import MergeModal from '../components/people/MergeModal';
 import NotesModal from '../components/people/NotesModal';
 import AttendanceHistoryModal from '../components/people/AttendanceHistoryModal';
-import DataSecurityInfo from '../components/people/DataSecurityInfo';
 import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { authorityLabel, isAuthorityLocked } from '../utils/authorityLock';
@@ -1435,67 +1434,41 @@ const PeoplePage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-32">
+    <div className="space-y-4 pb-32">
       <SampleDataBanner />
       {/* Header */}
-      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                Manage People
-              </h1>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Add, edit, and organize people and families
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              {isAdmin && (authorityProvider === 'none' || !peopleEditingLocked) && (
-                <button
-                  type="button"
-                  onClick={() => setShowPeopleImport(true)}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-                >
-                  Import people
-                </button>
-              )}
-              {people.length > 0 && (
-                <button
-                  onClick={downloadPeopleTSV}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-                >
-                  <DocumentTextIcon className="h-4 w-4 mr-2" />
-                  Export People
-                </button>
-              )}
-            </div>
+      <div className="px-1">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              Manage People
+            </h1>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              Add, edit, and organize people and families
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdmin && (authorityProvider === 'none' || !peopleEditingLocked) && (
+              <button
+                type="button"
+                onClick={() => setShowPeopleImport(true)}
+                className="inline-flex h-10 items-center px-4 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900/50 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors"
+              >
+                Import people
+              </button>
+            )}
+            {people.length > 0 && (
+              <button
+                onClick={downloadPeopleTSV}
+                className="inline-flex h-10 items-center px-4 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900/50 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors"
+              >
+                <DocumentTextIcon className="mr-2 h-4 w-4" />
+                Export People
+              </button>
+            )}
           </div>
         </div>
       </div>
-
-      {/* Data Security Information */}
-      <DataSecurityInfo />
-
-      {/* Gathering Legend */}
-      {gatheringTypes.length > 0 && (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-          <div className="px-4 py-3 sm:px-6">
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Gathering Assignments</h3>
-            <div className="flex flex-wrap gap-x-3 gap-y-6">
-              {gatheringTypes
-                .filter(gathering => gathering.attendanceType !== 'headcount')
-                .map((gathering) => (
-                  <div key={gathering.id} className="flex items-center space-x-2">
-                    <div className={`w-3 h-3 rounded-full ${getGatheringColor(gathering.id)}`}></div>
-                    <span className="text-sm text-gray-600 dark:text-gray-400">{gathering.name}</span>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      
 
       {/* Removed individual person editor modal - now using mass edit modal for all edits */}
 
@@ -1712,172 +1685,187 @@ const PeoplePage: React.FC = () => {
       )}
 
       {/* Filters */}
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className={`grid grid-cols-1 gap-4 ${authorityProvider === 'none' ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
-            {/* Search - only show when there are people to search */}
-            {people.length > 0 && (
-            <div>
-              <label htmlFor="search" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Search People
-              </label>
-              <div className="mt-1 relative">
-                <input
-                  type="text"
-                  id="search"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="Search by name, email, or family..."
-                />
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+      <div className="border-b border-gray-200 px-1 pb-4 dark:border-gray-700">
+          <div className="flex flex-wrap items-end gap-4 xl:flex-nowrap">
+              {gatheringTypes.length > 0 && (
+                <div className="min-w-[18rem] flex-1 xl:w-[25rem] xl:min-w-[25rem] xl:flex-none">
+                  <span className="block text-xs font-medium text-gray-600 dark:text-gray-300">Gathering Assignments</span>
+            <div className="mt-1.5 flex min-h-10 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-gray-600 dark:text-gray-400 xl:h-10 xl:flex-nowrap xl:overflow-hidden xl:text-xs">
+                    {gatheringTypes
+                      .filter(gathering => gathering.attendanceType !== 'headcount')
+                      .map((gathering) => (
+                        <div key={gathering.id} className="flex shrink-0 items-center space-x-2">
+                          <div className={`h-3 w-3 rounded-full ${getGatheringColor(gathering.id)}`}></div>
+                          <span>{gathering.name}</span>
+                        </div>
+                      ))}
+                  </div>
                 </div>
-                {searchTerm && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchTerm('')}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                    aria-label="Clear search"
-                  >
-                    <XMarkIcon className="h-5 w-5" />
-                  </button>
-                )}
-              </div>
-            </div>
-            )}
+              )}
 
-            {/* Family Filter */}
-            <div>
-              <label htmlFor="gatheringFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Filter by Gathering
-              </label>
-              <select
-                id="gatheringFilter"
-                value={selectedGathering || ''}
-                onChange={(e) => setSelectedGathering(e.target.value ? parseInt(e.target.value) : null)}
-                className="mt-1 block w-full py-2 pl-3 pr-10 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-              >
-                <option value="">All Gatherings</option>
-                {gatheringTypes
-                  .filter(gathering => gathering.attendanceType !== 'headcount')
-                  .map((gathering) => (
-                    <option key={gathering.id} value={gathering.id}>
-                      {gathering.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            {authorityProvider !== 'none' && (
-              <div>
-                <label htmlFor="externalSourceFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {authorityLabel(authorityProvider)} Link Status
+              {/* Family Filter */}
+              <div className="min-w-[12rem] flex-1 xl:flex-none">
+                <label htmlFor="gatheringFilter" className="block text-xs font-medium text-gray-600 dark:text-gray-300">
+                  Gathering
                 </label>
                 <select
-                  id="externalSourceFilter"
-                  value={externalSourceFilter}
-                  onChange={(event) => setExternalSourceFilter(event.target.value as 'all' | 'linked' | 'unlinked')}
-                  className="mt-1 block w-full py-2 pl-3 pr-10 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                  id="gatheringFilter"
+                  value={selectedGathering || ''}
+                  onChange={(e) => setSelectedGathering(e.target.value ? parseInt(e.target.value) : null)}
+                  className="mt-1.5 block h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-center text-sm font-medium text-gray-900 shadow-sm hover:bg-gray-50 focus:border-primary-500 focus:outline-none focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-900/50 dark:text-gray-100 dark:hover:bg-gray-700"
                 >
-                  <option value="all">All</option>
-                  <option value="linked">Linked</option>
-                  <option value="unlinked">Not linked</option>
+                  <option value="">All Gatherings</option>
+                  {gatheringTypes
+                    .filter(gathering => gathering.attendanceType !== 'headcount')
+                    .map((gathering) => (
+                      <option key={gathering.id} value={gathering.id}>
+                        {gathering.name}
+                      </option>
+                    ))}
                 </select>
               </div>
-            )}
+
+              {authorityProvider !== 'none' && (
+                <div className="min-w-[10rem] flex-1 xl:flex-none">
+                  <label htmlFor="externalSourceFilter" className="block text-xs font-medium text-gray-600 dark:text-gray-300">
+                    {authorityLabel(authorityProvider)} Link Status
+                  </label>
+                  <select
+                    id="externalSourceFilter"
+                    value={externalSourceFilter}
+                    onChange={(event) => setExternalSourceFilter(event.target.value as 'all' | 'linked' | 'unlinked')}
+                    className="mt-1.5 block h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-center text-sm font-medium text-gray-900 shadow-sm hover:bg-gray-50 focus:border-primary-500 focus:outline-none focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-900/50 dark:text-gray-100 dark:hover:bg-gray-700"
+                  >
+                    <option value="all">All</option>
+                    <option value="linked">Linked</option>
+                    <option value="unlinked">Not linked</option>
+                  </select>
+                </div>
+              )}
           </div>
           
-          {/* View, badge, and age filters */}
+          {/* Search and display filters */}
           <div
-            className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-x-4 gap-y-3"
+            className="mt-4 flex flex-wrap items-end gap-4 border-t border-gray-200 pt-4 dark:border-gray-700 xl:flex-nowrap"
             role="group"
             aria-label="People display filters"
           >
+            {people.length > 0 && (
+              <div className="min-w-[14rem] flex-1">
+                <label htmlFor="search" className="block text-xs font-medium text-gray-600 dark:text-gray-300">
+                  Search People
+                </label>
+                <div className="relative mt-1.5">
+                  <input
+                    type="text"
+                    id="search"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="block h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-10 pr-10 text-sm text-gray-900 placeholder-gray-500 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-900/50 dark:text-gray-100 dark:placeholder-gray-300"
+                    placeholder="Search by name, email, or family..."
+                  />
+                  <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                    <MagnifyingGlassIcon className="h-5 w-5 text-gray-400 dark:text-gray-300" />
+                  </div>
+                  {searchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchTerm('')}
+                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-white"
+                      aria-label="Clear search"
+                    >
+                      <XMarkIcon className="h-5 w-5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             <div
-              className="inline-flex items-center justify-self-center sm:justify-self-start space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
-              role="group"
-              aria-label="View people as"
+              className="flex flex-col items-start gap-1.5"
             >
-              {(['families', 'individuals'] as const).map((value) => {
-                const selected = value === 'families' ? groupByFamily : !groupByFamily;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => {
-                      setGroupByFamily(value === 'families');
-                      setSelectedPeople([]);
-                    }}
-                    className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                      selected
-                        ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
-                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                    }`}
-                  >
-                    {value === 'families' ? 'Families' : 'Individuals'}
-                  </button>
-                );
-              })}
-            </div>
-            {showBadgeFilters ? (
-              <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label="Filter by badge">
-                {usedBadgeOptions.map((badge) => {
-                  const selected = selectedBadgeKeySet.has(badge.key);
+              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">View</span>
+              <div className="inline-flex items-center space-x-1 rounded-lg border border-gray-300 bg-transparent p-0.5 shadow-none dark:border-gray-600 dark:bg-gray-900/50 dark:shadow-sm" role="group" aria-label="View people as">
+                {(['families', 'individuals'] as const).map((value) => {
+                  const selected = value === 'families' ? groupByFamily : !groupByFamily;
                   return (
                     <button
-                      key={badge.key}
+                      key={value}
                       type="button"
-                      aria-label={`Filter by badge: ${badge.helperText}`}
                       aria-pressed={selected}
-                      title={badge.helperText}
-                      onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
-                        ? current.filter((key) => key !== badge.key)
-                        : [...current, badge.key])}
-                      className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
+                      onClick={() => {
+                        setGroupByFamily(value === 'families');
+                        setSelectedPeople([]);
+                      }}
+                      className={`rounded-md border px-3 py-1 text-sm font-medium transition-colors ${
                         selected
-                          ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
-                          : 'hover:scale-110'
+                          ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
+                          : 'border-gray-200 bg-gray-50 text-gray-700 shadow-sm hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-700 dark:hover:text-white'
                       }`}
-                      style={{ backgroundColor: badge.backgroundColor, color: badge.color }}
                     >
-                      {badge.icon && (
-                        <BadgeIcon type={badge.icon as BadgeIconType} className="h-4 w-4" />
-                      )}
+                      {value === 'families' ? 'Families' : 'Individuals'}
                     </button>
                   );
                 })}
               </div>
-            ) : (
-              <div aria-hidden="true" />
+            </div>
+            {showBadgeFilters && (
+              <div className="flex flex-col items-start gap-1.5">
+                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Badges</span>
+                <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by badge">
+                  {usedBadgeOptions.map((badge) => {
+                    const selected = selectedBadgeKeySet.has(badge.key);
+                    return (
+                      <button
+                        key={badge.key}
+                        type="button"
+                        aria-label={`Filter by badge: ${badge.helperText}`}
+                        aria-pressed={selected}
+                        title={badge.helperText}
+                        onClick={() => setSelectedBadgeKeys((current) => current.includes(badge.key)
+                          ? current.filter((key) => key !== badge.key)
+                          : [...current, badge.key])}
+                        className={`${badge.icon ? 'h-7 w-7' : 'h-5 w-9'} inline-flex shrink-0 items-center justify-center rounded-full shadow-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 ${
+                          selected
+                            ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-800'
+                            : 'ring-1 ring-gray-300 dark:ring-gray-500 hover:scale-105 hover:ring-gray-400 dark:hover:ring-gray-300'
+                        }`}
+                        style={{ backgroundColor: badge.backgroundColor, color: badge.color }}
+                      >
+                        {badge.icon && (
+                          <BadgeIcon type={badge.icon as BadgeIconType} className="h-4 w-4" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
             <div
-              className="inline-flex items-center justify-self-center sm:justify-self-end space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5"
-              role="group"
-              aria-label="Filter by age"
+              className="flex flex-col items-start gap-1.5"
             >
-              {(['all', 'adult', 'child'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={ageFilter === value}
-                  onClick={() => setAgeFilter(value)}
-                  className={`flex items-center space-x-1.5 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                    ageFilter === value
-                      ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-                  }`}
-                >
-                  {value === 'child' && badgeConfig.child.defaultIcon && (
-                    <BadgeIcon type={badgeConfig.child.defaultIcon as BadgeIconType} className="w-4 h-4" />
-                  )}
-                  <span>{value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}</span>
-                </button>
-              ))}
+              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Age</span>
+              <div className="inline-flex items-center space-x-1 rounded-lg border border-gray-300 bg-transparent p-0.5 shadow-none dark:border-gray-600 dark:bg-gray-900/50 dark:shadow-sm" role="group" aria-label="Filter by age">
+                {(['all', 'adult', 'child'] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={ageFilter === value}
+                    onClick={() => setAgeFilter(value)}
+                    className={`flex items-center space-x-1.5 rounded-md border px-3 py-1 text-sm font-medium transition-colors ${
+                      ageFilter === value
+                        ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
+                        : 'border-gray-200 bg-gray-50 text-gray-700 shadow-sm hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:bg-gray-700/80 dark:text-gray-200 dark:hover:bg-gray-700 dark:hover:text-white'
+                    }`}
+                  >
+                    {value === 'child' && badgeConfig.child.defaultIcon && (
+                      <BadgeIcon type={badgeConfig.child.defaultIcon as BadgeIconType} className="h-4 w-4" />
+                    )}
+                    <span>{value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
       </div>
 
       {/* People List - Grouped by Family */}
@@ -2128,7 +2116,7 @@ const PeoplePage: React.FC = () => {
               {/* Recent Visitors (configurable week-based filtering from last weekend) */}
               {recentVisitorGroups.length > 0 && (
                 <>
-                  <h4 className="text-md font-medium text-gray-800">Recent (attended within configured weeks from last weekend)</h4>
+                  <h4 className="text-md font-medium text-gray-800 dark:text-gray-200">Recent (attended within configured weeks from last weekend)</h4>
                   {groupByFamily ? (
                     // Grouped by family view
                     <div className="space-y-4">
@@ -2315,7 +2303,7 @@ const PeoplePage: React.FC = () => {
               {olderVisitorGroups.length > 0 && (
                 <div className="mt-6">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-md font-medium text-gray-800">Infrequent</h4>
+                    <h4 className="text-md font-medium text-gray-800 dark:text-gray-200">Infrequent</h4>
                     <button
                       type="button"
                       onClick={() => setShowArchivedVisitors(v => !v)}
@@ -2446,8 +2434,8 @@ const PeoplePage: React.FC = () => {
                                 key={person.id}
                                 className={`p-2 rounded-md border border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
                                   selectedPeople.includes(person.id)
-                                    ? 'border-primary-500 bg-primary-50'
-                                    : 'hover:bg-gray-50'
+                                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                                    : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                                 } ${needsWideLayout ? 'col-span-2' : ''}`}
                                 onClick={() => togglePersonSelection(person.id)}
                               >
@@ -3041,7 +3029,7 @@ const PeoplePage: React.FC = () => {
            </button>
            {people.length === 0 && (
              <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">
-               <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 h-14 flex items-center justify-center text-primary-800 animate-slide-right mr-2">
+               <div className="bg-white/90 dark:bg-gray-800/95 backdrop-blur rounded-lg shadow-lg dark:shadow-none border border-primary-200 dark:border-primary-700 px-4 h-14 flex items-center justify-center text-primary-800 dark:text-primary-200 animate-slide-right mr-2">
                  <p className="text-base font-semibold whitespace-nowrap">Add People Here</p>
                </div>
              </div>

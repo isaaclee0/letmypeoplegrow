@@ -78,3 +78,41 @@ describe('EngagementPeoplePanel contextual declines', () => {
     expect(within(panel).getByRole('columnheader', { name: 'Recent attendance' })).toBeInTheDocument();
   });
 });
+
+describe('EngagementPeoplePanel contextual regularity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  it('uses a responsive three-column people grid and retains attendance sorting', async () => {
+    vi.mocked(reportsAPI.getEngagementPeople).mockResolvedValue({ data: { rows: [
+      { rowType: 'contextual_regularity', individualId: 1, firstName: 'Amy', lastName: 'Able', familyId: null, rate: 25, evidence: { attendedWeeks: 1, opportunityWeeks: 4 } },
+      { rowType: 'contextual_regularity', individualId: 2, firstName: 'Zoe', lastName: 'Zulu', familyId: null, rate: 75, evidence: { attendedWeeks: 3, opportunityWeeks: 4 } },
+      { rowType: 'contextual_regularity', individualId: 3, firstName: 'Ben', lastName: 'Baker', familyId: null, rate: 50, evidence: { attendedWeeks: 2, opportunityWeeks: 4 } },
+    ], nextCursor: null } } as never);
+
+    render(<EngagementPeoplePanel token="core" title="Core people" onClose={vi.fn()} />);
+
+    const panel = await screen.findByRole('region', { name: 'Core people' });
+    const people = within(panel).getByRole('list', { name: 'People' });
+    expect(panel).toHaveClass('dark:bg-gray-800');
+    expect(people).toHaveClass('grid-cols-1', 'md:grid-cols-2', 'xl:grid-cols-3');
+    expect(within(people).getAllByRole('listitem')[0]).toHaveClass('dark:bg-gray-700/60', 'dark:border-gray-600');
+    expect(within(people).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Amy Able1 of 4 weeks (25%)',
+      'Zoe Zulu3 of 4 weeks (75%)',
+      'Ben Baker2 of 4 weeks (50%)',
+    ]);
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sort by attendance descending' }));
+    expect(within(people).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Zoe Zulu3 of 4 weeks (75%)',
+      'Ben Baker2 of 4 weeks (50%)',
+      'Amy Able1 of 4 weeks (25%)',
+    ]);
+  });
+});

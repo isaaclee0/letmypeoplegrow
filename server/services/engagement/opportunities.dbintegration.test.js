@@ -217,7 +217,7 @@ test('reduces reliable opportunities with axis-specific denominators, provenance
     status: 'casual', attended: 4, opportunities: 8, rate: 0.5,
   });
   assert.deepEqual(result.current.get(9).primary, {
-    status: 'establishing', attended: 1, opportunities: 1, rate: 1,
+    status: 'establishing', attended: 2, opportunities: 2, rate: 1,
   });
   assert.deepEqual(result.current.get(1).community, {
     status: 'not_assigned', attended: 0, opportunities: 0, rate: null,
@@ -254,15 +254,18 @@ test('reduces reliable opportunities with axis-specific denominators, provenance
   );
   assert.deepEqual(
     result.datedOpportunities.primary.filter((opportunity) => opportunity.individualId === 9),
-    [{ individualId: 9, date: '2026-08-10', attended: true }],
-    'open, cancelled, excluded, headcount, and unknown-provenance sessions produce no facts',
+    [
+      { individualId: 9, date: '2026-08-10', attended: true },
+      { individualId: 9, date: '2026-07-27', attended: true },
+    ],
+    'cancelled, excluded, headcount, and unknown-provenance sessions produce no facts',
   );
   assert.deepEqual(result.coverage, {
-    eligibleHeldSessions: 22,
-    explicitProvenanceSessions: 21,
+    eligibleHeldSessions: 23,
+    explicitProvenanceSessions: 22,
     legacyProvenanceSessions: 1,
     excludedUnknownProvenanceSessions: 1,
-    legacyProvenanceShare: 1 / 22,
+    legacyProvenanceShare: 1 / 23,
   });
 
   const custom = buildOpportunityProfiles(source, {

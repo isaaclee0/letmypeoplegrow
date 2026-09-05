@@ -662,22 +662,15 @@ const ManageGatheringsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-32">
+    <div className="space-y-4 pb-32">
       <SampleDataBanner />
-      {/* Header */}
-      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                Manage Gatherings
-              </h1>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Create, edit, and configure your gatherings and their schedules
-              </p>
-            </div>
-          </div>
-        </div>
+      <div className="px-1">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+          Manage Gatherings
+        </h1>
+        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+          Create, edit, and configure your gatherings and their schedules
+        </p>
       </div>
 
       {error && (
@@ -758,7 +751,7 @@ const ManageGatheringsPage: React.FC = () => {
               {/* Prominent guidance to add button */}
               <div className="hidden sm:block">
                 <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">
-                  <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 h-14 flex items-center justify-center text-primary-800 animate-slide-right mr-2">
+                  <div className="bg-white/90 dark:bg-gray-800/95 backdrop-blur rounded-lg shadow-lg dark:shadow-none border border-primary-200 dark:border-primary-700 px-4 h-14 flex items-center justify-center text-primary-800 dark:text-primary-200 animate-slide-right mr-2">
                     <p className="text-base font-semibold whitespace-nowrap">Add Gathering Here</p>
                   </div>
                 </div>
@@ -884,7 +877,7 @@ const ManageGatheringsPage: React.FC = () => {
                                   </defs>
                                   <path d="M5 10 L70 10" stroke="currentColor" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-purple)" />
                                 </svg>
-                                <span className="ml-2 text-sm text-purple-600 font-medium whitespace-nowrap bg-white/90 px-2 py-1 rounded shadow">
+                                <span className="ml-2 text-sm text-purple-600 dark:text-purple-300 font-medium whitespace-nowrap bg-white/90 dark:bg-gray-800/95 px-2 py-1 rounded shadow dark:shadow-none">
                                   Click here!
                                 </span>
                               </div>
@@ -1708,7 +1701,7 @@ const ManageGatheringsPage: React.FC = () => {
                                       }
                                     });
                                   }}
-                                  className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-full border border-gray-300"
+                                  className="px-3 py-1 text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-full border border-gray-300 dark:border-gray-600"
                                 >
                                   Clear All
                                 </button>

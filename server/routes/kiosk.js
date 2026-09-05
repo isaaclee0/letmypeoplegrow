@@ -39,6 +39,67 @@ const disableCache = (req, res, next) => {
   next();
 };
 
+async function addPersonToGatheringRoster({ churchId, gatheringTypeId, individualId, addedBy }) {
+  return Database.transaction(async (conn) => {
+    const gatherings = await conn.query(
+      `SELECT id FROM gathering_types
+       WHERE id = ? AND church_id = ? AND is_active = 1 AND attendance_type = 'standard'`,
+      [gatheringTypeId, churchId]
+    );
+    if (gatherings.length === 0) {
+      throw Object.assign(new Error('Gathering not found.'), { statusCode: 404 });
+    }
+
+    const people = await conn.query(
+      `SELECT id, first_name, last_name FROM individuals
+       WHERE id = ? AND church_id = ? AND is_active = 1`,
+      [individualId, churchId]
+    );
+    if (people.length === 0) {
+      throw Object.assign(new Error('Individual not found.'), { statusCode: 404 });
+    }
+
+    await conn.query(
+      `INSERT OR IGNORE INTO gathering_lists
+         (gathering_type_id, individual_id, added_by, church_id)
+       VALUES (?, ?, ?, ?)`,
+      [gatheringTypeId, individualId, addedBy || null, churchId]
+    );
+    await conn.query(
+      `UPDATE gathering_lists
+       SET added_by = ?, added_at = datetime('now')
+       WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?`,
+      [addedBy || null, gatheringTypeId, individualId, churchId]
+    );
+
+    return people[0];
+  });
+}
+
+// Add an existing church person to this gathering's roster without recording attendance.
+router.post('/:gatheringTypeId/roster/:individualId', disableCache, requireGatheringAccess, auditLog('ADD_INDIVIDUAL_TO_GATHERING_ROSTER'), async (req, res) => {
+  try {
+    const person = await addPersonToGatheringRoster({
+      churchId: req.user.church_id,
+      gatheringTypeId: Number(req.params.gatheringTypeId),
+      individualId: Number(req.params.individualId),
+      addedBy: req.user.id,
+    });
+    res.json({
+      message: 'Individual added to gathering roster.',
+      individual: {
+        id: Number(person.id),
+        firstName: person.first_name,
+        lastName: person.last_name,
+      },
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    if (statusCode >= 500) console.error('Add person to check-in roster error:', error);
+    res.status(statusCode).json({ error: statusCode === 500 ? 'Failed to add person to gathering roster.' : error.message });
+  }
+});
+
 // ===== Record kiosk check-in or check-out =====
 // POST /api/kiosk/:gatheringTypeId/:date
 router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, async (req, res) => {
@@ -390,4 +451,5 @@ router.delete('/history/:gatheringTypeId/:date', requireGatheringAccess, async (
   }
 });
 
+router.addPersonToGatheringRoster = addPersonToGatheringRoster;
 module.exports = router;

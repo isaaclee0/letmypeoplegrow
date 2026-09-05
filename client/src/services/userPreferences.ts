@@ -10,6 +10,11 @@ export const PREFERENCE_KEYS = {
   REPORTS_EXPORT_FORMAT: 'reports_export_format',
 } as const;
 
+// Report layouts have their own account/church-scoped cache. Keeping them out
+// of the generic cache prevents a shared browser from uploading another user's
+// layout during its background preference sync.
+const DEDICATED_PREFERENCE_KEYS = new Set(['reports_layout']);
+
 // Types for preference values
 export interface AttendanceLastViewed {
   gatheringId: number;
@@ -131,14 +136,17 @@ class UserPreferencesService {
 
   // Batch save multiple preferences
   async setPreferences(preferences: Record<string, any>): Promise<void> {
+    const genericPreferences = Object.fromEntries(
+      Object.entries(preferences).filter(([key]) => !DEDICATED_PREFERENCE_KEYS.has(key))
+    );
     // Save all to localStorage immediately
-    Object.entries(preferences).forEach(([key, value]) => {
+    Object.entries(genericPreferences).forEach(([key, value]) => {
       this.setLocalPreference(key, value);
     });
 
     // Save all to database in background
     try {
-      await usersAPI.savePreferences(preferences);
+      await usersAPI.savePreferences(genericPreferences);
     } catch (error) {
       console.warn('Failed to sync preferences to database:', error);
       // Don't throw - localStorage saves succeeded
@@ -163,7 +171,7 @@ class UserPreferencesService {
         if (key && key.startsWith('preference_')) {
           const preferenceKey = key.replace('preference_', '');
           const value = this.getLocalPreference(preferenceKey);
-          if (value) {
+          if (value && !DEDICATED_PREFERENCE_KEYS.has(preferenceKey)) {
             preferences[preferenceKey] = value;
           }
         }
@@ -195,6 +203,10 @@ class UserPreferencesService {
 
       // Cache all preferences in localStorage
       Object.entries(preferences).forEach(([key, value]) => {
+        if (DEDICATED_PREFERENCE_KEYS.has(key)) {
+          localStorage.removeItem(`preference_${key}`);
+          return;
+        }
         this.setLocalPreference(key, value);
       });
 

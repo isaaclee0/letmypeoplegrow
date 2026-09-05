@@ -181,6 +181,7 @@ test('scopes selection, population, weekly evidence, availability, and mixed/hea
     await assign(churchId, amId, visitorId);
 
     await seedSession(churchId, userId, amId, '2026-08-24', {
+      status: 'open',
       records: [
         { individualId: alexId, present: 1 },
         { individualId: bethId, present: 0, eligible: 0 },
@@ -216,11 +217,11 @@ test('scopes selection, population, weekly evidence, availability, and mixed/hea
     assert.deepEqual(overview.gatheringTypeIds, [amId, pmId]);
     assert.equal(overview.window.completedWeekEnd, '2026-08-30');
     assert.equal(overview.regularity.population, 2);
-    assert.equal(overview.dataAvailability.availableWeeks, 2);
-    assert.equal(overview.dataAvailability.firstSessionDate, '2026-08-10');
+    assert.equal(overview.dataAvailability.availableWeeks, 1);
+    assert.equal(overview.dataAvailability.firstSessionDate, '2026-08-24');
     assert.equal(overview.dataAvailability.lastSessionDate, '2026-08-30');
     assert.equal(overview.dataAvailability.validOpportunityWeeks, 1);
-    assert.equal(overview.dataAvailability.excludedWeeks, 1);
+    assert.equal(overview.dataAvailability.excludedWeeks, 0);
     assert.equal(overview.dataAvailability.unclassifiedBecauseNoEvidence, 0);
     assert.deepEqual(Object.keys(overview.settings).sort(), [
       'calculationRulesVersion', 'casualMinimum', 'coreMinimum', 'tiers',
@@ -267,6 +268,7 @@ test('scopes selection, population, weekly evidence, availability, and mixed/hea
     });
     assert.equal(headcountOnly.regularity, null);
     assert.equal(headcountOnly.declines, null);
+    assert.equal(headcountOnly.increases, null);
     assert.equal(headcountOnly.dataAvailability.standardGatherings, 0);
     assert.equal(headcountOnly.dataAvailability.headcountGatherings, 1);
   });
@@ -305,11 +307,18 @@ test('paginates contextual session drill-downs and binds cursors to their select
     const userId = await seedUser(churchId);
     const sundayId = await seedGathering(churchId, { name: 'Sunday' });
     const youthId = await seedGathering(churchId, { name: 'Youth' });
+    const attendeeId = await seedPerson(churchId, {
+      firstName: 'Session', lastName: 'Marker', peopleType: 'local_visitor',
+    });
     const sundaySessionIds = [];
     for (const date of ['2026-08-24', '2026-08-17', '2026-08-10']) {
-      sundaySessionIds.push(await seedSession(churchId, userId, sundayId, date));
+      sundaySessionIds.push(await seedSession(churchId, userId, sundayId, date, {
+        records: [{ individualId: attendeeId, present: 1, peopleTypeAtTime: 'local_visitor' }],
+      }));
     }
-    await seedSession(churchId, userId, youthId, '2026-08-24');
+    await seedSession(churchId, userId, youthId, '2026-08-24', {
+      records: [{ individualId: attendeeId, present: 1, peopleTypeAtTime: 'local_visitor' }],
+    });
 
     const sunday = await buildContextualLongTermOverview(churchId, [sundayId], { asOf: AS_OF });
     const youth = await buildContextualLongTermOverview(churchId, [youthId], { asOf: AS_OF });
@@ -380,9 +389,11 @@ test('reports shorter history exactly, caps old history at 52 weeks, and compare
 
   await withTestChurchDb(async (churchId) => {
     const userId = await seedUser(churchId);
-    const gatheringTypeId = await seedGathering(churchId, { name: 'Weekly' });
+    const gatheringTypeId = await seedGathering(churchId, {
+      name: 'Weekly', attendanceType: 'headcount',
+    });
     for (const date of sundayWeeksEnding('2026-08-30', 55)) {
-      await seedSession(churchId, userId, gatheringTypeId, date);
+      await seedSession(churchId, userId, gatheringTypeId, date, { headcounts: [1] });
     }
     const overview = await buildContextualLongTermOverview(churchId, [gatheringTypeId], {
       asOf: AS_OF,
@@ -466,6 +477,9 @@ test('finds conservative declines, summarizes evidence plainly, and binds pagina
     const userId = await seedUser(churchId);
     const gatheringTypeId = await seedGathering(churchId, { name: 'Sunday' });
     const otherGatheringId = await seedGathering(churchId, { name: 'Other' });
+    const serviceMarkerId = await seedPerson(churchId, {
+      firstName: 'Session', lastName: 'Marker', peopleType: 'local_visitor',
+    });
     const people = [];
     for (let index = 0; index < 11; index += 1) {
       const individualId = await seedPerson(churchId, {
@@ -486,6 +500,11 @@ test('finds conservative declines, summarizes evidence plainly, and binds pagina
           present: week < 6 || week === 8 ? 1 : 0,
         });
       }
+      records.push({
+        individualId: serviceMarkerId,
+        present: 1,
+        peopleTypeAtTime: 'local_visitor',
+      });
       await seedSession(churchId, userId, gatheringTypeId, dates[week], { records });
     }
 
@@ -590,6 +609,9 @@ test('includes a decline at the exact twenty-percentage-point boundary', async (
     const individualId = await seedPerson(churchId, {
       firstName: 'Exact', lastName: 'Boundary',
     });
+    const serviceMarkerId = await seedPerson(churchId, {
+      firstName: 'Session', lastName: 'Marker', peopleType: 'local_visitor',
+    });
     await assign(churchId, gatheringTypeId, individualId);
 
     const dates = sundayWeeksEnding('2026-08-30', 18);
@@ -601,6 +623,11 @@ test('includes a decline at the exact twenty-percentage-point boundary', async (
           present: week < 6 || (week >= 10 && week < 12) ? 1 : 0,
         });
       }
+      records.push({
+        individualId: serviceMarkerId,
+        present: 1,
+        peopleTypeAtTime: 'local_visitor',
+      });
       await seedSession(churchId, userId, gatheringTypeId, dates[week], { records });
     }
 
@@ -631,6 +658,9 @@ test('orders equal displayed decline percentages by their unrounded severity bef
     const weakerId = await seedPerson(churchId, {
       firstName: 'Weaker', lastName: 'Able',
     });
+    const serviceMarkerId = await seedPerson(churchId, {
+      firstName: 'Session', lastName: 'Marker', peopleType: 'local_visitor',
+    });
     await assign(churchId, gatheringTypeId, strongerId);
     await assign(churchId, gatheringTypeId, weakerId);
 
@@ -646,6 +676,11 @@ test('orders equal displayed decline percentages by their unrounded severity bef
           present: week < 35 || (week >= 37 && week < 41) ? 1 : 0,
         });
       }
+      records.push({
+        individualId: serviceMarkerId,
+        present: 1,
+        peopleTypeAtTime: 'local_visitor',
+      });
       await seedSession(churchId, userId, gatheringTypeId, dates[week], { records });
     }
 
@@ -658,5 +693,103 @@ test('orders equal displayed decline percentages by their unrounded severity bef
       overview.declines.rows.map(({ individualId }) => individualId),
       [strongerId, weakerId],
     );
+  });
+});
+
+test('finds conservative increases and binds their paginated tokens to church and direction', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const gatheringTypeId = await seedGathering(churchId, { name: 'Increasing attendance' });
+    const people = [];
+    for (let index = 0; index < 11; index += 1) {
+      const individualId = await seedPerson(churchId, { firstName: `Person ${String(index).padStart(2, '0')}` });
+      people.push(individualId);
+      await assign(churchId, gatheringTypeId, individualId);
+    }
+    const marker = await seedPerson(churchId, { firstName: 'Marker', peopleType: 'local_visitor' });
+    const dates = sundayWeeksEnding('2026-08-30', 16);
+    for (let week = 0; week < dates.length; week += 1) {
+      await seedSession(churchId, userId, gatheringTypeId, dates[week], {
+        records: [
+          ...people.map((individualId) => ({ individualId, present: week < 2 || week >= 8 ? 1 : 0 })),
+          { individualId: marker, present: 1, peopleTypeAtTime: 'local_visitor' },
+        ],
+      });
+    }
+    const overview = await buildContextualLongTermOverview(churchId, [gatheringTypeId], { asOf: AS_OF });
+    assert.equal(overview.increases.total, 11);
+    assert.equal(overview.increases.rows.length, 10);
+    assert.equal(overview.declines.total, 0);
+    assert.deepEqual(overview.increases.rows[0].baseline, { attendedWeeks: 2, opportunityWeeks: 8, rate: 25 });
+    assert.deepEqual(overview.increases.rows[0].recent, { attendedWeeks: 8, opportunityWeeks: 8, rate: 100 });
+    assert.equal(overview.increases.rows[0].summary, 'Previously attended 2 of 8 weeks; attended 8 of the last 8 weeks.');
+    const first = await listContextualPeople(churchId, { segment: overview.increases.peopleToken, limit: 5 });
+    assert.equal(first.rows[0].rowType, 'contextual_increase');
+    assert.ok(first.nextCursor);
+    const second = await listContextualPeople(churchId, {
+      segment: overview.increases.peopleToken, cursor: first.nextCursor, limit: 100,
+    });
+    assert.deepEqual([...first.rows, ...second.rows].map(({ individualId }) => individualId), people);
+    assert.equal(second.nextCursor, null);
+    await assert.rejects(listContextualPeople(`${churchId}_other`, {
+      segment: overview.increases.peopleToken,
+    }), DrilldownTokenError);
+    await assert.rejects(listContextualPeople(churchId, {
+      segment: overview.declines.peopleToken, cursor: first.nextCursor,
+    }), DrilldownTokenError);
+  });
+});
+
+test('includes exact twenty-point increases but excludes small changes and insufficient evidence', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const gatheringTypeId = await seedGathering(churchId, { name: 'Increase boundary' });
+    const cases = [
+      { firstName: 'Exact', baseline: 4, recent: 3, baselineWeeks: 10, recentWeeks: 5 },
+      { firstName: 'Small', baseline: 5, recent: 3, baselineWeeks: 10, recentWeeks: 5 },
+      { firstName: 'Short baseline', baseline: 1, recent: 5, baselineWeeks: 7, recentWeeks: 5 },
+      { firstName: 'Short recent', baseline: 1, recent: 3, baselineWeeks: 10, recentWeeks: 3 },
+      { firstName: 'Same tier', baseline: 7, recent: 5, baselineWeeks: 10, recentWeeks: 5 },
+    ];
+    for (const person of cases) {
+      person.individualId = await seedPerson(churchId, person);
+      await assign(churchId, gatheringTypeId, person.individualId);
+    }
+    const marker = await seedPerson(churchId, { firstName: 'Marker', peopleType: 'local_visitor' });
+    const dates = sundayWeeksEnding('2026-08-30', 18);
+    for (let week = 0; week < dates.length; week += 1) {
+      const records = cases.filter((person) => week < 10
+        ? week < person.baselineWeeks : week - 10 < person.recentWeeks)
+        .map((person) => ({
+          individualId: person.individualId,
+          present: (week < 10 ? week < person.baseline : week - 10 < person.recent) ? 1 : 0,
+        }));
+      records.push({ individualId: marker, present: 1, peopleTypeAtTime: 'local_visitor' });
+      await seedSession(churchId, userId, gatheringTypeId, dates[week], { records });
+    }
+    const overview = await buildContextualLongTermOverview(churchId, [gatheringTypeId], { asOf: AS_OF });
+    assert.deepEqual(overview.increases.rows.map(({ individualId }) => individualId), [cases[0].individualId]);
+    assert.deepEqual(overview.increases.rows[0].baseline, { attendedWeeks: 4, opportunityWeeks: 10, rate: 40 });
+    assert.deepEqual(overview.increases.rows[0].recent, { attendedWeeks: 3, opportunityWeeks: 5, rate: 60 });
+  });
+});
+
+
+test('compares each gathering independently, including missing previous history', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const userId = await seedUser(churchId);
+    const ids = [];
+    for (const [name, counts] of [['Large', [100, 120]], ['Small', [20, 10]], ['New', [null, 30]]]) {
+      const id = await seedGathering(churchId, { name, attendanceType: 'headcount' });
+      ids.push(id);
+      if (counts[0] !== null) await seedSession(churchId, userId, id, '2026-04-05', { headcounts: [counts[0]] });
+      await seedSession(churchId, userId, id, '2026-08-30', { headcounts: [counts[1]] });
+    }
+    const result = await buildContextualLongTermOverview(churchId, ids, { asOf: AS_OF });
+    assert.deepEqual(result.direction.series.map(({ comparison }) => comparison), [
+      { comparisonWeeks: 12, previousAverage: 100, recentAverage: 120, percentChange: 20, status: 'up' },
+      { comparisonWeeks: 12, previousAverage: 20, recentAverage: 10, percentChange: -50, status: 'down' },
+      { comparisonWeeks: 12, previousAverage: null, recentAverage: 30, percentChange: null, status: 'unavailable' },
+    ]);
   });
 });
