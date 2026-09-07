@@ -17,6 +17,7 @@ require('dotenv').config({ path: path.join(__dirname, '../.env'), quiet: true })
 // Import database and backup service
 const Database = require('../config/database');
 const BackupService = require('../services/backup');
+const { restoreChurchDatabase } = require('../services/restoreDatabase');
 const logger = require('../config/logger');
 const platformAiSettings = require('../services/platformAiSettings');
 const platformAiModelCatalog = require('../services/platformAiModelCatalog');
@@ -1018,7 +1019,7 @@ app.post('/api/local-backups/restore-zip', async (req, res) => {
           const srcPath = path.join(tmpChurchesDir, file);
           const destPath = path.join(churchesDir, file);
 
-          checkpointAndCopy(srcPath, destPath);
+          await restoreChurchDatabase(srcPath, destPath);
 
           // Re-open and verify
           const db = Database.getChurchDb(churchId);
@@ -1036,7 +1037,7 @@ app.post('/api/local-backups/restore-zip', async (req, res) => {
 
     res.json({
       success: true,
-      message: `Restored ${results.churches.length} church(es)${results.registry ? ' + registry' : ''}.`,
+      message: `Restored ${results.churches.length} church(es)${results.registry ? ' + registry' : ''}. OAuth connections were excluded; reconnect them in Settings.`,
       ...results,
     });
   } catch (error) {
@@ -1066,7 +1067,7 @@ app.post('/api/local-backups/restore-church', async (req, res) => {
     // Close existing connection
     Database.closeChurchDb(churchId);
 
-    checkpointAndCopy(srcPath, destPath);
+    await restoreChurchDatabase(srcPath, destPath);
 
     // Re-open and verify
     const db = Database.getChurchDb(churchId);
@@ -1079,7 +1080,7 @@ app.post('/api/local-backups/restore-church', async (req, res) => {
 
     res.json({
       success: true,
-      message: `Restored church "${churchName}" (${churchId}) successfully.`,
+      message: `Restored church "${churchName}" (${churchId}) successfully. OAuth connections were excluded; reconnect them in Settings.`,
       churchId,
     });
   } catch (error) {

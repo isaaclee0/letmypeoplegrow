@@ -5,6 +5,7 @@ const zlib = require('zlib');
 const { pipeline } = require('stream/promises');
 const cron = require('node-cron');
 const Database = require('../config/database');
+const { restoreChurchDatabase } = require('./restoreDatabase');
 
 let s3Client = null;
 let backupConfig = null;
@@ -284,6 +285,9 @@ async function restoreChurch(churchId, snapshotKey) {
     } finally {
       testDb.close();
     }
+
+    // Exclude rotating OAuth credentials before touching the live database.
+    await restoreChurchDatabase(restoredPath, restoredPath);
 
     // Close existing connections
     Database.closeChurchDb(churchId);

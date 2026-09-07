@@ -554,6 +554,7 @@
           <p style="font-size: 0.8rem; color: #64748b; margin-bottom: 1rem;">
             Place downloaded .zip or .sqlite files in the <code>./backups/</code> directory, then click Scan.
             You can also put extracted files in <code>./backups/churches/</code>.
+            Church restores exclude OAuth connections, including Planning Center. Reconnect them in Settings after restoring.
           </p>
         </div>
         <div id="local-backups-content">
@@ -1514,7 +1515,7 @@
     }
 
     async function restoreFromZip(filename) {
-      if (!confirm(`Restore ALL churches and registry from "${filename}"?\n\nThis will replace all current dev data. Existing connections will be reset.`)) return;
+      if (!confirm(`Restore ALL churches and registry from "${filename}"?\n\nThis will replace all current dev data. OAuth connections are excluded and must be reconnected in Settings.`)) return;
 
       const container = document.getElementById('local-backups-content');
       container.insertAdjacentHTML('afterbegin',
@@ -1544,7 +1545,7 @@
     }
 
     async function restoreLocalChurch(filename, churchId) {
-      if (!confirm(`Restore church "${churchId}" from "${filename}"?\n\nThis will replace the current database for this church.`)) return;
+      if (!confirm(`Restore church "${churchId}" from "${filename}"?\n\nThis will replace the current database for this church. OAuth connections are excluded and must be reconnected in Settings.`)) return;
 
       try {
         const res = await fetch('/api/local-backups/restore-church', {
@@ -1937,7 +1938,7 @@
     }
 
     async function restoreSnapshot(churchId, snapshotKey) {
-      if (!confirm(`WARNING: This will replace the current database for "${churchId}" with this snapshot.\n\nA pre-rollback copy will be saved locally. Continue?`)) return;
+      if (!confirm(`WARNING: This will replace the current database for "${churchId}" with this snapshot.\n\nA pre-rollback copy will be saved locally. OAuth connections are excluded and must be reconnected in Settings. Continue?`)) return;
       if (!confirm(`Final confirmation: Restore ${churchId}?`)) return;
 
       const container = document.getElementById('snapshots-table');
@@ -1954,7 +1955,7 @@
 
         const data = await res.json();
         if (res.ok) {
-          alert(`Restore successful!\n\nPre-rollback backup saved at:\n${data.preRollbackBackup}`);
+          alert(`Restore successful! OAuth connections were excluded; reconnect them in Settings.\n\nPre-rollback backup saved at:\n${data.preRollbackBackup}`);
         } else {
           alert('Restore failed: ' + data.error);
         }
