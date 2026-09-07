@@ -2597,11 +2597,6 @@ const AttendancePage: React.FC = () => {
     return `${person.firstName || ''} ${person.lastName || ''}`.trim();
   };
 
-  const shouldUseWideLayout = (name: string) => {
-    // Names longer than 20 characters or containing very long individual words
-    return name.length > 20 || name.split(' ').some(word => word.length > 15);
-  };
-
   // Offline attendance hook - must come after sendAttendanceChange definition
   const {
     pendingChanges,
@@ -3149,13 +3144,12 @@ const AttendancePage: React.FC = () => {
                         </button>
                       </div>
                     )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                       {group.members.map((person: Individual) => {
                         // Use presentById first (like visitor system), fallback to person.present
                         const isPresent = presentById[person.id] !== undefined ? presentById[person.id] : Boolean(person.present);
                         const isSaving = Boolean(savingById[person.id] || person.isSaving);
                         const displayName = getPersonDisplayName(person, group.familyName);
-                        const needsWideLayout = shouldUseWideLayout(displayName);
                         const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
                         return (
@@ -3165,7 +3159,7 @@ const AttendancePage: React.FC = () => {
                               isPresent
                                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                                 : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
-                            } ${isSaving ? 'opacity-75' : ''} ${needsWideLayout ? 'col-span-2' : ''}`}
+                            } ${isSaving ? 'opacity-75' : ''}`}
                           >
                             <input
                               type="checkbox"
@@ -3181,7 +3175,7 @@ const AttendancePage: React.FC = () => {
                                 <CheckIcon className="h-3 w-3 text-white" />
                               )}
                             </div>
-                            <span className="ml-3 text-sm font-medium text-gray-900 dark:text-gray-100">
+                            <span className="ml-3 min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>
                               {displayName}
                               {isSaving && (
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
@@ -3283,7 +3277,7 @@ const AttendancePage: React.FC = () => {
                       </div>
                     </div>
                   )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                     {group.members.map((person: any, index: number) => {
                       const parts = person.name.trim().split(' ');
                       const firstName = parts[0];
@@ -3291,7 +3285,6 @@ const AttendancePage: React.FC = () => {
                       const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
                       const isPresent = person.id ? visitorAttendance[person.id] || false : false;
                       const displayName = getPersonDisplayName(person, group.familyName);
-                      const needsWideLayout = shouldUseWideLayout(displayName);
                       const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
                       const isHighlighted = shouldHighlightVisitor(person, index);
@@ -3305,7 +3298,7 @@ const AttendancePage: React.FC = () => {
                               : isHighlighted
                               ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 shadow-md'
                               : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
-                          } ${needsWideLayout ? 'col-span-2' : ''}`}
+                          }`}
                         >
                           <input
                             type="checkbox"
@@ -3322,7 +3315,7 @@ const AttendancePage: React.FC = () => {
                             )}
                           </div>
                           <div className="ml-3 flex-1 min-w-0">
-                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                            <span className="block truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>{displayName}</span>
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
                               <div className="flex items-center space-x-2 mt-1">
@@ -3425,14 +3418,13 @@ const AttendancePage: React.FC = () => {
                             )}
                           </div>
                         )}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                           {group.members.map((person: any, idx: number) => {
                             const parts = person.name.trim().split(' ');
                             const firstName = parts[0];
                             const lastName = parts.slice(1).join(' ');
                             const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
                             const displayName = getPersonDisplayName(person, group.familyName);
-                            const needsWideLayout = shouldUseWideLayout(displayName);
                             const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
                             return (
@@ -3443,11 +3435,11 @@ const AttendancePage: React.FC = () => {
                                   isAttendanceLocked
                                     ? 'border-gray-200 dark:border-gray-600 cursor-not-allowed opacity-50'
                                     : 'border-gray-200 dark:border-gray-600 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/30 cursor-pointer transition-all'
-                                } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                }`}
                                 title={isAttendanceLocked ? 'Editing locked' : `Click to add ${displayName} to this service`}
                               >
                                 <div className="flex items-center justify-between">
-                                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                  <div className="min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>
                                     {displayName}
                                   </div>
                                   <PlusIcon className={`h-4 w-4 shrink-0 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />

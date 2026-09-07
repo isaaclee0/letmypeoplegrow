@@ -123,55 +123,34 @@ const GatheringDateSelector: React.FC<GatheringDateSelectorProps> = ({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Gathering</label>
-      {kioskGatherings.length === 1 ? (
-        <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
-          <div className="font-medium text-gray-900 dark:text-gray-100">{kioskGatherings[0].name}</div>
-          {kioskGatherings[0].dayOfWeek && (
-            <div className="text-sm text-gray-500 dark:text-gray-400">{kioskGatherings[0].dayOfWeek}</div>
-          )}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label htmlFor="checkin-gathering" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Gathering</label>
+          <select
+            id="checkin-gathering"
+            value={selectedGathering?.id ?? ''}
+            onChange={(event) => {
+              const gathering = kioskGatherings.find(g => g.id === Number(event.target.value));
+              if (gathering) handleGatheringSelect(gathering);
+            }}
+            className="block w-full rounded-md border border-gray-300 dark:border-gray-600 bg-transparent dark:bg-gray-900/50 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500"
+          >
+            <option value="" disabled>Select a gathering</option>
+            {kioskGatherings.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
         </div>
-      ) : (
-        <div className="space-y-2">
-          {kioskGatherings.map(g => (
-            <label
-              key={g.id}
-              className={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                selectedGathering?.id === g.id
-                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
-              }`}
-            >
-              <input
-                type="radio"
-                name="gathering"
-                checked={selectedGathering?.id === g.id}
-                onChange={() => handleGatheringSelect(g)}
-                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
-              />
-              <div className="ml-3">
-                <div className="font-medium text-gray-900 dark:text-gray-100">{g.name}</div>
-                {g.dayOfWeek && g.startTime && (
-                  <div className="text-sm text-gray-500 dark:text-gray-400">{g.dayOfWeek} at {g.startTime}</div>
-                )}
-              </div>
-            </label>
-          ))}
+        <div>
+          <div className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Check-in date</div>
+          <div className="rounded-md border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-gray-100">
+            {selectedGathering ? formatDateOnly(selectedDate, { weekday: 'long', day: 'numeric', month: 'long' }) : 'Select a gathering first'}
+          </div>
         </div>
-      )}
+      </div>
 
       {selectedGathering && daysAway > 0 && (
-        <div className="mt-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg p-3 text-sm text-amber-700 dark:text-amber-300">
-          Next gathering is on{' '}
-          <span className="font-medium">
-            {formatDateOnly(selectedDate, {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-            })}
-          </span>{' '}
-          ({daysAway} day{daysAway !== 1 ? 's' : ''} away). Attendance will be recorded for that date.
-        </div>
+        <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+          This gathering is {daysAway} day{daysAway !== 1 ? 's' : ''} away. Attendance will be recorded for the date shown above.
+        </p>
       )}
     </div>
   );

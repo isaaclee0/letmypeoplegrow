@@ -88,7 +88,7 @@ const PersonCard: React.FC<PersonCardProps> = ({
         />
         <div className={isGrouped ? 'flex-1 min-w-0' : 'flex-1 min-w-0'}>
           <div className="flex items-center space-x-2 min-w-0">
-            <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+            <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate" title={displayName}>
               {displayName}
             </span>
             {planningCenterSyncIndicator && person.planningCenterId && (

@@ -114,7 +114,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
   };
 
   return (
-    <div className="mt-8">
+    <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4 sm:p-6">
       <div className="flex items-center mb-4">
         <ClockIcon className="h-5 w-5 text-gray-400 mr-2" />
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Past Check-in Sessions</h2>
@@ -126,11 +126,11 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading history...</p>
         </div>
       ) : historySessions.length === 0 ? (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 text-center">
+        <div className="py-6 text-center">
           <p className="text-sm text-gray-500 dark:text-gray-400">No past check-in sessions found for this gathering.</p>
         </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg divide-y divide-gray-200 dark:divide-gray-700">
+        <div className="divide-y divide-gray-200 dark:divide-gray-700">
           {historySessions.map(session => {
             const isExpanded = expandedDate === session.date;
             const checkinCount = session.records.filter(r => r.action === 'checkin').length;

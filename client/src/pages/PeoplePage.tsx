@@ -160,13 +160,13 @@ export function familyAuthorityPermissions(
   };
 }
 
-type AuthorityPersonCardProps = Omit<React.ComponentProps<typeof PersonCard>, 'planningCenterSyncIndicator'> & {
+type AuthorityPersonCardProps = Omit<React.ComponentProps<typeof PersonCard>, 'planningCenterSyncIndicator' | 'needsWideLayout'> & {
   key?: React.Key;
 };
 
-function AuthorityPersonCard({ person, needsWideLayout, ...props }: AuthorityPersonCardProps) {
+function AuthorityPersonCard({ person, ...props }: AuthorityPersonCardProps) {
   return (
-    <div className={`relative ${needsWideLayout ? 'col-span-2' : ''}`}>
+    <div className="relative">
       <PersonCard
         {...props}
         person={person}
@@ -350,11 +350,6 @@ const PeoplePage: React.FC = () => {
   // Helper function to get full display name (always shows surname)
   const getFullPersonDisplayName = (person: Person) => {
     return `${person.firstName} ${person.lastName}`;
-  };
-
-  const shouldUseWideLayout = (name: string) => {
-    // Names longer than 20 characters or containing very long individual words
-    return name.length > 20 || name.split(' ').some(word => word.length > 15);
   };
 
   // Get color for a gathering
@@ -2013,12 +2008,11 @@ const PeoplePage: React.FC = () => {
                       </div>
                     </div>
                   )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 gap-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                                                  {group.members.map((person: Person) => {
 
                                                    const displayName = getPersonDisplayName(person, group.familyName);
 
-                                                   const needsWideLayout = shouldUseWideLayout(displayName);
 
                                                    return (
 
@@ -2035,7 +2029,6 @@ const PeoplePage: React.FC = () => {
 
                                                        displayName={displayName}
 
-                                                       needsWideLayout={needsWideLayout}
 
                                                        getGatheringColor={getGatheringColor}
 
@@ -2058,12 +2051,11 @@ const PeoplePage: React.FC = () => {
             </div>
           ) : (
             // Individual view (not grouped by family)
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                                      {filteredIndividualPeople.map((person: Person) => {
 
                                        const displayName = getPersonDisplayName(person);
 
-                                       const needsWideLayout = shouldUseWideLayout(displayName);
 
                                        return (
 
@@ -2080,7 +2072,6 @@ const PeoplePage: React.FC = () => {
 
                                            displayName={displayName}
 
-                                           needsWideLayout={needsWideLayout}
 
                                            getGatheringColor={getGatheringColor}
 
@@ -2088,7 +2079,7 @@ const PeoplePage: React.FC = () => {
 
                                            getBadgeInfo={getBadgeInfo}
 
-                                           variant="individual"
+                                           variant="grouped"
 
                                            showBackgroundCheckStatus={showBackgroundCheckStatus}
 
@@ -2200,12 +2191,11 @@ const PeoplePage: React.FC = () => {
                               </div>
                             </div>
                           )}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                             {group.members.map((person: Person) => {
 
                               const displayName = getPersonDisplayName(person, group.familyName);
 
-                              const needsWideLayout = shouldUseWideLayout(displayName);
 
                               return (
 
@@ -2222,7 +2212,6 @@ const PeoplePage: React.FC = () => {
 
                                   displayName={displayName}
 
-                                  needsWideLayout={needsWideLayout}
 
                                   getGatheringColor={getGatheringColor}
 
@@ -2245,23 +2234,22 @@ const PeoplePage: React.FC = () => {
                     </div>
                   ) : (
                     // Individual view
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                       {recentVisitorGroups.flatMap((group: any) => 
                         group.members.map((person: Person) => {
                           const displayName = getFullPersonDisplayName(person);
-                          const needsWideLayout = shouldUseWideLayout(displayName);
                           
                           return (
                             <div
                               key={person.id}
-                              className={`p-2 rounded-md border border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
+                              className={`p-3 rounded-md border-2 border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
                                 selectedPeople.includes(person.id)
                                   ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                                   : 'hover:bg-gray-50 dark:hover:bg-gray-700'
-                              } ${needsWideLayout ? 'col-span-2' : ''}`}
+                              }`}
                               onClick={() => togglePersonSelection(person.id)}
                             >
-                              <div className="flex items-center space-x-3">
+                              <div className="flex items-center space-x-3 min-w-0">
                                 <input
                                   type="checkbox"
                                   checked={selectedPeople.includes(person.id)}
@@ -2269,8 +2257,8 @@ const PeoplePage: React.FC = () => {
                                   className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 shrink-0"
                                   onClick={(e) => e.stopPropagation()}
                                 />
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                                <div className="flex items-center space-x-2 min-w-0">
+                                  <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>{displayName}</span>
                                   {showBackgroundCheckStatus && !person.isChild && (
                                     <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
                                   )}
@@ -2378,12 +2366,11 @@ const PeoplePage: React.FC = () => {
                                 </div>
                               </div>
                             )}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                               {group.members.map((person: Person) => {
 
                                 const displayName = getPersonDisplayName(person, group.familyName);
 
-                                const needsWideLayout = shouldUseWideLayout(displayName);
 
                                 return (
 
@@ -2400,7 +2387,6 @@ const PeoplePage: React.FC = () => {
 
                                     displayName={displayName}
 
-                                    needsWideLayout={needsWideLayout}
 
                                     getGatheringColor={getGatheringColor}
 
@@ -2423,23 +2409,22 @@ const PeoplePage: React.FC = () => {
                       </div>
                     ) : (
                       // Individual view
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6 mt-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6 mt-3">
                         {olderVisitorGroups.flatMap((group: any) => 
                           group.members.map((person: Person) => {
                             const displayName = getFullPersonDisplayName(person);
-                            const needsWideLayout = shouldUseWideLayout(displayName);
                             
                             return (
                               <div
                                 key={person.id}
-                                className={`p-2 rounded-md border border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
+                                className={`p-3 rounded-md border-2 border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
                                   selectedPeople.includes(person.id)
                                     ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                                     : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
-                                } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                }`}
                                 onClick={() => togglePersonSelection(person.id)}
                               >
-                                <div className="flex items-center space-x-3">
+                                <div className="flex items-center space-x-3 min-w-0">
                                   <input
                                     type="checkbox"
                                     checked={selectedPeople.includes(person.id)}
@@ -2447,8 +2432,8 @@ const PeoplePage: React.FC = () => {
                                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 shrink-0"
                                     onClick={(e) => e.stopPropagation()}
                                   />
-                                  <div className="flex items-center space-x-2">
-                                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                                  <div className="flex items-center space-x-2 min-w-0">
+                                    <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>{displayName}</span>
                                     {showBackgroundCheckStatus && !person.isChild && (
                                       <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
                                     )}
@@ -2497,16 +2482,15 @@ const PeoplePage: React.FC = () => {
               </button>
             </div>
             {showArchivedPeople && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 gap-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                 {archivedPeople.map((person: Person) => {
                   const displayName = getPersonDisplayName(person); // No family context for archived
-                  const needsWideLayout = shouldUseWideLayout(displayName);
                   const locked = isAuthorityLocked(person.externalLinks, authorityProvider, peopleEditingLocked);
                   
                   return (
                     <div 
                       key={`arch-${person.id}`} 
-                      className={`flex items-center justify-between p-3 rounded-md border-2 border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 ${needsWideLayout ? 'col-span-2' : ''}`}
+                      className={`flex items-center justify-between p-3 rounded-md border-2 border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500`}
                     >
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">

@@ -12,6 +12,7 @@ import {
   UserGroupIcon,
   UserIcon,
   UsersIcon,
+  ArrowRightIcon,
 } from '@heroicons/react/24/outline';
 
 const CheckInsPage: React.FC = () => {
@@ -245,13 +246,13 @@ const CheckInsPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-2xl mx-auto mt-4">
-      <div className="mb-4 px-1">
+    <div className="space-y-6">
+      <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Check-ins</h1>
         <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Select a gathering and check-in mode</p>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 space-y-5">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4 sm:p-6 space-y-5">
         {/* Gathering selection */}
         <GatheringDateSelector
           kioskGatherings={kioskGatherings}
@@ -265,8 +266,10 @@ const CheckInsPage: React.FC = () => {
         {/* Mode selection buttons */}
         {selectedGathering && (!!selectedGathering.kioskEnabled || !!selectedGathering.leaderCheckinEnabled) && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Mode</label>
-            <div className={`grid gap-3 ${selectedGathering.kioskEnabled && selectedGathering.leaderCheckinEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            {!!selectedGathering.kioskEnabled && !!selectedGathering.leaderCheckinEnabled && (
+              <div className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Choose a check-in mode</div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {!!selectedGathering.leaderCheckinEnabled && (
                 <button
                   onClick={() => {
@@ -275,30 +278,39 @@ const CheckInsPage: React.FC = () => {
                     }
                     setActiveMode('leader');
                   }}
-                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+                  className="flex items-center gap-4 w-full p-5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-left shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800"
                 >
-                  <UsersIcon className="h-8 w-8 text-primary-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Leader Check-in</span>
-                  <span className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center">
-                    Check in/out by a leader
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white/15">
+                    <UsersIcon className="h-7 w-7" />
                   </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-lg font-semibold">Start leader check-in</span>
+                    <span className="block mt-1 text-sm text-white/90">Check people in and out of this gathering.</span>
+                  </span>
+                  <ArrowRightIcon className="h-5 w-5 shrink-0" />
                 </button>
               )}
-              {!!selectedGathering.kioskEnabled && (
-                <button
-                  onClick={() => {
-                    checkIns.setMode('self');
-                    setActiveMode('self');
-                  }}
-                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
-                >
-                  <UserIcon className="h-8 w-8 text-primary-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Self Check-in</span>
-                  <span className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center">
-                    Self-service or 'Kiosk' mode
+              <button
+                type="button"
+                disabled={!kioskModeEnabled || !selectedGathering.kioskEnabled}
+                onClick={() => {
+                  if (!kioskModeEnabled || !selectedGathering.kioskEnabled) return;
+                  checkIns.setMode('self');
+                  setActiveMode('self');
+                }}
+                className="flex items-center gap-4 w-full p-5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 text-left transition-colors enabled:hover:border-primary-400 enabled:hover:bg-primary-50 dark:enabled:hover:bg-primary-900/20 disabled:bg-gray-100 dark:disabled:bg-gray-700/30 disabled:text-gray-400 dark:disabled:text-gray-500 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800"
+              >
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gray-200/50 dark:bg-gray-700/50">
+                  <UserIcon className="h-7 w-7" />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-lg font-semibold">Self check-in</span>
+                  <span className="block mt-1 text-sm">
+                    {kioskModeEnabled && selectedGathering.kioskEnabled ? 'Open self-service kiosk mode.' : 'Currently disabled for this gathering.'}
                   </span>
-                </button>
-              )}
+                </span>
+                <ArrowRightIcon className="h-5 w-5 shrink-0" />
+              </button>
             </div>
           </div>
         )}
