@@ -237,7 +237,7 @@ const CaregiverPicker: React.FC<CaregiverPickerProps> = ({ familyId, open, onClo
             id="caregiver-filter"
             type="text"
             placeholder="Filter..."
-            className="mb-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+            className="mb-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-base text-gray-900 sm:text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
             value={caregiverSearch}
             onChange={(event) => setCaregiverSearch(event.target.value)}
             autoFocus

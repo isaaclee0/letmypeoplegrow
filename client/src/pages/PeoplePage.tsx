@@ -1756,7 +1756,7 @@ const PeoplePage: React.FC = () => {
                     id="search"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="block h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-10 pr-10 text-sm text-gray-900 placeholder-gray-500 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-900/50 dark:text-gray-100 dark:placeholder-gray-300"
+                    className="block h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-10 pr-10 text-base text-gray-900 placeholder-gray-500 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-primary-500 sm:text-sm dark:border-gray-500 dark:bg-gray-900/50 dark:text-gray-100 dark:placeholder-gray-300"
                     placeholder="Search by name, email, or family..."
                   />
                   <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
@@ -3077,7 +3077,7 @@ const PeoplePage: React.FC = () => {
                 <input
                   type="text"
                   placeholder="Filter..."
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2 sm:text-sm"
                   value={caregiverSearch}
                   onChange={e => setCaregiverSearch(e.target.value)}
                   autoFocus
@@ -3143,7 +3143,7 @@ const PeoplePage: React.FC = () => {
             <input
               type="text"
               placeholder="Filter..."
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2 sm:text-sm"
               value={bulkCaregiverSearch}
               onChange={e => setBulkCaregiverSearch(e.target.value)}
               autoFocus

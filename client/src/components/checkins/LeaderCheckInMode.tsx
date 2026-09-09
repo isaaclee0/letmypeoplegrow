@@ -825,7 +825,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="block w-full pl-10 pr-3 py-2 text-sm border border-gray-300 dark:border-gray-600 bg-transparent dark:bg-gray-900/50 text-gray-900 dark:text-gray-100 rounded-md focus:ring-primary-500 focus:border-primary-500"
+              className="block w-full pl-10 pr-3 py-2 text-base border border-gray-300 dark:border-gray-600 bg-transparent dark:bg-gray-900/50 text-gray-900 dark:text-gray-100 rounded-md focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
               placeholder="Search by name or family..."
               autoComplete="off"
             />
@@ -1118,7 +1118,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                   value={churchPeopleSearch}
                   onChange={(event) => setChurchPeopleSearch(event.target.value)}
                   placeholder="Type a name or family…"
-                  className="block w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                  className="block w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-3 text-base text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
                 />
               </div>
               {!churchPeopleSearch.trim() ? (

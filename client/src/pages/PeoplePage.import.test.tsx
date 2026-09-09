@@ -113,6 +113,12 @@ afterEach(() => {
 });
 
 describe('PeoplePage provider import', () => {
+  it('keeps the people search field at a non-zooming mobile font size', async () => {
+    renderPeoplePage({ people: [person(1)] });
+
+    expect(await screen.findByRole('textbox', { name: 'Search People' })).toHaveClass('text-base', 'sm:text-sm');
+  });
+
   it.each([
     ['empty locally managed roster', 'none', []],
     ['populated locally managed roster', 'none', [person(1)]],

@@ -185,7 +185,7 @@ const Layout: React.FC = () => {
       <div className="fixed inset-0 bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-900 dark:to-gray-900 overflow-hidden">
         <main className="h-full overflow-y-auto overscroll-none focus:outline-none">
           <div className="py-6">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
+            <div className="max-w-7xl mx-auto px-2 sm:px-6 md:px-8">
               <Outlet />
             </div>
           </div>
@@ -478,7 +478,7 @@ const Layout: React.FC = () => {
         {/* Page content */}
         <main className="flex-1 relative overflow-y-auto scrollbar-thin focus:outline-none">
           <div className="py-6">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
+            <div className="max-w-7xl mx-auto px-2 sm:px-6 md:px-8">
               <Outlet />
             </div>
           </div>
