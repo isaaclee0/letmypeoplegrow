@@ -400,38 +400,61 @@ app.delete('/api/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const hardDelete = req.query.hard === 'true';
-    const churches = Database.listChurches();
-
-    // Find user across churches
-    let user = null;
-    let userChurchId = null;
-    for (const church of churches) {
-      const cid = church.church_id;
-      const result = await Database.queryForChurch(cid,
-        'SELECT email, first_name, last_name, church_id FROM users WHERE id = ?',
-        [userId]
-      );
-      if (result.length) {
-        user = result[0];
-        userChurchId = cid;
-        break;
-      }
+    const userChurchId = req.query.churchId;
+    if (typeof userChurchId !== 'string' || !userChurchId || !/^[1-9]\d*$/.test(userId) || !Number.isSafeInteger(Number(userId))) {
+      return res.status(400).json({ error: 'A valid user ID and organisation ID are required.' });
     }
+    if (!Database.listChurches().some(church => church.church_id === userChurchId)) {
+      return res.status(404).json({ error: 'Organisation not found.' });
+    }
+    const [user] = await Database.queryForChurch(userChurchId,
+      'SELECT email, mobile_number FROM users WHERE id = ? AND church_id = ?', [userId, userChurchId]);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     if (hardDelete) {
-      await Database.queryForChurch(userChurchId, 'DELETE FROM users WHERE id = ?', [userId]);
+      const db = Database.getChurchDb(userChurchId);
+      // Include login routing in the same SQLite transaction as account deletion.
+      db.prepare('ATTACH DATABASE ? AS admin_registry').run(Database.getRegistryDb().name);
+      try {
+        db.transaction(() => {
+          // These foreign keys cascade into shared organisation records, not just
+          // account preferences. Preserve them and offer deactivation instead.
+          for (const [table, column] of [
+            ['attendance_sessions', 'created_by'],
+            ['headcount_records', 'updated_by'],
+            ['notification_rules', 'created_by'],
+          ]) {
+            if (db.prepare(`SELECT 1 FROM ${table} WHERE ${column} = ? AND church_id = ? LIMIT 1`).get(userId, userChurchId)) {
+              const error = new Error('This user owns attendance history or notification rules. Deactivate the user instead to preserve those records.');
+              error.status = 409;
+              throw error;
+            }
+          }
+          db.prepare('UPDATE contacts SET created_by = NULL WHERE created_by = ? AND church_id = ?').run(userId, userChurchId);
+          db.prepare(`DELETE FROM user_invitations WHERE church_id = ? AND
+            ((? IS NOT NULL AND LOWER(email) = LOWER(?)) OR (? IS NOT NULL AND mobile_number = ?))`)
+            .run(userChurchId, user.email, user.email, user.mobile_number, user.mobile_number);
+          db.prepare(`DELETE FROM otc_codes WHERE church_id = ? AND
+            ((contact_type = 'email' AND LOWER(contact_identifier) = LOWER(?)) OR
+             (contact_type = 'sms' AND contact_identifier = ?))`)
+            .run(userChurchId, user.email, user.mobile_number);
+          db.prepare('DELETE FROM users WHERE id = ? AND church_id = ?').run(userId, userChurchId);
+          db.prepare('DELETE FROM admin_registry.user_lookup WHERE user_id = ? AND church_id = ?').run(userId, userChurchId);
+        })();
+      } finally {
+        db.exec('DETACH DATABASE admin_registry');
+      }
       res.json({
         success: true,
         message: `User ${user.email} permanently deleted.`
       });
     } else {
       await Database.queryForChurch(userChurchId,
-        'UPDATE users SET is_active = 0 WHERE id = ?',
-        [userId]
+        'UPDATE users SET is_active = 0 WHERE id = ? AND church_id = ?',
+        [userId, userChurchId]
       );
       res.json({
         success: true,
@@ -440,7 +463,8 @@ app.delete('/api/users/:userId', async (req, res) => {
     }
   } catch (error) {
     console.error('Delete user error:', error);
-    res.status(500).json({ error: error.message });
+    const status = error.status || (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' ? 409 : 500);
+    res.status(status).json({ error: status === 409 && !error.status ? 'This user has linked records. Deactivate the user instead.' : error.message });
   }
 });
 
@@ -448,27 +472,23 @@ app.delete('/api/users/:userId', async (req, res) => {
 app.post('/api/users/:userId/reactivate', async (req, res) => {
   try {
     const { userId } = req.params;
-    const churches = Database.listChurches();
-
-    let user = null;
-    let userChurchId = null;
-    for (const church of churches) {
-      const cid = church.church_id;
-      const result = await Database.queryForChurch(cid, 'SELECT email FROM users WHERE id = ?', [userId]);
-      if (result.length) {
-        user = result[0];
-        userChurchId = cid;
-        break;
-      }
+    const userChurchId = req.query.churchId;
+    if (typeof userChurchId !== 'string' || !userChurchId || !/^[1-9]\d*$/.test(userId) || !Number.isSafeInteger(Number(userId))) {
+      return res.status(400).json({ error: 'A valid user ID and organisation ID are required.' });
     }
+    if (!Database.listChurches().some(church => church.church_id === userChurchId)) {
+      return res.status(404).json({ error: 'Organisation not found.' });
+    }
+    const [user] = await Database.queryForChurch(userChurchId,
+      'SELECT email FROM users WHERE id = ? AND church_id = ?', [userId, userChurchId]);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     await Database.queryForChurch(userChurchId,
-      'UPDATE users SET is_active = 1 WHERE id = ?',
-      [userId]
+      'UPDATE users SET is_active = 1 WHERE id = ? AND church_id = ?',
+      [userId, userChurchId]
     );
 
     res.json({
@@ -683,24 +703,35 @@ app.delete('/api/churches/:churchId', async (req, res) => {
       return res.status(400).json({ error: 'Church ID confirmation does not match' });
     }
 
-    // Remove from registry
-    await Database.registryQuery('DELETE FROM user_lookup WHERE church_id = ?', [churchId]);
-    await Database.registryQuery('DELETE FROM churches WHERE church_id = ?', [churchId]);
-
-    // Close and delete database files
-    Database.closeChurchDb(churchId);
-
-    const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR ||
-      path.join(__dirname, '..', 'data');
-    const dbPath = path.join(dataDir, 'churches', `${churchId}.sqlite`);
-
-    for (const suffix of ['', '-wal', '-shm']) {
-      const file = dbPath + suffix;
-      if (fs.existsSync(file)) {
-        fs.unlinkSync(file);
-        console.log(`Deleted: ${file}`);
-      }
+    if (!Database.listChurches().some(church => church.church_id === churchId)) {
+      return res.status(404).json({ error: 'Organisation not found.' });
     }
+
+    // Use the open database's actual path, not a separately reconstructed path.
+    const dbPath = Database.getChurchDb(churchId).name;
+    Database.closeChurchDb(churchId);
+    const staged = [];
+    try {
+      for (const suffix of ['', '-wal', '-shm']) {
+        const original = dbPath + suffix;
+        if (fs.existsSync(original)) {
+          const temporary = `${original}.deleting-${process.pid}-${Date.now()}`;
+          fs.renameSync(original, temporary);
+          staged.push([original, temporary]);
+        }
+      }
+      const registry = Database.getRegistryDb();
+      registry.transaction(() => {
+        registry.prepare('DELETE FROM user_lookup WHERE church_id = ?').run(churchId);
+        registry.prepare('DELETE FROM churches WHERE church_id = ?').run(churchId);
+      })();
+    } catch (error) {
+      for (const [original, temporary] of staged.reverse()) fs.renameSync(temporary, original);
+      throw error;
+    }
+    // Once unregistered, staged files cannot be reopened as a church database.
+    // Report cleanup failures honestly so they can be retried manually.
+    for (const [, temporary] of staged) fs.unlinkSync(temporary);
 
     res.json({ success: true, message: `Church ${churchId} and all data permanently deleted.` });
   } catch (error) {

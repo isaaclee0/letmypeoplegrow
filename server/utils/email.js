@@ -260,7 +260,7 @@ To unsubscribe, reply to this email with "unsubscribe" in the subject line.
 };
 
 const sendNewChurchApprovalEmail = async (churchName, churchId, adminName, adminEmail) => {
-  const adminPanelUrl = process.env.ADMIN_PANEL_URL || 'http://localhost:7777';
+  const adminPanelUrl = process.env.ADMIN_PANEL_URL || 'http://192.168.193.190:7777';
   const subject = `New organisation pending approval: ${churchName}`;
 
   const htmlContent = `
