@@ -12,6 +12,17 @@ const batch = { id: 4, provider: 'planning_center', name: 'Members', enabled: tr
 function renderEditor(current: PeopleSyncBatch | null = batch, onSaved = vi.fn()) { return render(<PlanningCenterBatchEditor batch={current} onSaved={onSaved} onCancel={vi.fn()} />); }
 describe('PlanningCenterBatchEditor', () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: [] }); });
+  it('saves the onboarding List-to-gathering mapping with weekly sync and membership removal', async () => {
+    vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: { gatherings: [{ id: 5, name: 'Youth' }] } } as never);
+    vi.mocked(integrationsAPI.createPlanningCenterSyncBatch).mockResolvedValue({ data: { batch } } as never);
+    render(<PlanningCenterBatchEditor batch={null} defaultScheduleEnabled defaultGatheringAutoRemoveEnabled createLabel="Save mapping" onSaved={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-1' } });
+    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
+    await screen.findByRole('option', { name: 'Youth' });
+    fireEvent.change(screen.getByLabelText('Existing gathering'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save mapping' }));
+    await waitFor(() => expect(integrationsAPI.createPlanningCenterSyncBatch).toHaveBeenCalledWith(expect.objectContaining({ sourceExternalId: 'list-1', gatheringTypeId: 5, gatheringAutoRemoveEnabled: true, scheduleEnabled: true, scheduleFrequency: 'weekly' })));
+  });
   it('creates from one selected List and leaves the batch pending review', async () => {
     const created = { ...batch, id: 8, source: { ...batch.source!, externalId: 'list-2', name: 'New members' }, needsSourceReview: true, initialSourceReviewPending: true };
     vi.mocked(integrationsAPI.createPlanningCenterSyncBatch).mockResolvedValue({ data: { batch: created } }); const saved = vi.fn(); renderEditor(null, saved);

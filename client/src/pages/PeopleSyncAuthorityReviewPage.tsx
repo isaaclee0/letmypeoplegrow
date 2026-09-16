@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import AuthorityReviewWorkspace from '../components/peopleSync/AuthorityReviewWorkspace';
 import type { SyncProvider } from '../components/peopleSync/types';
 import { peopleSyncAPI } from '../services/api';
@@ -29,6 +29,8 @@ export default function PeopleSyncAuthorityReviewPage() {
   const { provider: providerSlug } = useParams();
   const navigate = useNavigate();
   const config = routeConfigs[providerSlug || ''];
+  const [searchParams] = useSearchParams();
+  const initialSync = searchParams.get('reason') === 'first-batch';
   const [confirmed, setConfirmed] = useState(false);
 
   useEffect(() => {
@@ -49,7 +51,7 @@ export default function PeopleSyncAuthorityReviewPage() {
 
   return (
     <section aria-label={`${config.label} first batch authority review`} className="space-y-5">
-      {!confirmed ? (
+      {!confirmed && !initialSync ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
           <h1 className="text-lg font-semibold">Review {config.label} as source of truth</h1>
           <div className="mt-3 space-y-2 text-sm">
@@ -80,6 +82,7 @@ export default function PeopleSyncAuthorityReviewPage() {
         <AuthorityReviewWorkspace
           provider={config.provider}
           autoStart
+          activateInitialSync={initialSync}
           onApplied={refreshAndReturn}
           onCancel={returnToProvider}
         />

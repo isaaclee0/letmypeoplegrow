@@ -1,3 +1,4 @@
+const { renderVisitorFollowUp } = require('./visitorFollowUpEmail');
 const { BrevoClient } = require('@getbrevo/brevo');
 
 // Configure Brevo API
@@ -407,37 +408,7 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight, opti
       </table>`;
   }
 
-  // Visitor breakdown section
-  let visitorBreakdownHtml = '';
-  if (reviewData.weeklyVisitors && (reviewData.weeklyVisitors.firstTime.length > 0 || reviewData.weeklyVisitors.returning.length > 0)) {
-    const buildVisitorRows = (visitors) => visitors.map(v => {
-      const gatheringText = v.gatherings.length > 0 ? v.gatherings.join(', ') : '';
-      return `<tr><td style="padding: 4px 0 4px 12px; color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px;">${v.firstName} ${v.lastName}${gatheringText ? ` <span style="color: #9ca3af;">&mdash; ${gatheringText}</span>` : ''}</td></tr>`;
-    }).join('');
-
-    let subSections = '';
-    if (reviewData.weeklyVisitors.firstTime.length > 0) {
-      subSections += `
-        <div style="font-weight: 600; color: #374151; font-size: 13px; margin-top: 8px; margin-bottom: 4px;">First-time</div>
-        <table width="100%" cellpadding="0" cellspacing="0" border="0">${buildVisitorRows(reviewData.weeklyVisitors.firstTime)}</table>`;
-    }
-    if (reviewData.weeklyVisitors.returning.length > 0) {
-      subSections += `
-        <div style="font-weight: 600; color: #374151; font-size: 13px; margin-top: 12px; margin-bottom: 4px;">Returning</div>
-        <table width="100%" cellpadding="0" cellspacing="0" border="0">${buildVisitorRows(reviewData.weeklyVisitors.returning)}</table>`;
-    }
-
-    visitorBreakdownHtml = `
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 16px;">
-        <tr>
-          <td style="background-color: #ffffff; border-radius: 8px; padding: 20px; border: 1px solid #e5e7eb; border-left: 4px solid #9B51E0;">
-            <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #7c3aed; margin-bottom: 8px; font-size: 15px;">&#128075; This Week's Visitors</div>
-            ${subSections}
-            <div style="margin-top: 14px; font-style: italic; color: #9ca3af; font-size: 13px; line-height: 1.5;">Research shows that visitors are more likely to return when someone other than the pastor reaches out before Wednesday.</div>
-          </td>
-        </tr>
-      </table>`;
-  }
+  const { html: visitorBreakdownHtml, text: visitorBreakdownText } = renderVisitorFollowUp(reviewData.visitorFollowUp);
 
   // Getting started section (new churches only)
   let gettingStartedHtml = '';
@@ -547,22 +518,6 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight, opti
       lines.push(`  ...and ${reviewData.followUpTotal - reviewData.followUpPeople.length} more`);
     }
     followUpText = `\nPeople to Follow Up With:\n${lines.join('\n')}\nView all: ${appUrl}/app/reports\n`;
-  }
-
-  // Visitor breakdown plain text
-  let visitorBreakdownText = '';
-  if (reviewData.weeklyVisitors && (reviewData.weeklyVisitors.firstTime.length > 0 || reviewData.weeklyVisitors.returning.length > 0)) {
-    const lines = ['This Week\'s Visitors:'];
-    if (reviewData.weeklyVisitors.firstTime.length > 0) {
-      lines.push('First-time:');
-      reviewData.weeklyVisitors.firstTime.forEach(v => lines.push(`  - ${v.firstName} ${v.lastName}${v.gatherings.length > 0 ? ` — ${v.gatherings.join(', ')}` : ''}`));
-    }
-    if (reviewData.weeklyVisitors.returning.length > 0) {
-      lines.push('Returning:');
-      reviewData.weeklyVisitors.returning.forEach(v => lines.push(`  - ${v.firstName} ${v.lastName}${v.gatherings.length > 0 ? ` — ${v.gatherings.join(', ')}` : ''}`));
-    }
-    lines.push('Tip: Visitors are more likely to return when someone other than the pastor reaches out before Wednesday.');
-    visitorBreakdownText = '\n' + lines.join('\n') + '\n';
   }
 
   const insightText = insight ? `\nWeekly Insight:\n${insight.replace(/<[^>]*>/g, '')}\n` : '';

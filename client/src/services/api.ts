@@ -372,6 +372,7 @@ export interface ChurchLocationResult {
 }
 
 export interface GatheringType {
+  syncSources?: import('../components/peopleSync/GatheringSourceBadge').GatheringSyncSource[];
   id: number;
   name: string;
   description?: string;

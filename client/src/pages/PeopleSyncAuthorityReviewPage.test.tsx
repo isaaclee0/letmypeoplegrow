@@ -133,8 +133,16 @@ describe('PeopleSyncAuthorityReviewPage', () => {
     });
   });
 
+  it('starts first sync without an extra confirmation', async () => {
+    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch', { strict: true });
+    await waitFor(() => expect(`${window.location.pathname}${window.location.search}`).toBe('/app/settings?tab=integrations&integration=planning-center'));
+    expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1);
+    expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Review and enable source of truth' })).not.toBeInTheDocument();
+  });
+
   it('registers the admin-only route inside the existing app shell', async () => {
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/planning-center/authority-review');
 
     expect(await screen.findByRole('heading', { name: 'Review Planning Center as source of truth' })).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'People' }).length).toBeGreaterThan(0);
@@ -142,21 +150,21 @@ describe('PeopleSyncAuthorityReviewPage', () => {
   });
 
   it('redirects a non-admin before starting provider work', async () => {
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch', { role: 'coordinator' });
+    renderRoute('/app/settings/integrations/planning-center/authority-review', { role: 'coordinator' });
 
     await waitFor(() => expect(window.location.pathname).toBe('/app/attendance'));
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
   });
 
   it('redirects an invalid provider to integration settings without previewing', async () => {
-    renderRoute('/app/settings/integrations/not-a-provider/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/not-a-provider/authority-review');
 
     await waitFor(() => expect(`${window.location.pathname}${window.location.search}`).toBe('/app/settings?tab=integrations'));
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
   });
 
   it('warns about authoritative lifecycle changes and preserves the other connection', async () => {
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/planning-center/authority-review');
 
     expect(await screen.findByText(/added, updated, archived, or reactivated/i)).toBeInTheDocument();
     expect(screen.getByText(/other provider stays connected/i)).toBeInTheDocument();
@@ -164,7 +172,7 @@ describe('PeopleSyncAuthorityReviewPage', () => {
   });
 
   it('returns directly to the provider panel when the warning is cancelled before preview', async () => {
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/planning-center/authority-review');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
@@ -174,7 +182,7 @@ describe('PeopleSyncAuthorityReviewPage', () => {
   });
 
   it('starts exactly one preview after confirmation under React Strict Mode', async () => {
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch', { strict: true });
+    renderRoute('/app/settings/integrations/planning-center/authority-review', { strict: true });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Review and enable source of truth' }));
 
@@ -188,7 +196,7 @@ describe('PeopleSyncAuthorityReviewPage', () => {
     const cancellationRequest = deferred<{ data: { success: true; authority: { active: 'none'; pending: null } } }>();
     vi.mocked(peopleSyncAPI.previewAuthority).mockReturnValue(previewRequest.promise);
     vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReturnValue(cancellationRequest.promise);
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/planning-center/authority-review');
     fireEvent.click(await screen.findByRole('button', { name: 'Review and enable source of truth' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel authority change' }));
 
@@ -208,7 +216,7 @@ describe('PeopleSyncAuthorityReviewPage', () => {
   });
 
   it('returns to the matching provider panel only after apply status refresh succeeds', async () => {
-    renderRoute('/app/settings/integrations/elvanto/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/elvanto/authority-review');
     vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({
       data: { success: true, ...review, plan: { ...plan, provider: 'elvanto' }, authority: { active: 'none', pending: 'elvanto' } },
     });
@@ -222,7 +230,7 @@ describe('PeopleSyncAuthorityReviewPage', () => {
 
   it('stays in the completed review when status refresh fails and returns after retry', async () => {
     vi.mocked(peopleSyncAPI.getSettings).mockRejectedValueOnce(new Error('Status unavailable'));
-    renderRoute('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
+    renderRoute('/app/settings/integrations/planning-center/authority-review');
     fireEvent.click(await screen.findByRole('button', { name: 'Review and enable source of truth' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply 0 selected changes' }));
 

@@ -1,4 +1,5 @@
 const Database = require('../config/database');
+const { getVisitorFollowUp } = require('./visitorFollowUp');
 const { getChurchDate, addDateOnly } = require('../utils/churchTime');
 
 /**
@@ -182,13 +183,13 @@ async function generateWeeklyReviewData(churchId, options = {}) {
   // Enriched data for AI insight
   const hasStandardGatherings = gatherings.some(g => g.attendance_type === 'standard');
   let engagementChanges = [];
-  let visitorRetention = null;
+  let visitorFollowUp = null;
   let crossGatheringTrends = [];
   let familyPatterns = [];
 
   if (hasStandardGatherings) {
     engagementChanges = await getRegularEngagementChanges(churchId, endDate);
-    visitorRetention = await getLocalVisitorRetention(churchId, endDate);
+    visitorFollowUp = await getVisitorFollowUp(churchId, { now });
     familyPatterns = await getFamilyAttendancePatterns(churchId, endDate);
   }
   const crossGatheringResult = await getCrossGatheringTrends(churchId, endDate);
@@ -197,11 +198,9 @@ async function generateWeeklyReviewData(churchId, options = {}) {
 
   // Follow-up and visitor data (only for standard gatherings)
   let followUpData = { people: [], total: 0 };
-  let weeklyVisitors = null;
   if (hasStandardGatherings) {
     await cleanupStaleDismissals(churchId);
     followUpData = await getNewlyDisengaged(churchId, endDate);
-    weeklyVisitors = await getWeeklyVisitorBreakdown(churchId, startDate, endDate);
   }
 
   // Getting started data for new churches
@@ -233,13 +232,12 @@ async function generateWeeklyReviewData(churchId, options = {}) {
     recipients,
     weeklyTotals,
     engagementChanges,
-    visitorRetention,
+    visitorFollowUp,
     crossGatheringTrends,
     crossGatheringShifts,
     familyPatterns,
     followUpPeople: followUpData.people,
     followUpTotal: followUpData.total,
-    weeklyVisitors,
     gettingStarted
   };
 }
@@ -496,55 +494,6 @@ async function getRegularEngagementChanges(churchId, endDate) {
   // Sort by severity descending, return top 5
   results.sort((a, b) => b.severity - a.severity);
   return results.slice(0, 5);
-}
-
-/**
- * Get local visitor retention stats for last 4 weeks, compared to prior 4 weeks.
- */
-async function getLocalVisitorRetention(churchId, endDate) {
-  const start4 = addDateOnly(endDate, { days: -28 });
-  const start8 = addDateOnly(endDate, { days: -56 });
-
-  // Find local visitors whose first attendance record falls in each window
-  const getWindowStats = async (windowStart, windowEnd, analysisEnd) => {
-    // Local visitors whose earliest attendance is within the window
-    // total_visits is scoped up to analysisEnd so both windows are comparable
-    const newVisitors = await Database.query(
-      `SELECT i.id, i.first_name, i.last_name,
-        MIN(s.session_date) as first_visit,
-        COUNT(DISTINCT s.session_date) as total_visits
-       FROM individuals i
-       JOIN attendance_records ar ON ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = i.church_id
-       JOIN attendance_sessions s ON s.id = ar.session_id AND s.session_date <= ? AND s.excluded_from_stats = 0
-       JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
-       WHERE i.people_type = 'local_visitor' AND i.church_id = ?
-       GROUP BY i.id
-       HAVING first_visit >= ? AND first_visit < ?`,
-      [analysisEnd, churchId, windowStart, windowEnd]
-    );
-
-    const newCount = newVisitors.length;
-    const returnedCount = newVisitors.filter(v => v.total_visits >= 2).length;
-    const returnRate = newCount > 0 ? Math.round((returnedCount / newCount) * 100) : null;
-    const integrationCandidates = newVisitors
-      .filter(v => v.total_visits >= 3)
-      .sort((a, b) => b.total_visits - a.total_visits)
-      .slice(0, 3);
-
-    return { newCount, returnedCount, returnRate, integrationCandidates };
-  };
-
-  // current window: [start4, endDate), prior window: [start8, start4)
-  // Both windows count total_visits up to endDate for apples-to-apples comparison
-  const current = await getWindowStats(start4, endDate, endDate);
-  const prior = await getWindowStats(start8, start4, endDate);
-
-  return {
-    current,
-    prior,
-    returnRateChange: (current.returnRate !== null && prior.returnRate !== null)
-      ? current.returnRate - prior.returnRate : null
-  };
 }
 
 /**
@@ -945,70 +894,6 @@ async function getNewlyDisengaged(churchId, endDate) {
   }
 
   return { people: result, total };
-}
-
-/**
- * Get this week's local visitors categorized as first-time or returning.
- */
-async function getWeeklyVisitorBreakdown(churchId, startDate, endDate) {
-  // Get local visitors who attended this week
-  const visitors = await Database.query(
-    `SELECT DISTINCT i.id, i.first_name, i.last_name
-     FROM individuals i
-     JOIN attendance_records ar ON ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = i.church_id
-     JOIN attendance_sessions s ON s.id = ar.session_id
-     JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
-     WHERE i.people_type = 'local_visitor' AND i.is_active = 1 AND i.church_id = ?
-       AND s.session_date >= ? AND s.session_date <= ?
-       AND s.excluded_from_stats = 0`,
-    [churchId, startDate, endDate]
-  );
-
-  if (visitors.length === 0) return null;
-
-  const firstTime = [];
-  const returning = [];
-
-  for (const visitor of visitors) {
-    // Check if they have any attendance before this week
-    const prior = await Database.query(
-      `SELECT 1 FROM attendance_records ar
-       JOIN attendance_sessions s ON s.id = ar.session_id
-       WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
-         AND s.session_date < ?
-         AND s.excluded_from_stats = 0
-       LIMIT 1`,
-      [visitor.id, churchId, startDate]
-    );
-
-    // Get which gathering(s) they attended this week
-    const gatheringRows = await Database.query(
-      `SELECT DISTINCT gt.name
-       FROM attendance_records ar
-       JOIN attendance_sessions s ON s.id = ar.session_id
-       JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
-       WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
-         AND s.session_date >= ? AND s.session_date <= ?
-         AND s.excluded_from_stats = 0
-       ORDER BY gt.name`,
-      [visitor.id, churchId, startDate, endDate]
-    );
-    const gatheringNames = gatheringRows.map(g => g.name);
-
-    const entry = {
-      firstName: visitor.first_name,
-      lastName: visitor.last_name,
-      gatherings: gatheringNames
-    };
-
-    if (prior.length > 0) {
-      returning.push(entry);
-    } else {
-      firstTime.push(entry);
-    }
-  }
-
-  return { firstTime, returning };
 }
 
 /**

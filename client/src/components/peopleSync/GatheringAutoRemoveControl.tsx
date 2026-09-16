@@ -35,10 +35,10 @@ export default function GatheringAutoRemoveControl({
       <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 bg-gray-50/60 p-4 dark:border-gray-700 dark:bg-gray-800/40">
         <div>
           <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-            Remove people who no longer match
+            Keep gathering membership aligned
           </p>
           <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-            Automatically remove people from this gathering when they stop matching this batch.
+            The connected list or group controls sync-managed membership. When someone leaves it, their gathering assignment is removed on the next sync without another review. Manually added members and attendance history are kept.
           </p>
         </div>
         <button

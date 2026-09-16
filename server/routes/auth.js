@@ -36,23 +36,25 @@ router.get('/', (req, res) => {
 
   const payload = {
     message: 'Authentication service is running',
-    status: hasExternalServices ? 'full' : 'limited',
+    status: isDev || hasExternalServices ? 'full' : 'limited',
     externalServices,
     endpoints: {
-      'request-code': hasExternalServices ? 'POST - Request one-time code' : 'POST - Disabled (no external services)',
-      'verify-code': hasExternalServices ? 'POST - Verify one-time code' : 'POST - Disabled (no external services)',
+      'request-code': isDev || hasExternalServices ? 'POST - Request one-time code' : 'POST - Disabled (no external services)',
+      'verify-code': isDev || hasExternalServices ? 'POST - Verify one-time code' : 'POST - Disabled (no external services)',
       'me': 'GET - Get current user info',
       'logout': 'POST - Logout user'
     },
     environment: process.env.NODE_ENV || 'development',
     development: null,
-    note: !hasExternalServices ? 'Configure Crazytel and/or Brevo API keys to enable full authentication' : null
+    note: !isDev && !hasExternalServices ? 'Configure Crazytel and/or Brevo API keys to enable full authentication' : null
   };
 
   if (isDev) {
-    payload.development = devBypassEnabled
-      ? { note: 'Development bypass is ENABLED: use dev@church.local with code 000000', devUser: 'dev@church.local', devCode: '000000' }
-      : { note: 'Development bypass is DISABLED. Full OTC flow required.' };
+    payload.development = {
+      note: 'Development OTPs use 000000. No OTP email or SMS is sent.',
+      devCode: '000000',
+      ...(devBypassEnabled ? { devUser: 'dev@church.local' } : {})
+    };
   }
 
   res.json(payload);
@@ -269,7 +271,7 @@ router.post('/request-code',
 
       // Spend-abuse guard: only meaningful once we're actually about to pay
       // for an SMS send via Crazytel (dev/unconfigured fallback costs nothing).
-      if (finalContactMethod === 'sms' && externalServices.crazytel) {
+      if (!isDev && finalContactMethod === 'sms' && externalServices.crazytel) {
         const rateLimitResult = await checkSmsSendAllowed(churchId || user.church_id, finalContact);
         if (!rateLimitResult.allowed) {
           const message = rateLimitResult.reason === 'daily_limit'
@@ -285,7 +287,7 @@ router.post('/request-code',
         [finalContact, finalContactMethod]
       );
 
-      const code = generateOTC();
+      const code = isDev ? '000000' : generateOTC();
       const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
 
       await Database.queryForChurch(
@@ -295,6 +297,8 @@ router.post('/request-code',
       );
 
       setImmediate(async () => {
+        // Development never contacts delivery providers, even when keys are configured.
+        if (isDev) return;
         try {
           if (finalContactMethod === 'email') {
             if (externalServices.brevo) {
@@ -327,12 +331,14 @@ router.post('/request-code',
       }
 
       const responsePayload = {
-        message: `Verification code sent to your ${finalContactMethod === 'email' ? 'email address' : 'phone number'}.`,
+        message: isDev
+          ? 'Development mode: use verification code 000000. No message was sent.'
+          : `Verification code sent to your ${finalContactMethod === 'email' ? 'email address' : 'phone number'}.`,
         contact: maskedContact,
         contactType: finalContactMethod,
         expiresIn: parseInt(process.env.OTC_EXPIRE_MINUTES) || 10
       };
-      if (isDev && devBypassEnabled) {
+      if (isDev) {
         responsePayload.devCode = code;
       }
       res.json(responsePayload);
@@ -787,7 +793,7 @@ router.post('/register',
 
       Database.registerUserLookup(userId, email, null, churchId);
 
-      const code = generateOTC();
+      const code = isDev ? '000000' : generateOTC();
       const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
 
       await Database.queryForChurch(
@@ -797,6 +803,8 @@ router.post('/register',
       );
 
       setImmediate(async () => {
+        // Development never contacts delivery providers, even when keys are configured.
+        if (isDev) return;
         try { await sendOTCEmail(email, code); }
         catch (error) { console.error('Failed to send welcome email:', error); }
 
@@ -814,7 +822,9 @@ router.post('/register',
       });
 
       res.status(201).json({
-        message: 'Account created successfully. Please check your email for a verification code to complete your first login.',
+        message: isDev
+          ? 'Account created successfully. Use verification code 000000 to complete your first login. No message was sent.'
+          : 'Account created successfully. Please check your email for a verification code to complete your first login.',
         email: email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
       });
     } catch (error) {

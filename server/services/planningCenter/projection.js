@@ -68,7 +68,8 @@ function toNormalizedPcoPerson(pcoPerson) {
     firstName: pcoPerson.firstName,
     lastName: pcoPerson.lastName,
     child: typeof pcoPerson.child === 'boolean' ? pcoPerson.child : null,
-    state: pcoPerson.status === 'active' ? 'active' : 'archived',
+    // Absence from a List and missing status are not archival evidence.
+    state: pcoPerson.status === 'inactive' ? 'archived' : pcoPerson.status === 'active' ? 'active' : 'unknown',
     familyId: pcoPerson.householdId ?? null,
     // Retains optional PCO details used by unrelated field and background
     // check features. Provider-owned List membership is resolved separately

@@ -1,16 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Modal from '../Modal';
 import SyncReview from '../peopleSync/SyncReview';
+import PeopleSyncSetup from '../peopleSync/PeopleSyncSetup';
 import type { PeopleSyncApplyResult, PeopleSyncSelections, ProviderSource, SyncProvider } from '../peopleSync/types';
-import { peopleImportAPI } from '../../services/api';
+import { integrationsAPI, peopleImportAPI } from '../../services/api';
 import type { ImportSelection, PeopleImportReview } from './types';
 
-type ImportState = 'provider' | 'sources' | 'previewing' | 'review' | 'applying' | 'applied';
+type ImportState = 'provider' | 'connect' | 'sources' | 'sync' | 'previewing' | 'review' | 'applying' | 'applied';
+export type PeopleTransferMode = 'import' | 'sync';
 
 interface PeopleImportDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onApplied: (result: PeopleSyncApplyResult) => void | Promise<void>;
+  initialProvider?: SyncProvider | null;
+  initialMode?: PeopleTransferMode;
+  allowImport?: boolean;
+  embedded?: boolean;
 }
 
 const secondaryButtonClass = 'rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700';
@@ -27,7 +33,7 @@ function displayError(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-function selectionFor(source: ProviderSource): ImportSelection {
+function selectionFor(source: ProviderSource): Exclude<ImportSelection, { kind: 'all' }> {
   return { kind: source.kind, externalId: source.externalId };
 }
 
@@ -36,7 +42,8 @@ function sourceType(source: ProviderSource): string {
   return source.kind === 'elvanto_category' ? 'Category' : 'Group';
 }
 
-export default function PeopleImportDialog({ isOpen, onClose, onApplied }: PeopleImportDialogProps) {
+export default function PeopleImportDialog({ isOpen, onClose, onApplied, initialProvider, initialMode = 'import', allowImport = true, embedded = false }: PeopleImportDialogProps) {
+  const [mode, setMode] = useState<PeopleTransferMode>(initialMode);
   const [state, setState] = useState<ImportState>('provider');
   const [provider, setProvider] = useState<SyncProvider | null>(null);
   const [sources, setSources] = useState<ProviderSource[]>([]);
@@ -47,6 +54,8 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PeopleSyncApplyResult | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [connecting, setConnecting] = useState(false);
   const generationRef = useRef(0);
   const applyInFlightRef = useRef(false);
 
@@ -67,15 +76,18 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
     setError(null);
     setResult(null);
     setRefreshError(null);
+    setApiKey('');
+    setConnecting(false);
   }, []);
 
   useEffect(() => {
     if (!isOpen) reset();
   }, [isOpen, reset]);
 
-  const loadSources = useCallback(async (nextProvider: SyncProvider) => {
+  const loadSources = useCallback(async (nextProvider: SyncProvider, nextMode: PeopleTransferMode = 'import') => {
     const generation = nextGeneration();
     setProvider(nextProvider);
+    setMode(nextMode);
     setSources([]);
     setLoadingSources(true);
     setSelection(null);
@@ -84,6 +96,15 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
     setRefreshError(null);
     setState('sources');
     try {
+      if (nextMode === 'sync') {
+        const status = nextProvider === 'planning_center'
+          ? await integrationsAPI.getPlanningCenterStatus()
+          : await integrationsAPI.getElvantoStatus();
+        if (generation !== generationRef.current) return;
+        setLoadingSources(false);
+        setState(status.data.connected ? 'sync' : 'connect');
+        return;
+      }
       const response = await peopleImportAPI.listSources(nextProvider);
       if (generation !== generationRef.current) return;
       setSources(response.data.sources);
@@ -91,10 +112,46 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
       setLoadingSources(false);
     } catch (cause) {
       if (generation !== generationRef.current) return;
-      setError(displayError(cause, 'Could not load people sources.'));
+      const code = (cause as { response?: { data?: { code?: string } } })?.response?.data?.code;
+      if (code === 'SYNC_NOT_CONNECTED' || code === 'SYNC_CONNECTION_INVALID' || code === 'SYNC_SOURCE_AUTH') {
+        setState('connect');
+      } else {
+        setError(displayError(cause, 'Could not load people sources.'));
+      }
       setLoadingSources(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const nextMode = allowImport ? initialMode : 'sync';
+    setMode(nextMode);
+    if (initialProvider) void loadSources(initialProvider, nextMode);
+  }, [isOpen, initialProvider, initialMode, allowImport, loadSources]);
+
+  const connect = async () => {
+    if (!provider || connecting || (provider === 'elvanto' && !apiKey.trim())) return;
+    const generation = nextGeneration();
+    setConnecting(true);
+    setError(null);
+    try {
+      if (provider === 'planning_center') {
+        const response = await integrationsAPI.authorizePlanningCenter(`/app/people?import=planning_center${mode === 'sync' ? '&mode=sync' : ''}`);
+        if (generation !== generationRef.current) return;
+        window.location.href = response.data.authUrl;
+      } else {
+        await integrationsAPI.connectElvanto(apiKey.trim());
+        if (generation !== generationRef.current) return;
+        setApiKey('');
+        setConnecting(false);
+        await loadSources(provider, mode);
+      }
+    } catch (cause) {
+      if (generation !== generationRef.current) return;
+      setError(displayError(cause, 'Could not connect. Please try again.'));
+      setConnecting(false);
+    }
+  };
 
   const preview = useCallback(async () => {
     if (!provider || !selection) return;
@@ -155,35 +212,71 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
     setReview(null);
     setError(null);
     setLoadingSources(false);
+    setApiKey('');
+    setConnecting(false);
   };
 
-  return (
-    <Modal isOpen={isOpen} onClose={close} className="max-w-4xl">
-      <section role="dialog" aria-modal="true" aria-label="Import people" className="w-full max-w-4xl rounded-lg bg-white p-6 shadow-xl dark:bg-gray-900">
-        <header className="mb-5 flex items-start justify-between gap-4">
+  const content = (
+      <section role={embedded ? undefined : "dialog"} aria-modal={embedded ? undefined : true} aria-label="Import people" className={embedded ? "w-full" : "w-full max-w-4xl rounded-lg bg-white p-6 shadow-xl dark:bg-gray-900"}>
+        {!embedded && <header className="mb-5 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Import people</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{mode === 'sync' ? 'Sync people' : 'Import people'}</h2>
             {state === 'review' || state === 'applying' ? <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">People import review</p> : null}
           </div>
           <button type="button" className={secondaryButtonClass} onClick={close} disabled={state === 'applying'}>Close</button>
-        </header>
+        </header>}
 
         {state === 'provider' && (
           <div className="space-y-4">
-            <p className="text-sm text-gray-700 dark:text-gray-200">Choose the provider to import people from.</p>
+            <fieldset className="grid gap-3 sm:grid-cols-2">
+              <legend className="mb-3 text-sm font-medium text-gray-900 dark:text-gray-100">How would you like to manage your people?</legend>
+              <label className={`rounded-lg border p-4 ${mode === 'import' ? 'border-primary-500 bg-primary-50 dark:bg-primary-950' : 'border-gray-300 dark:border-gray-600'}`}>
+                <span className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100"><input type="radio" name="people-transfer-mode" aria-label="One-time import" checked={mode === 'import'} disabled={!allowImport} onChange={() => setMode('import')} />One-time import</span>
+                <span className="mt-2 block text-sm text-gray-600 dark:text-gray-300">Move your people into LMPG and manage them here.</span>
+              </label>
+              <label className={`rounded-lg border p-4 ${mode === 'sync' ? 'border-primary-500 bg-primary-50 dark:bg-primary-950' : 'border-gray-300 dark:border-gray-600'}`}>
+                <span className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100"><input type="radio" name="people-transfer-mode" aria-label="Keep in sync" checked={mode === 'sync'} onChange={() => setMode('sync')} />Keep in sync</span>
+                <span className="mt-2 block text-sm text-gray-600 dark:text-gray-300">Keep managing people in your other service. Sync its lists to your gatherings on a schedule.</span>
+              </label>
+            </fieldset>
+            {!allowImport && <p className="text-sm text-gray-500 dark:text-gray-400">One-time imports are unavailable while provider-managed people editing is locked.</p>}
+            <p className="text-sm text-gray-700 dark:text-gray-200">{mode === 'sync' ? 'Choose the provider that manages your people.' : 'Choose the provider to import people from.'}</p>
             <div className="flex flex-wrap gap-3">
-              <button type="button" className={primaryButtonClass} onClick={() => void loadSources('planning_center')}>Planning Center</button>
-              <button type="button" className={primaryButtonClass} onClick={() => void loadSources('elvanto')}>Elvanto</button>
+              <button type="button" className={primaryButtonClass} onClick={() => void loadSources('planning_center', mode)}>Planning Center</button>
+              <button type="button" className={primaryButtonClass} onClick={() => void loadSources('elvanto', mode)}>Elvanto</button>
             </div>
           </div>
         )}
 
+        {state === 'connect' && provider && (
+          <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void connect(); }}>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-medium text-gray-900 dark:text-gray-100">Connect {provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}</h3>
+              <button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{mode === 'sync' ? 'Connect your account to choose which lists feed your gatherings. You’ll review changes before activating sync.' : 'Connect your account to choose who to import. You’ll review the people before importing them.'}</p>
+            {provider === 'elvanto' ? (
+              <div className="space-y-2">
+                <label htmlFor="people-import-elvanto-key" className="block text-sm font-medium text-gray-900 dark:text-gray-100">Elvanto API key</label>
+                <input id="people-import-elvanto-key" type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={connecting} placeholder="Paste your API key" className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-base dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" />
+                <p className="text-sm text-gray-500 dark:text-gray-400">Ask an Elvanto administrator for your organisation’s API key.</p>
+              </div>
+            ) : <p className="text-sm text-gray-600 dark:text-gray-300">You’ll sign in to Planning Center, then return here to continue setup.</p>}
+            {error && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{error}</p>}
+            <button type="submit" className={primaryButtonClass} disabled={connecting || (provider === 'elvanto' && !apiKey.trim())}>
+              {connecting ? 'Connecting…' : `Connect ${provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}`}
+            </button>
+          </form>
+        )}
+
+        {state === 'sync' && provider && <PeopleSyncSetup provider={provider} onCancel={backToProviders} />}
+
         {state === 'sources' && provider && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3"><p className="text-sm text-gray-700 dark:text-gray-200">Choose who to import from {provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}</p><button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button></div>
+            <div className="flex items-center justify-between gap-3"><p className="text-sm text-gray-700 dark:text-gray-200">{mode === 'sync' ? 'Set up sync with ' : 'Choose who to import from '}{provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}</p><button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button></div>
             {loadingSources && !error ? <p role="status" className="text-sm text-gray-500">Loading people sources…</p> : null}
-            {error ? <div role="alert" className="space-y-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><p>{error}</p><button type="button" className={secondaryButtonClass} onClick={() => void loadSources(provider)}>Try again</button></div> : null}
-            {!loadingSources && !error && (
+            {error ? <div role="alert" className="space-y-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><p>{error}</p><button type="button" className={secondaryButtonClass} onClick={() => void loadSources(provider, mode)}>Try again</button></div> : null}
+            {mode === 'import' && !loadingSources && !error && (
               <fieldset className="space-y-2">
                 <legend className="sr-only">People source</legend>
                 <label className="flex cursor-pointer items-center gap-3 rounded border border-gray-200 p-3 dark:border-gray-700"><input type="radio" aria-label={allOption.name} name="people-import-source" checked={selection?.kind === 'all'} onChange={() => setSelection({ kind: 'all' })} /><span><span className="font-medium">{allOption.name}</span><span className="ml-2 text-xs text-gray-500">All people</span></span></label>
@@ -194,7 +287,7 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
                 })}
               </fieldset>
             )}
-            <button type="button" className={primaryButtonClass} disabled={!selection || !!error} onClick={() => void preview()}>Review import</button>
+            {mode === 'import' && <button type="button" className={primaryButtonClass} disabled={!selection || !!error} onClick={() => void preview()}>Review import</button>}
           </div>
         )}
 
@@ -212,6 +305,6 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied }: Peopl
           </div>
         )}
       </section>
-    </Modal>
   );
+  return embedded ? (isOpen ? content : null) : <Modal isOpen={isOpen} onClose={close} className="max-w-4xl mx-auto">{content}</Modal>;
 }

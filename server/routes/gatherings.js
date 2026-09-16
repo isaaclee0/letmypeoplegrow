@@ -5,6 +5,8 @@ const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const { processApiResponse } = require('../utils/caseConverter');
 
+const { gatheringSources } = require('../services/peopleSync/gatheringSources');
+
 const router = express.Router();
 router.use(verifyToken);
 router.use(ensureChurchIsolation);
@@ -67,6 +69,9 @@ router.get('/', async (req, res) => {
       `, [req.user.church_id, req.user.id, req.user.church_id]);
     }
     
+    const sources = await gatheringSources(req.user.church_id, gatherings.map((gathering) => gathering.id));
+    gatherings = gatherings.map((gathering) => ({ ...gathering, syncSources: sources.get(Number(gathering.id)) || [] }));
+
     // Use systematic conversion utility for field name conversion and BigInt handling
     const responseData = processApiResponse({ gatherings });
     

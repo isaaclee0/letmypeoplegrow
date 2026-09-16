@@ -2,12 +2,14 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PeopleImportDialog from './PeopleImportDialog';
-import { peopleImportAPI } from '../../services/api';
+import { integrationsAPI, peopleImportAPI } from '../../services/api';
 import type { PeopleImportReview } from './types';
 
 vi.mock('../../services/api', () => ({
   peopleImportAPI: { listSources: vi.fn(), preview: vi.fn(), apply: vi.fn() },
+  integrationsAPI: { connectElvanto: vi.fn(), authorizePlanningCenter: vi.fn(), getPlanningCenterStatus: vi.fn(), getElvantoStatus: vi.fn() },
 }));
+vi.mock('../peopleSync/PeopleSyncSetup', () => ({ default: ({ provider }: { provider: string }) => <p>Sync mapping for {provider}</p> }));
 
 const review: PeopleImportReview = {
   operationKind: 'people_import',
@@ -59,6 +61,92 @@ describe('PeopleImportDialog', () => {
     vi.mocked(peopleImportAPI.apply).mockResolvedValue({
       data: { runId: 1, status: 'applied', applied: {} as never, summary: review.summary },
     });
+  });
+
+  it('offers ongoing sync and opens gathering mapping for a connected provider', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterStatus).mockResolvedValue({ data: { connected: true } } as never);
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Keep in sync' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Planning Center' }));
+    expect(await screen.findByText('Sync mapping for planning_center')).toBeInTheDocument();
+    expect(peopleImportAPI.listSources).not.toHaveBeenCalled();
+  });
+
+  it('preserves ongoing sync in the Planning Center OAuth return', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterStatus).mockResolvedValue({ data: { connected: false } } as never);
+    vi.mocked(integrationsAPI.authorizePlanningCenter).mockRejectedValue(new Error('Unavailable'));
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Keep in sync' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Planning Center' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Planning Center' }));
+    await screen.findByRole('alert');
+    expect(integrationsAPI.authorizePlanningCenter).toHaveBeenCalledWith('/app/people?import=planning_center&mode=sync');
+  });
+
+  it('connects Elvanto inline and continues to source selection without importing', async () => {
+    vi.mocked(peopleImportAPI.listSources).mockRejectedValueOnce({ response: { data: { code: 'SYNC_NOT_CONNECTED' } } });
+    vi.mocked(integrationsAPI.connectElvanto).mockResolvedValueOnce({ data: { success: true } } as never);
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Elvanto' }));
+    const key = await screen.findByLabelText('Elvanto API key');
+    expect(key).toHaveAttribute('type', 'password');
+    expect(screen.getByRole('button', { name: 'Connect Elvanto' })).toBeDisabled();
+    fireEvent.change(key, { target: { value: '  test-key  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Elvanto' }));
+    await screen.findByRole('radio', { name: 'Everyone' });
+    expect(integrationsAPI.connectElvanto).toHaveBeenCalledWith('test-key');
+    expect(peopleImportAPI.listSources).toHaveBeenLastCalledWith('elvanto');
+    expect(peopleImportAPI.preview).not.toHaveBeenCalled();
+    expect(peopleImportAPI.apply).not.toHaveBeenCalled();
+  });
+
+  it('keeps connection errors inline and allows retry', async () => {
+    vi.mocked(peopleImportAPI.listSources).mockRejectedValueOnce({ response: { data: { code: 'SYNC_CONNECTION_INVALID' } } });
+    vi.mocked(integrationsAPI.connectElvanto).mockRejectedValueOnce({ response: { data: { error: 'Invalid API key' } } });
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Elvanto' }));
+    fireEvent.change(await screen.findByLabelText('Elvanto API key'), { target: { value: 'bad-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Elvanto' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid API key');
+    expect(screen.getByRole('button', { name: 'Connect Elvanto' })).toBeEnabled();
+  });
+
+  it('starts Planning Center authorization with a return to the import flow', async () => {
+    vi.mocked(peopleImportAPI.listSources).mockRejectedValueOnce({ response: { data: { code: 'SYNC_SOURCE_AUTH' } } });
+    vi.mocked(integrationsAPI.authorizePlanningCenter).mockRejectedValueOnce(new Error('Authorization unavailable'));
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Planning Center' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Planning Center' }));
+    await screen.findByText('Authorization unavailable');
+    expect(integrationsAPI.authorizePlanningCenter).toHaveBeenCalledWith('/app/people?import=planning_center');
+    expect(screen.getByRole('button', { name: 'Connect Planning Center' })).toBeEnabled();
+  });
+
+  it('navigates to the authorization URL returned by Planning Center setup', async () => {
+    vi.mocked(peopleImportAPI.listSources).mockRejectedValueOnce({ response: { data: { code: 'SYNC_NOT_CONNECTED' } } });
+    vi.mocked(integrationsAPI.authorizePlanningCenter).mockResolvedValueOnce({ data: { authUrl: '#test-authorization' } } as never);
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Planning Center' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Planning Center' }));
+    await waitFor(() => expect(window.location.hash).toBe('#test-authorization'));
+    window.history.replaceState({}, '', window.location.pathname);
+  });
+
+  it('ignores an Elvanto connection response after going back and clears the key', async () => {
+    const pending = deferred<never>();
+    vi.mocked(peopleImportAPI.listSources).mockRejectedValueOnce({ response: { data: { code: 'SYNC_NOT_CONNECTED' } } });
+    vi.mocked(integrationsAPI.connectElvanto).mockReturnValueOnce(pending.promise);
+    render(<PeopleImportDialog isOpen onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Elvanto' }));
+    fireEvent.change(await screen.findByLabelText('Elvanto API key'), { target: { value: 'test-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Elvanto' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await act(async () => pending.resolve({ data: { success: true } } as never));
+    expect(screen.getByText('Choose the provider to import people from.')).toBeInTheDocument();
+    expect(peopleImportAPI.listSources).toHaveBeenCalledTimes(1);
+    vi.mocked(peopleImportAPI.listSources).mockRejectedValueOnce({ response: { data: { code: 'SYNC_NOT_CONNECTED' } } });
+    fireEvent.click(screen.getByRole('button', { name: 'Elvanto' }));
+    expect(await screen.findByLabelText('Elvanto API key')).toHaveValue('');
   });
 
   it('chooses a provider and sends exactly the Everyone selection to preview', async () => {

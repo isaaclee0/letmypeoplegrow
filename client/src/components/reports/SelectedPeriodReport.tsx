@@ -7,6 +7,7 @@ import { reportsAPI, gatheringsAPI, GatheringType, attendanceAPI, familiesAPI } 
 import AttendanceHistoryPopover from './AttendanceHistoryPopover';
 import CaregiverPicker from './CaregiverPicker';
 import LongTermTrends from './LongTermTrends';
+import VisitorFollowUpPanel from './VisitorFollowUpPanel';
 import ReportLayoutEditor from './ReportLayoutEditor';
 import { ReportPanel, ReportPanelGrid } from './ReportPanelGrid';
 import { type ReportPanelId } from './reportLayout';
@@ -76,9 +77,8 @@ const SelectedPeriodReport: React.FC = () => {
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }>>([]);
   const [groupedAbsences, setGroupedAbsences] = useState<Array<{ key: string; name: string; streak: number; familyId?: number | null; individualId?: number; members?: Array<{ individualId: number; name: string }> }>>([]);
-  const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number; familyId?: number | null }>>([]);
+
   const [showAllAbsences, setShowAllAbsences] = useState(false);
-  const [showAllVisitors, setShowAllVisitors] = useState(false);
   const [dismissals, setDismissals] = useState<Array<{ individualId: number; gatheringTypeId: number; dismissedAtStreak: number }>>([]);
   const [familyCaregivers, setFamilyCaregivers] = useState<Record<number, FamilyCaregiver[]>>({});
   const [caregiverPopoverFamilyId, setCaregiverPopoverFamilyId] = useState<number | null>(null);
@@ -270,7 +270,7 @@ const SelectedPeriodReport: React.FC = () => {
     }
   }, [selectedGatherings, startDate, endDate]);
 
-  // Load recent session details to derive absence streaks and recent visitors.
+  // Load recent session details to derive absence streaks.
   //
   // When multiple gatherings are selected, a person shouldn't be flagged as absent
   // just because they missed one gathering while attending another in the same
@@ -324,13 +324,9 @@ const SelectedPeriodReport: React.FC = () => {
 
       type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; periodPresence: Map<number, boolean> };
       const regularMap = new Map<number, RegularEntry>();
-      const visitorCounts = new Map<string, { name: string; count: number; familyId: number | null }>();
-      const churchToday = today();
-
       responses.forEach((resp: any, idx: number) => {
         const data = resp.data as { attendanceList?: any[]; visitors?: any[] };
         const sessionDateStr = limitedDates[idx];
-        const withinSixWeeks = differenceInDateOnlyDays(churchToday, sessionDateStr) <= 42;
         const periodIndex = periodIndexByDate.get(sessionDateStr)!;
 
         const list = data.attendanceList || [];
@@ -343,17 +339,6 @@ const SelectedPeriodReport: React.FC = () => {
           regularMap.set(ind.id, existing);
         });
 
-        if (withinSixWeeks) {
-          const visitors = data.visitors || [];
-          visitors.forEach((v: any) => {
-            if (!v.present) return;
-            const key = v.id ? `id:${v.id}` : `name:${v.name || 'Visitor'}`;
-            const name = v.name || 'Visitor';
-            const existing = visitorCounts.get(key) || { name, count: 0, familyId: v.familyId ?? null };
-            existing.count += 1;
-            visitorCounts.set(key, existing);
-          });
-        }
       });
 
       const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }> = [];
@@ -433,13 +418,7 @@ const SelectedPeriodReport: React.FC = () => {
       grouped.sort((a, b) => (b.streak - a.streak) || a.name.localeCompare(b.name));
       setGroupedAbsences(grouped);
 
-      const visitorsArr = Array.from(visitorCounts.entries())
-        .map(([key, val]) => ({ key, name: val.name, count: val.count, familyId: val.familyId }))
-        .filter((v) => v.count >= 2)
-        .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
-      setRecentVisitors(visitorsArr);
       setShowAllAbsences(false);
-      setShowAllVisitors(false);
     } catch (e) {
       // ignore
     } finally {
@@ -487,7 +466,7 @@ const SelectedPeriodReport: React.FC = () => {
 
   // Removed old monthly visitors loader
 
-  // Load recent session details to derive absence streaks and recent visitors
+  // Load recent session details to derive absence streaks
   // duplicate removed
 
   // Refresh user data on component mount to get latest gathering assignments
@@ -699,14 +678,13 @@ const SelectedPeriodReport: React.FC = () => {
     });
   }, [groupedAbsences, absenceList, dismissals]);
 
-  // Auto-fetch caregivers for all families appearing in the absence or visitor lists
+  // Auto-fetch caregivers for all families appearing in the absence list
   useEffect(() => {
     const familyIds = new Set<number>();
     groupedAbsences.forEach(g => { if (g.familyId != null) familyIds.add(g.familyId); });
-    recentVisitors.forEach(v => { if (v.familyId != null) familyIds.add(v.familyId); });
     familyIds.forEach(id => loadFamilyCaregivers(id));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupedAbsences, recentVisitors]);
+  }, [groupedAbsences]);
 
   const quickDateOptions = [
     {
@@ -1109,39 +1087,6 @@ const SelectedPeriodReport: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
-              <div className="p-5">
-                <div className="flex items-center">
-                  <div className="shrink-0">
-                    <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
-                  </div>
-                  <div className="ml-5 w-0 flex-1">
-                    <dl>
-                      <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">
-                        Local Visitor Return Rate
-                      </dt>
-                      <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                        {isLoading ? '...' : (
-                          metrics?.totalLocalVisitors > 0
-                            ? `${Math.round((metrics.returningLocalVisitors / metrics.totalLocalVisitors) * 100)}%`
-                            : '—'
-                        )}
-                      </dd>
-                      <dt className="mt-1 text-xs font-medium text-gray-500 dark:text-gray-400 truncate">
-                        Returned at least once
-                      </dt>
-                      <dd className="text-sm text-gray-700 dark:text-gray-300">
-                        {isLoading ? '...' : (
-                          metrics?.totalLocalVisitors > 0
-                            ? `${metrics.returningLocalVisitors} of ${metrics.totalLocalVisitors}`
-                            : '—'
-                        )}
-                      </dd>
-                    </dl>
-                  </div>
-                </div>
-              </div>
-            </div>
           </>
         )}
       </div></ReportPanel>
@@ -1336,80 +1281,9 @@ const SelectedPeriodReport: React.FC = () => {
             </div>
           </div></ReportPanel>
 
-          {/* Recent Visitors Panel */}
-        <ReportPanel id="recent-visitors"><div className="h-full bg-white shadow rounded-lg dark:bg-gray-800">
-          <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">Recent Visitors (last 6 weeks)</h3>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Shows how many times a visitor has attended this gathering.</p>
-              <div className="mt-4">
-                {isLoadingDetails ? (
-                  <div className="flex justify-center items-center h-40">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-                  </div>
-                ) : recentVisitors.length === 0 ? (
-                  <div className="text-sm text-gray-500 dark:text-gray-400">No recent visitors yet.</div>
-                ) : (
-                  <>
-                  {/* Column headers */}
-                  <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 px-3 pb-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                    <span>Name</span>
-                    <span className="w-16 text-center">Visits</span>
-                    <span className="w-32">Caregiver</span>
-                  </div>
-                  <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {(showAllVisitors ? recentVisitors : recentVisitors.slice(0, 5)).map((v) => {
-                      const color = v.count >= 3 ? 'border-l-4 border-teal-500 dark:border-teal-700' : 'border-l-4 border-teal-400 dark:border-teal-800';
-                      const caregivers = v.familyId != null ? (familyCaregivers[v.familyId] ?? null) : null;
-                      const hasCaregivers = caregivers !== null && caregivers.length > 0;
-                      return (
-                        <li key={v.key} className={`grid grid-cols-[1fr_auto_auto] gap-x-3 items-center px-3 py-2 ${color} rounded`}>
-                          <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{v.name}</span>
-                          <span className="w-16 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">{v.count}</span>
-                          <span className="w-32 text-sm truncate">
-                            {v.familyId == null ? (
-                              <span className="text-gray-400 dark:text-gray-500">—</span>
-                            ) : hasCaregivers ? (
-                              <button
-                                type="button"
-                                onClick={() => setCaregiverPopoverFamilyId(v.familyId!)}
-                                className="text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 text-left truncate w-full"
-                                title={caregivers!.map(c => `${c.first_name} ${c.last_name}`).join(', ')}
-                              >
-                                {caregivers![0].first_name} {caregivers![0].last_name}
-                                {caregivers!.length > 1 && <span className="text-gray-400 ml-1">+{caregivers!.length - 1}</span>}
-                              </button>
-                            ) : caregivers !== null ? (
-                              <button
-                                type="button"
-                                onClick={() => setCaregiverPopoverFamilyId(v.familyId!)}
-                                className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border border-primary-300 dark:border-primary-600/50 text-primary-600 dark:text-primary-400 hover:bg-primary-100 hover:border-primary-400 dark:hover:bg-primary-900/30 dark:hover:border-primary-500/70 transition-colors cursor-pointer"
-                              >
-                                Assign caregiver
-                              </button>
-                            ) : (
-                              <span className="text-gray-400 dark:text-gray-500">Loading…</span>
-                            )}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {recentVisitors.length > 5 && (
-                    <div className="mt-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setShowAllVisitors((v) => !v)}
-                        className="text-sm font-medium text-primary-600 hover:text-primary-700"
-                      >
-                        {showAllVisitors ? 'Show less' : `Show all (${recentVisitors.length})`}
-                      </button>
-                    </div>
-                  )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div></ReportPanel>
+          <ReportPanel id="recent-visitors">
+            <VisitorFollowUpPanel gatheringIds={selectedGatherings.map(g=>g.id)} churchId={user?.church_id || ''} />
+          </ReportPanel>
         </div>
       )}
 

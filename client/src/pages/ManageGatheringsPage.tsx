@@ -1,3 +1,4 @@
+import GatheringSourceBadge, { type GatheringSyncSource } from '../components/peopleSync/GatheringSourceBadge';
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,6 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 interface Gathering {
+  syncSources?: GatheringSyncSource[];
   id: number;
   name: string;
   description: string;
@@ -796,6 +798,7 @@ const ManageGatheringsPage: React.FC = () => {
                         </span>
                       </div>
                       
+                      <GatheringSourceBadge sources={gathering.syncSources} />
                       <div className="space-y-3">
                         <div className="text-sm text-gray-700 dark:text-gray-300">
                           {gathering.customSchedule ? (

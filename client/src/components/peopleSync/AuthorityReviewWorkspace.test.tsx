@@ -507,3 +507,56 @@ describe('AuthorityReviewWorkspace', () => {
     ));
   });
 });
+
+function freshReview(): PeopleSyncReview {
+  const fresh = structuredClone(review);
+  fresh.authority = { active: 'none', pending: 'elvanto' };
+  fresh.plan.linkPeople = [];
+  fresh.plan.updateManagedFields = [];
+  fresh.plan.people = { external: {}, local: {} };
+  fresh.plan.reviewContext = {
+    version: 2, manualCandidateIndividualIds: [],
+    identities: Object.fromEntries(fresh.plan.addPeople.map((person) => [person.externalPersonId, {
+      suggestedIndividualId: null, candidateIndividualIds: [], excludedIndividualIds: [],
+      held: false, canCreate: true, createPerson: {
+        firstName: person.firstName, lastName: person.lastName, isChild: false,
+        externalFamilyId: null, peopleType: 'regular',
+      },
+    }])),
+  };
+  return fresh;
+}
+
+it('automatically creates fresh people once under Strict Mode without showing review', async () => {
+  vi.clearAllMocks();
+  vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: freshReview() } as never);
+  vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({ data: {} } as never);
+  const onApplied = vi.fn();
+  render(<StrictMode><AuthorityReviewWorkspace provider="elvanto" autoStart activateInitialSync onApplied={onApplied} onCancel={vi.fn()} /></StrictMode>);
+  await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+  expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1);
+  expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', {
+    decisionContractVersion: 2, identityDecisions: { 'e-2': { outcome: 'create' }, 'e-3': { outcome: 'create' } },
+  });
+  expect(screen.queryByRole('region', { name: 'Elvanto authority review' })).not.toBeInTheDocument();
+});
+
+it.each(['archive', 'ambiguousPeople', 'updateManagedFields', 'removeFromGathering'])('keeps review for %s during initial setup', async (bucket) => {
+  vi.clearAllMocks();
+  const fresh = freshReview();
+  (fresh.plan as any)[bucket] = [{ id: 'requires-review', individualId: 1, externalPersonId: 'e-2', reason: 'Review', changes: [] }];
+  vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: fresh } as never);
+  render(<AuthorityReviewWorkspace provider="elvanto" autoStart activateInitialSync onApplied={vi.fn()} onCancel={vi.fn()} />);
+  expect(await screen.findByRole('region', { name: 'Elvanto authority review' })).toBeInTheDocument();
+  expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
+});
+
+it('does not automatically retry a failed apply', async () => {
+  vi.clearAllMocks();
+  vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: freshReview() } as never);
+  vi.mocked(peopleSyncAPI.applyAuthority).mockRejectedValue(new Error('Unavailable'));
+  render(<AuthorityReviewWorkspace provider="elvanto" autoStart activateInitialSync onApplied={vi.fn()} onCancel={vi.fn()} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Unavailable');
+  expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('region', { name: 'Elvanto authority review' })).toBeInTheDocument();
+});

@@ -55,6 +55,9 @@ interface AddPeopleModalProps {
   people: Person[];
   defaultMode?: 'individual' | 'family';
   showModeToggle?: boolean;
+  providerContent?: React.ReactNode;
+  allowManual?: boolean;
+  initialMethod?: 'person' | 'csv' | 'copy-paste';
 }
 
 const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
@@ -64,9 +67,12 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   gatheringTypes,
   people,
   defaultMode,
-  showModeToggle
+  showModeToggle,
+  providerContent,
+  allowManual = true,
+  initialMethod = 'person'
 }) => {
-  const [addModalMode, setAddModalMode] = useState<'person' | 'csv' | 'copy-paste'>('person');
+  const [addModalMode, setAddModalMode] = useState<'person' | 'csv' | 'copy-paste' | 'provider'>('person');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -305,13 +311,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   // Sync individual mode state when modal opens
   useEffect(() => {
     if (!isOpen) return;
+    setAddModalMode(allowManual ? initialMethod : 'provider');
     setIsIndividualMode(defaultMode === 'individual');
     setIndividualCards([
       { id: Date.now().toString(), firstName: '', lastName: '', isChild: false, siblingGroupId: null }
     ]);
     setIndividualSelectedGatherings({});
     setShowSiblingPickerFor(null);
-  }, [isOpen, defaultMode]);
+  }, [isOpen, defaultMode, initialMethod, allowManual]);
 
   // Modal tab slider functions
   const handleModalTabMouseDown = (e: React.MouseEvent) => {
@@ -739,14 +746,16 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   return createPortal(
     <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
+        <div role="dialog" aria-modal="true" aria-label="Add people" className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
               {addModalMode === 'person' && 'Add New People'}
               {addModalMode === 'csv' && 'Upload TSV File'}
               {addModalMode === 'copy-paste' && 'Copy & Paste Data'}
+              {addModalMode === 'provider' && 'Import or sync from a provider'}
             </h3>
             <button
+              aria-label="Close"
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
@@ -754,142 +763,17 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
             </button>
           </div>
 
-          {/* Mode Selection Tabs */}
-          <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-            <nav className="hidden md:flex -mb-px space-x-2 items-center" aria-label="Tabs">
-              <button
-                onClick={() => setAddModalMode('person')}
-                className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
-                  addModalMode === 'person'
-                    ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                }`}
-              >
-                Add People
-              </button>
-              <button
-                onClick={() => setAddModalMode('csv')}
-                className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
-                  addModalMode === 'csv'
-                    ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                }`}
-              >
-                TSV Upload
-              </button>
-              <button
-                onClick={() => setAddModalMode('copy-paste')}
-                className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
-                  addModalMode === 'copy-paste'
-                    ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                }`}
-              >
-                Copy & Paste
-              </button>
-            </nav>
-            {/* Mobile: Horizontal scrollable tabs with fade indicators */}
-            <div className="md:hidden">
-              <div className="relative w-full overflow-hidden">
-                <div
-                  ref={modalTabSliderRef}
-                  className="flex items-center space-x-1 overflow-x-auto scrollbar-hide cursor-grab select-none w-full tab-slider"
-                  style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}
-                  onMouseDown={handleModalTabMouseDown}
-                  onMouseLeave={handleModalTabMouseLeave}
-                  onMouseUp={handleModalTabMouseUp}
-                  onMouseMove={handleModalTabMouseMove}
-                  onTouchStart={handleModalTabTouchStart}
-                  onTouchMove={handleModalTabTouchMove}
-                  onTouchEnd={handleModalTabTouchEnd}
-                >
-                  <div className="shrink-0 min-w-0">
-                    <button
-                      draggable={false}
-                      onClick={(e) => {
-                        if (!isModalTabDragging) {
-                          setAddModalMode('person');
-                        }
-                      }}
-                      className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
-                        addModalMode === 'person'
-                          ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-center h-full">
-                        <span className="text-center leading-tight whitespace-nowrap">
-                          Add People
-                        </span>
-                      </div>
-                    </button>
-                  </div>
-                  <div className="shrink-0 min-w-0">
-                    <button
-                      draggable={false}
-                      onClick={(e) => {
-                        if (!isModalTabDragging) {
-                          setAddModalMode('csv');
-                        }
-                      }}
-                      className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
-                        addModalMode === 'csv'
-                          ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-center h-full">
-                        <span className="text-center leading-tight whitespace-nowrap">
-                          TSV Upload
-                        </span>
-                      </div>
-                    </button>
-                  </div>
-                  <div className="shrink-0 min-w-0">
-                    <button
-                      draggable={false}
-                      onClick={(e) => {
-                        if (!isModalTabDragging) {
-                          setAddModalMode('copy-paste');
-                        }
-                      }}
-                      className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
-                        addModalMode === 'copy-paste'
-                          ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-center h-full">
-                        <span className="text-center leading-tight whitespace-nowrap">
-                          Copy & Paste
-                        </span>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Fade indicators */}
-                {showModalTabLeftFade && (
-                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-700 rounded-full shadow-sm flex items-center justify-center">
-                      <svg viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M10 4L6 8L10 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  </div>
-                )}
-                {showModalTabRightFade && (
-                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-700 rounded-full shadow-sm flex items-center justify-center">
-                      <svg viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+          <div role="tablist" aria-label="Ways to add people" className="mb-6 flex flex-wrap gap-2 border-b border-gray-200 pb-2 dark:border-gray-700">
+            {([
+              ...(allowManual ? [{ id: 'person', label: 'Add People' }, { id: 'csv', label: 'TSV Upload' }, { id: 'copy-paste', label: 'Copy & Paste' }] : []),
+              ...(providerContent ? [{ id: 'provider', label: 'Provider import / sync' }] : []),
+            ] as const).map(tab => <button key={tab.id} type="button" role="tab" aria-selected={addModalMode === tab.id}
+              onClick={() => setAddModalMode(tab.id as typeof addModalMode)}
+              className={`rounded-md px-3 py-2 text-sm font-medium ${addModalMode === tab.id ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'}`}>
+              {tab.label}
+            </button>)}
           </div>
+          {addModalMode === 'provider' && providerContent}
 
           {error && (
             <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">

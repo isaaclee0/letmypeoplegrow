@@ -287,6 +287,18 @@ test('source-rule exclusions never archive linked non-terminal people', () => {
   assert.deepEqual(plan.archive, []);
 });
 
+test('Planning Center List departure removes only its gathering assignment, never the person', () => {
+  const plan = computePeopleSyncPlan(input({
+    provider: 'planning_center', activeAuthority: 'planning_center',
+    externalPeople: [person({ state: 'active' })],
+    batches: [batch({ gatheringTypeId: 5, gatheringAutoRemoveEnabled: true, eligibleExternalPersonIds: [] })],
+    gatheringMemberships: [{ gatheringTypeId: 5, individualId: 1, addedBySyncBatchId: 1 }],
+  }));
+  assert.deepEqual(plan.archive, []);
+  assert.equal(plan.removeFromGathering.length, 1);
+  assert.equal(plan.removeFromGathering[0].individualId, 1);
+});
+
 test('people type alignment off preserves an existing linked type', () => {
   const plan = computePeopleSyncPlan(input({
     settings: { includeContacts: true, alignPeopleType: false },

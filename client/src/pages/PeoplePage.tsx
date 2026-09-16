@@ -178,7 +178,7 @@ function AuthorityPersonCard({ person, ...props }: AuthorityPersonCardProps) {
 }
 
 const PeoplePage: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
 
   const { showSuccess } = useToast();
@@ -205,8 +205,26 @@ const PeoplePage: React.FC = () => {
   const [externalSourceFilter, setExternalSourceFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
   // Removed selectedPerson state - no longer used
   // Removed showPersonDetails - not used anymore
+  const [addMethod, setAddMethod] = useState<'person' | 'csv' | 'copy-paste'>('person');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPeopleImport, setShowPeopleImport] = useState(false);
+  const [importInitialProvider, setImportInitialProvider] = useState<'planning_center' | null>(null);
+  const [importInitialMode, setImportInitialMode] = useState<'import' | 'sync'>('import');
+
+  useEffect(() => {
+    if (isLoading || searchParams.get('import') !== 'planning_center' || searchParams.get('pco') !== 'connected') return;
+    const requestedMode = searchParams.get('mode') === 'sync' ? 'sync' : 'import';
+    if (isAdmin && (requestedMode === 'sync' || authorityProvider === 'none' || !peopleEditingLocked)) {
+      setImportInitialProvider('planning_center');
+      setImportInitialMode(requestedMode);
+      setShowPeopleImport(true);
+    }
+    const remainingParams = new URLSearchParams(searchParams);
+    remainingParams.delete('import');
+    remainingParams.delete('pco');
+    remainingParams.delete('mode');
+    setSearchParams(remainingParams, { replace: true });
+  }, [isLoading, searchParams, setSearchParams, isAdmin, authorityProvider, peopleEditingLocked]);
   // Removed old management modals
   const [selectedGatheringAssignments, setSelectedGatheringAssignments] = useState<{ [key: number]: boolean }>({});
   const [selectedPeopleType, setSelectedPeopleType] = useState<'regular' | 'local_visitor' | 'traveller_visitor'>('regular');
@@ -1153,7 +1171,8 @@ const PeoplePage: React.FC = () => {
     ? filteredGroupedPeople.reduce((total: number, group: any) => total + group.members.length, 0)
     : filteredIndividualPeople.length;
 
-  const openAddModal = () => {
+  const openAddModal = (method: 'person' | 'csv' | 'copy-paste' = 'person') => {
+    setAddMethod(method);
     setShowAddModal(true);
     setError('');
   };
@@ -1420,7 +1439,8 @@ const PeoplePage: React.FC = () => {
     return family ? familyAuthorityPermissions(family, authorityProvider, peopleEditingLocked).locked : false;
   };
 
-  if (isLoading) {
+  // Keep the import dialog mounted while its successful apply refreshes the roster.
+  if (isLoading && !showPeopleImport && !showAddModal) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
@@ -1443,15 +1463,6 @@ const PeoplePage: React.FC = () => {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {isAdmin && (authorityProvider === 'none' || !peopleEditingLocked) && (
-              <button
-                type="button"
-                onClick={() => setShowPeopleImport(true)}
-                className="inline-flex h-10 items-center px-4 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900/50 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors"
-              >
-                Import people
-              </button>
-            )}
             {people.length > 0 && (
               <button
                 onClick={downloadPeopleTSV}
@@ -2526,6 +2537,13 @@ const PeoplePage: React.FC = () => {
 
       {/* Add People Modal */}
       <AddPeopleModal
+        allowManual={authorityProvider === 'none' || !peopleEditingLocked}
+        providerContent={isAdmin ? <PeopleImportDialog embedded isOpen={showAddModal}
+          allowImport={authorityProvider === 'none' || !peopleEditingLocked}
+          onClose={() => setShowAddModal(false)}
+          onApplied={async () => { await loadPeople(); await loadFamilies(); showSuccess('People imported successfully.'); }}
+        /> : undefined}
+        initialMethod={addMethod}
         isOpen={showAddModal}
         onClose={() => setShowAddModal(false)}
         onSuccess={async () => {
@@ -2541,7 +2559,14 @@ const PeoplePage: React.FC = () => {
 
       <PeopleImportDialog
         isOpen={showPeopleImport}
-        onClose={() => setShowPeopleImport(false)}
+        initialProvider={importInitialProvider}
+        initialMode={importInitialMode}
+        allowImport={authorityProvider === 'none' || !peopleEditingLocked}
+        onClose={() => {
+          setShowPeopleImport(false);
+          setImportInitialProvider(null);
+          setImportInitialMode('import');
+        }}
         onApplied={async () => {
           await loadPeople();
           await loadFamilies();
@@ -3003,22 +3028,19 @@ const PeoplePage: React.FC = () => {
              </button>
            </div>
          </div>
-        ) : (authorityProvider === 'none' || !peopleEditingLocked) ? (
-         <>
-           <button
-             onClick={() => openAddModal()}
-             className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-[9999]"
-           >
-             <PlusIcon className="h-6 w-6" />
-           </button>
+        ) : (isAdmin || authorityProvider === 'none' || !peopleEditingLocked) ? (
+         <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-[9999] flex items-center gap-2">
            {people.length === 0 && (
-             <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">
-               <div className="bg-white/90 dark:bg-gray-800/95 backdrop-blur rounded-lg shadow-lg dark:shadow-none border border-primary-200 dark:border-primary-700 px-4 h-14 flex items-center justify-center text-primary-800 dark:text-primary-200 animate-slide-right mr-2">
-                 <p className="text-base font-semibold whitespace-nowrap">Add People Here</p>
-               </div>
+             <div className="bg-white/90 dark:bg-gray-800/95 backdrop-blur rounded-lg shadow-lg dark:shadow-none border border-primary-200 dark:border-primary-700 px-4 h-14 flex items-center justify-center text-primary-800 dark:text-primary-200 animate-slide-right">
+               <p className="text-base font-semibold whitespace-nowrap">Add People Here</p>
              </div>
            )}
-         </>
+           <button type="button" aria-label="Add people" onClick={() => openAddModal()}
+             className="w-14 h-14 shrink-0 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200">
+             <PlusIcon className="h-6 w-6" />
+           </button>
+
+         </div>
        ) : null}
 
        {/* Merge Modal */}

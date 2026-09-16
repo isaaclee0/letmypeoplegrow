@@ -26,7 +26,7 @@ export const REPORT_PANEL_METADATA: Record<ReportPanelId, { label: string; fullW
   'period-attendance': { label: 'Attendance over selected period' },
   'period-visitors': { label: 'Visitors over selected period' },
   'recent-absences': { label: 'Regulars with recent absences' },
-  'recent-visitors': { label: 'Recent visitors' },
+  'recent-visitors': { label: 'Visitor welcome & follow-up' },
   'attendance-direction': { label: 'Attendance direction' },
   regularity: { label: 'Regularity' },
   'attendance-changes': { label: 'Attendance changes', fullWidth: true },

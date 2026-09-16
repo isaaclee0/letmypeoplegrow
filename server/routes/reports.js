@@ -10,6 +10,23 @@ router.use(verifyToken);
 router.use('/engagement', requireRole(['admin', 'coordinator']), require('./reports/engagement'));
 router.use('/pastoral', requireRole(['admin', 'coordinator']), require('./reports/pastoral'));
 
+// Current completed-week actions; historical chart filters never change the window.
+router.get('/visitor-follow-up', requireRole(['admin', 'coordinator']), async (req, res) => {
+  const raw = req.query.gatheringIds;
+  if (raw !== undefined && (typeof raw !== 'string' || !/^\d+(,\d+)*$/.test(raw))) {
+    return res.status(400).json({ error: 'Invalid gathering IDs' });
+  }
+  const gatheringIds = raw ? raw.split(',').map(Number) : [];
+  if (gatheringIds.some(id => !Number.isSafeInteger(id) || id < 1)) return res.status(400).json({ error: 'Invalid gathering IDs' });
+  try {
+    const { getVisitorFollowUp } = require('../services/visitorFollowUp');
+    res.json(await getVisitorFollowUp(req.user.church_id, { gatheringIds }));
+  } catch (err) {
+    console.error('Visitor follow-up report failed:', err.message);
+    res.status(500).json({ error: 'Could not load visitor follow-up' });
+  }
+});
+
 // Test endpoint to check database tables
 router.get('/test', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {

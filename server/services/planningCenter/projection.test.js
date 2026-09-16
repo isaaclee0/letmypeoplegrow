@@ -1,6 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { projectPerson, projectPcoHouseholds } = require('./projection');
+const { projectPerson, projectPcoHouseholds, toNormalizedPcoPerson } = require('./projection');
+
+test('only an explicit inactive Planning Center status normalizes to archived', () => {
+  assert.strictEqual(toNormalizedPcoPerson({ status: 'inactive' }).state, 'archived');
+  assert.strictEqual(toNormalizedPcoPerson({ status: 'active' }).state, 'active');
+  for (const status of [undefined, null, '', 'unknown']) {
+    assert.strictEqual(toNormalizedPcoPerson({ status }).state, 'unknown');
+  }
+});
 
 test('projectPerson maps attributes and first household id', () => {
   const raw = {

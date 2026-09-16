@@ -68,6 +68,7 @@ vi.mock('./AttendanceHistoryPopover', () => ({
 }));
 
 vi.mock('../../services/api', () => ({
+  default: { get: vi.fn().mockResolvedValue({data:{asOf:'2026-09-20',categories:[],groups:[]}}) },
   attendanceAPI: {
     get: vi.fn().mockResolvedValue({
       data: {
@@ -182,6 +183,8 @@ describe('ReportsPage selected period workspace', () => {
     expect(gatheringHelp).toHaveAttribute('aria-describedby', gatheringTooltip.id);
     expect(gatheringTooltip).toHaveClass('absolute');
     expect(screen.getByRole('heading', { name: 'Regulars With Recent Absences' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Visitor welcome & follow-up' })).toBeInTheDocument();
+    expect(screen.queryByText('Local Visitor Return Rate')).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Assign caregiver' }));
     expect(await screen.findByRole('heading', { name: 'Caregivers' })).toBeInTheDocument();
 

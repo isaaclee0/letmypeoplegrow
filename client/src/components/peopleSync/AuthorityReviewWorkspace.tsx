@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { peopleSyncAPI } from '../../services/api';
 import SyncReview from './SyncReview';
+import { initialSyncSelections } from './initialSyncSelections';
 import { peopleSyncErrorMessage, toPeopleSyncDisplayError } from './apiError';
 import {
   cancelAuthorityPreviewWithRetry,
@@ -27,6 +28,7 @@ type AuthorityReviewState =
 export interface AuthorityReviewWorkspaceProps {
   provider: SyncProvider;
   autoStart: boolean;
+  activateInitialSync?: boolean;
   onApplied: () => void | Promise<void>;
   onCancel: () => void;
 }
@@ -47,6 +49,7 @@ const providerName = (provider: SyncProvider) =>
 export default function AuthorityReviewWorkspace({
   provider,
   autoStart,
+  activateInitialSync = false,
   onApplied,
   onCancel,
 }: AuthorityReviewWorkspaceProps) {
@@ -61,6 +64,7 @@ export default function AuthorityReviewWorkspace({
   const pendingPreviewCancellationRef = useRef<InFlightAuthorityPreview | null>(null);
   const mountedRef = useRef(false);
   const autoStartedProviderRef = useRef<SyncProvider | null>(null);
+  const automaticAttemptRef = useRef<string | null>(null);
   const progressRef = useRef<HTMLParagraphElement>(null);
   const reviewRegionRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
@@ -273,6 +277,19 @@ export default function AuthorityReviewWorkspace({
     await refreshAfterApply();
   };
 
+  const initialSelections = activateInitialSync && review ? initialSyncSelections(review) : null;
+  const automaticPending = initialSelections !== null && review !== null
+    && (automaticAttemptRef.current !== review.reviewToken || state === 'applying');
+
+  useEffect(() => {
+    if (state !== 'reviewing' || !review || !initialSelections
+      || automaticAttemptRef.current === review.reviewToken) return;
+    automaticAttemptRef.current = review.reviewToken;
+    void apply(review.reviewToken, initialSelections).catch((cause) => {
+      if (mountedRef.current) setError(peopleSyncErrorMessage(cause, 'Could not start syncing.'));
+    });
+  });
+
   const clearReview = () => {
     activeReviewTokenRef.current = null;
     acceptedReviewOwnershipRef.current = null;
@@ -371,7 +388,7 @@ export default function AuthorityReviewWorkspace({
       {state === 'previewing' && !review && (
         <div className="space-y-3">
           <p ref={progressRef} role="status" tabIndex={-1} className="text-sm text-gray-600">
-            Preparing authority review…
+            {activateInitialSync ? 'Starting your first sync…' : 'Preparing authority review…'}
           </p>
           <button type="button" onClick={() => void cancelReview()} className="text-sm underline">
             Cancel authority change
@@ -400,7 +417,8 @@ export default function AuthorityReviewWorkspace({
           )}
         </div>
       )}
-      {review && (
+      {automaticPending && <p role="status">Syncing people and setting up gathering assignments…</p>}
+      {review && !automaticPending && (
         <div
           ref={reviewRegionRef}
           role="region"

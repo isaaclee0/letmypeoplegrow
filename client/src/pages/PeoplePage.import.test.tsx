@@ -1,13 +1,14 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ToastContainer from '../components/ToastContainer';
 import type { AuthorityProvider } from '../components/peopleSync/types';
 import type { PeopleImportReview } from '../components/peopleImport/types';
 import {
   familiesAPI,
+  integrationsAPI,
   gatheringsAPI,
   individualsAPI,
   peopleImportAPI,
@@ -16,6 +17,11 @@ import {
   visitorConfigAPI,
 } from '../services/api';
 import PeoplePage from './PeoplePage';
+
+beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const authState = vi.hoisted(() => ({ role: 'admin' }));
 
@@ -78,11 +84,13 @@ function renderPeoplePage({
   authorityProvider = 'none',
   peopleEditingLocked = authorityProvider !== 'none',
   people = [],
+  entry = '/app/people',
 }: {
   role?: string;
   authorityProvider?: AuthorityProvider;
   peopleEditingLocked?: boolean;
   people?: ReturnType<typeof person>[];
+  entry?: string;
 } = {}) {
   authState.role = role;
   vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people } } as never);
@@ -100,7 +108,7 @@ function renderPeoplePage({
   vi.spyOn(settingsAPI, 'getBadgeDefaults').mockResolvedValue({ data: { settings: {} } } as never);
 
   return render(
-    <MemoryRouter initialEntries={['/app/people']}>
+    <MemoryRouter initialEntries={[entry]}>
       <ToastContainer>
         <PeoplePage />
       </ToastContainer>
@@ -113,6 +121,48 @@ afterEach(() => {
 });
 
 describe('PeoplePage provider import', () => {
+  it('resumes ongoing sync after OAuth even when one-time imports are locked', async () => {
+    vi.spyOn(integrationsAPI, 'getPlanningCenterStatus').mockResolvedValue({ data: { connected: true } } as never);
+    vi.spyOn(peopleSyncAPI, 'listSources').mockResolvedValue({ data: { sources: [] } } as never);
+    renderPeoplePage({ authorityProvider: 'planning_center', peopleEditingLocked: true, entry: '/app/people?import=planning_center&mode=sync&pco=connected' });
+    expect(await screen.findByRole('heading', { name: 'Keep people in sync with Planning Center' })).toBeInTheDocument();
+    expect(await screen.findByLabelText('Runs automatically')).toBeChecked();
+  });
+  it('resumes source selection after Planning Center connects, without applying an import', async () => {
+    vi.spyOn(peopleImportAPI, 'listSources').mockResolvedValue({ data: { sources: [], allOption: { kind: 'all', name: 'Everyone' } } } as never);
+    const apply = vi.spyOn(peopleImportAPI, 'apply');
+    renderPeoplePage({ entry: '/app/people?import=planning_center&pco=connected' });
+    expect(await screen.findByRole('radio', { name: 'Everyone' })).toBeInTheDocument();
+    expect(peopleImportAPI.listSources).toHaveBeenCalledWith('planning_center');
+    expect(apply).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add people' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Provider import / sync' }));
+    expect(screen.getByText('Choose the provider to import people from.')).toBeInTheDocument();
+  });
+
+  it.each([
+    { role: 'coordinator' },
+    { authorityProvider: 'planning_center' as const, peopleEditingLocked: true },
+  ])('keeps OAuth return subject to existing import access restrictions: %j', async (options) => {
+    const listSources = vi.spyOn(peopleImportAPI, 'listSources');
+    renderPeoplePage({ ...options, entry: '/app/people?import=planning_center&pco=connected' });
+    await screen.findByRole('heading', { name: 'Manage People' });
+    expect(screen.queryByRole('dialog', { name: 'Import people' })).not.toBeInTheDocument();
+    expect(listSources).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['Add People', 'Add New People'],
+    ['TSV Upload', 'Upload TSV File'],
+    ['Copy & Paste', 'Copy & Paste Data'],
+  ])('opens %s in the add modal', async (choice, heading) => {
+    renderPeoplePage({ people: [person(1)] });
+    await userEvent.click(await screen.findByRole('button', { name: 'Add people' }));
+    await userEvent.click(screen.getByRole('tab', { name: choice }));
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Import or sync people' })).not.toBeInTheDocument();
+  });
+
   it('keeps the people search field at a non-zooming mobile font size', async () => {
     renderPeoplePage({ people: [person(1)] });
 
@@ -129,28 +179,34 @@ describe('PeoplePage provider import', () => {
   ] as const)('offers administrators an import action for an %s', async (_description, authorityProvider, people) => {
     renderPeoplePage({ authorityProvider, peopleEditingLocked: false, people: [...people] });
 
-    expect(await screen.findByRole('button', { name: 'Import people' })).toBeEnabled();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add people' }));
+    expect(screen.getByRole('tab', { name: 'Provider import / sync' })).toBeEnabled();
   });
 
-  it('does not offer provider import while managed-roster people editing is locked', async () => {
+  it('offers sync but disables one-time import while managed-roster editing is locked', async () => {
     renderPeoplePage({ authorityProvider: 'planning_center', peopleEditingLocked: true, people: [person(1)] });
 
     await screen.findByRole('heading', { name: 'Manage People' });
-    expect(screen.queryByRole('button', { name: 'Import people' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add people' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Provider import / sync' }));
+    expect(screen.getByRole('radio', { name: 'One-time import' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Keep in sync' })).toBeChecked();
   });
 
   it.each(['coordinator', 'attendance_taker'])('does not offer provider import to a %s', async (role) => {
     renderPeoplePage({ role, authorityProvider: 'none' });
 
     await screen.findByRole('heading', { name: 'Manage People' });
-    expect(screen.queryByRole('button', { name: 'Import people' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add people' }));
+    expect(screen.queryByRole('tab', { name: 'Provider import / sync' })).not.toBeInTheDocument();
   });
 
-  it('keeps the floating manual-add button restricted to locally managed rosters', async () => {
+  it('keeps the manual tabs restricted to locally managed rosters', async () => {
     const { container } = renderPeoplePage({ authorityProvider: 'planning_center', people: [person(1)] });
 
     await screen.findByRole('heading', { name: 'Manage People' });
-    expect(container.querySelector('button.fixed.bottom-4.right-4')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add people' }));
+    expect(screen.queryByRole('tab', { name: 'Add People' })).not.toBeInTheDocument();
   });
 
   it('refreshes people and families once and confirms success after an import applies', async () => {
@@ -164,13 +220,22 @@ describe('PeoplePage provider import', () => {
       data: { runId: 1, status: 'applied', applied: {} as never, summary: review.summary },
     } as never);
 
-    await user.click(await screen.findByRole('button', { name: 'Import people' }));
+    await user.click(await screen.findByRole('button', { name: 'Add people' }));
+    await user.click(screen.getByRole('tab', { name: 'Provider import / sync' }));
     await user.click(screen.getByRole('button', { name: 'Planning Center' }));
     await user.click(await screen.findByRole('radio', { name: 'Everyone' }));
     await user.click(screen.getByRole('button', { name: 'Review import' }));
+    let finishRefresh!: () => void;
+    vi.mocked(individualsAPI.getAll).mockImplementationOnce(() => new Promise((resolve) => {
+      finishRefresh = () => resolve({ data: { people: [person(1), person(2)] } } as never);
+    }));
     await user.click(await screen.findByRole('button', { name: 'Apply import' }));
 
     await waitFor(() => expect(individualsAPI.getAll).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('dialog', { name: 'Add people' })).toBeInTheDocument();
+    expect(screen.getByText('Import applied.')).toBeInTheDocument();
+    await act(async () => finishRefresh());
+    expect(screen.getByText('Import applied.')).toBeInTheDocument();
     expect(familiesAPI.getAll).toHaveBeenCalledTimes(2);
     expect(await screen.findByText('People imported successfully.')).toBeInTheDocument();
   });
