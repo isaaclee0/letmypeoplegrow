@@ -251,14 +251,6 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     else if (e.key === 'Escape') handleCancelEdit();
   };
 
-  const shouldShowTotal = useMemo(() => headcount > 0, [headcount]);
-
-  // Only show You/Total breakdown when multiple people are counting and total differs from current user's count
-  const shouldShowOtherUsersAndTotal = useMemo(
-    () => otherUsers.length > 1 && headcount !== userHeadcount,
-    [otherUsers.length, headcount, userHeadcount]
-  );
-
   // ── Fullscreen mode (rendered via portal to escape stacking contexts) ──
   if (isFullscreen) {
     const fullscreenUI = (
@@ -405,68 +397,78 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
         </div>
       </div>
 
-      {/* Other Users + Total (only when multiple people counting and total differs from user's count) */}
-      {shouldShowOtherUsersAndTotal && (
-        <div className="text-center">
-          <div className="flex flex-wrap justify-center gap-2">
-            {otherUsers.map((userData) => (
-              <div key={userData.userId} className="bg-gray-100 rounded-md px-3 py-2 text-sm flex items-center gap-2 group min-h-[40px]">
-                <span className="text-gray-700">{userData.name.split(' ')[0]}</span>
-                
-                {editingUserId === userData.userId ? (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={editingValue}
-                      onChange={(e) => setEditingValue(e.target.value)}
-                      onKeyDown={handleEditKeyPress}
-                      className="w-16 px-2 py-1 text-center text-base border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[32px]"
-                      min="0"
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleSaveEdit}
-                      disabled={isUpdatingUserHeadcount}
-                      className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded disabled:opacity-50 min-h-[32px] min-w-[32px] flex items-center justify-center"
-                      title="Save"
-                    >
-                      <CheckIcon className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={handleCancelEdit}
-                      disabled={isUpdatingUserHeadcount}
-                      className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded disabled:opacity-50 min-h-[32px] min-w-[32px] flex items-center justify-center"
-                      title="Cancel"
-                    >
-                      <XMarkIcon className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1">
-                    <span className="font-medium text-gray-900">{userData.headcount}</span>
-                    {canEditOtherUsers && !userData.isCurrentUser && (
-                      <button
-                        onClick={() => handleStartEditUser(userData.userId, userData.headcount)}
-                        className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded opacity-0 group-hover:opacity-100 transition-all min-h-[32px] min-w-[32px] flex items-center justify-center"
-                        title={`Edit ${userData.name}'s headcount`}
-                      >
-                        <PencilIcon className="h-4 w-4" />
-                      </button>
+      {/* The combined total stays visible; individual contributions are optional detail. */}
+      <div className="flex flex-col items-center gap-1 text-center">
+        <span className="text-3xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">{headcount}</span>
+        <span className="text-sm text-gray-500 dark:text-gray-400">Total</span>
+      </div>
+
+      {otherUsers.length > 1 && (
+        <details key={`${gatheringTypeId}-${date}`} className="mx-auto max-w-md border-t border-gray-200 dark:border-gray-700 pt-4">
+          <summary className="cursor-pointer text-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
+            Contributions ({otherUsers.length})
+          </summary>
+          <table className="mt-3 w-full text-sm">
+            <thead>
+              <tr className="text-gray-500 dark:text-gray-400">
+                <th scope="col" className="py-2 text-left font-medium">Person</th>
+                <th scope="col" className="py-2 text-right font-medium">Count</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {otherUsers.map((userData) => (
+                <tr key={userData.userId}>
+                  <th scope="row" className="py-2 text-left font-normal text-gray-700 dark:text-gray-300">{userData.name}</th>
+                  <td className="py-2 text-right">
+                    {editingUserId === userData.userId ? (
+                      <div className="flex items-center justify-end gap-2">
+                        <input
+                          aria-label={`Count for ${userData.name}`}
+                          type="number"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onKeyDown={handleEditKeyPress}
+                          className="w-16 px-2 py-1 text-center text-base border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[32px]"
+                          min="0"
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleSaveEdit}
+                          disabled={isUpdatingUserHeadcount}
+                          className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded disabled:opacity-50 min-h-[32px] min-w-[32px] flex items-center justify-center"
+                          title="Save"
+                        >
+                          <CheckIcon className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={handleCancelEdit}
+                          disabled={isUpdatingUserHeadcount}
+                          className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded disabled:opacity-50 min-h-[32px] min-w-[32px] flex items-center justify-center"
+                          title="Cancel"
+                        >
+                          <XMarkIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-end gap-1">
+                        <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{userData.headcount}</span>
+                        {canEditOtherUsers && !userData.isCurrentUser && (
+                          <button
+                            onClick={() => handleStartEditUser(userData.userId, userData.headcount)}
+                            className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-all min-h-[32px] min-w-[32px] flex items-center justify-center"
+                            title={`Edit ${userData.name}'s headcount`}
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-          {shouldShowTotal && (
-            <div className="mt-2 flex justify-center">
-              <div className="bg-gray-100 rounded-md px-3 py-2 text-sm min-h-[40px] flex items-center">
-                <span className="text-gray-700">Total</span>
-                <span className="font-medium text-gray-900 ml-2">{headcount}</span>
-              </div>
-            </div>
-          )}
-        </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
       )}
     </div>
   );
