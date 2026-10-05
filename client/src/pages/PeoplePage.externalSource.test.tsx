@@ -9,6 +9,7 @@ import {
   familiesAPI,
   gatheringsAPI,
   individualsAPI,
+  integrationsAPI,
   peopleSyncAPI,
   settingsAPI,
   visitorConfigAPI,
@@ -73,21 +74,30 @@ function renderPeoplePage({
   people,
   initialEntry = '/app/people',
   medicalNotesIndicator = null,
+  syncEnabled = true,
+  batches = [],
+  archivedPeople = [],
+  peopleEditingLocked = true,
 }: {
   authorityProvider: AuthorityProvider;
   people: TestPerson[];
   initialEntry?: string;
   medicalNotesIndicator?: { icon: 'heart'; color: string } | null;
+  syncEnabled?: boolean;
+  batches?: Array<Record<string, unknown>>;
+  archivedPeople?: TestPerson[];
+  peopleEditingLocked?: boolean;
 }) {
   vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people, medicalNotesIndicator } } as never);
-  vi.spyOn(individualsAPI, 'getArchived').mockResolvedValue({ data: { people: [] } } as never);
+  vi.spyOn(individualsAPI, 'getArchived').mockResolvedValue({ data: { people: archivedPeople } } as never);
   vi.spyOn(familiesAPI, 'getAll').mockResolvedValue({
     data: { families: [], planningCenterTrackBackgroundChecks: false },
   } as never);
   vi.spyOn(gatheringsAPI, 'getAll').mockResolvedValue({ data: { gatherings: [] } } as never);
   vi.spyOn(peopleSyncAPI, 'getSettings').mockResolvedValue({
-    data: { settings: { authorityProvider } },
+    data: { settings: { authorityProvider, syncEnabled, peopleEditingLocked } },
   } as never);
+  vi.spyOn(integrationsAPI, 'getPlanningCenterSyncBatches').mockResolvedValue({ data: { batches } } as never);
   vi.spyOn(visitorConfigAPI, 'getConfig').mockResolvedValue({
     data: { localVisitorServiceLimit: 6, travellerVisitorServiceLimit: 2 },
   } as never);
@@ -107,6 +117,80 @@ afterEach(() => {
 });
 
 describe('PeoplePage external source filter', () => {
+  it('explains provider ownership and the batch schedule when editing a managed person', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      authorityProvider: 'planning_center',
+      people: [person(1, { externalLinks: { planning_center: 'pco-1' } })],
+      batches: [{ id: 1, name: 'Members', enabled: true, source: { kind: 'planning_center_list', externalId: 'list-1' }, needsSourceReview: false, sourceStatus: 'available', scheduleEnabled: true, scheduleFrequency: 'weekly', scheduleDay: 1 }],
+    });
+    await user.click(await screen.findByText('Person 1'));
+    await user.click(screen.getByTitle('Edit Selected'));
+    expect(await screen.findByText(/Make edits or remove people in Planning Center/)).toBeInTheDocument();
+    expect(await screen.findByText(/Members: weekly on Monday/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter first name')).toBeDisabled();
+  });
+
+  it('explains paused syncing when attempting to archive a managed person', async () => {
+    const user = userEvent.setup();
+    const archive = vi.spyOn(individualsAPI, 'delete').mockResolvedValue({ data: {} } as never);
+    renderPeoplePage({
+      authorityProvider: 'planning_center',
+      syncEnabled: false,
+      people: [person(1, { externalLinks: { planning_center: 'pco-1' } })],
+    });
+    await user.click(await screen.findByText('Person 1'));
+    await user.click(screen.getByTitle('Archive Selected'));
+    expect(await screen.findByRole('dialog', { name: 'People managed by Planning Center' })).toBeInTheDocument();
+    expect(screen.getByText(/Automatic syncing is paused/)).toBeInTheDocument();
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(archive).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('explains provider control when attempting to permanently delete an archived managed person', async () => {
+    const user = userEvent.setup();
+    const deletePerson = vi.spyOn(individualsAPI, 'permanentDelete').mockResolvedValue({ data: {} } as never);
+    renderPeoplePage({
+      authorityProvider: 'planning_center',
+      people: [],
+      archivedPeople: [person(1, { externalLinks: { planning_center: 'pco-1' } })],
+    });
+    await user.click(await screen.findByRole('button', { name: 'Show (1)' }));
+    await user.click(screen.getByTitle('More actions'));
+    await user.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+    expect(await screen.findByRole('dialog', { name: 'People managed by Planning Center' })).toBeInTheDocument();
+    expect(screen.queryByText(/This will permanently delete/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/No sync batches are configured/)).toBeInTheDocument();
+    expect(deletePerson).not.toHaveBeenCalled();
+  });
+
+  it('keeps editing available without a provider notice for an unlinked person', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({ authorityProvider: 'planning_center', people: [person(1)] });
+    await user.click(await screen.findByText('Person 1'));
+    await user.click(screen.getByTitle('Edit Selected'));
+    expect(screen.getByPlaceholderText('Enter first name')).toBeEnabled();
+    expect(screen.queryByText(/Make edits or remove people/)).not.toBeInTheDocument();
+  });
+
+  it('shows the provider note before allowing local archive when editing is unlocked', async () => {
+    const user = userEvent.setup();
+    const archive = vi.spyOn(individualsAPI, 'delete').mockResolvedValue({ data: {} } as never);
+    renderPeoplePage({
+      authorityProvider: 'planning_center', peopleEditingLocked: false, syncEnabled: false,
+      people: [person(1, { externalLinks: { planning_center: 'pco-1' } })],
+    });
+    await user.click(await screen.findByText('Person 1'));
+    await user.click(screen.getByTitle('Archive Selected'));
+    const dialog = await screen.findByRole('dialog', { name: 'People managed by Planning Center' });
+    expect(within(dialog).getByText(/Local editing is enabled/)).toBeInTheDocument();
+    expect(archive).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Archive in LMPG' }));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith(1));
+  });
+
   it.each([
     ['planning_center', { planning_center: 'pco-1' }, 'PCO'],
     ['elvanto', { elvanto: 'elv-1' }, 'ELV'],

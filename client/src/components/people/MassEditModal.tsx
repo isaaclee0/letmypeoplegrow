@@ -47,6 +47,7 @@ interface MassEditModalProps {
   lockManagedFields?: boolean;
   managedByLabel?: string;
   lockedCount?: number;
+  providerNote?: React.ReactNode;
 }
 
 const MassEditModal: React.FC<MassEditModalProps> = ({
@@ -63,7 +64,8 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
   allSameAgeGroup = false,
   lockManagedFields = false,
   managedByLabel = 'the authoritative people source',
-  lockedCount = 0
+  lockedCount = 0,
+  providerNote,
 }) => {
   // Determine if this is a child (for showing badge editor)
   const isEditingChild = massEdit.isChild === 'true';
@@ -85,6 +87,8 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
             </button>
           </div>
           
+          {providerNote}
+
           {/* Summary of what will be changed */}
           <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-3 mb-4">
             <div className="text-sm text-blue-800 dark:text-blue-300">

@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { Dialog, DialogPanel, DialogTitle } from '@headlessui/react';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI, contactsAPI, usersAPI, peopleSyncAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
+import ProviderManagedPeopleNote from '../components/people/ProviderManagedPeopleNote';
 import FamilyEditorModal from '../components/people/FamilyEditorModal';
 import AddPeopleModal from '../components/people/AddPeopleModal';
 import PeopleImportDialog from '../components/peopleImport/PeopleImportDialog';
@@ -191,6 +193,8 @@ const PeoplePage: React.FC = () => {
   const [families, setFamilies] = useState<Family[]>([]);
   const [authorityProvider, setAuthorityProvider] = useState<AuthorityProvider>('none');
   const [peopleEditingLocked, setPeopleEditingLocked] = useState(true);
+  const [peopleSyncEnabled, setPeopleSyncEnabled] = useState(true);
+  const [providerNoticeAction, setProviderNoticeAction] = useState<'archive' | 'delete' | null>(null);
   const [planningCenterTrackBackgroundChecks, setPlanningCenterTrackBackgroundChecks] = useState(false);
   const [medicalNotesIndicator, setMedicalNotesIndicator] = useState<{ icon: BadgeIconType; color: string } | null>(null);
   const showBackgroundCheckStatus = canSeeBackgroundCheckStatus && planningCenterTrackBackgroundChecks;
@@ -564,6 +568,7 @@ const PeoplePage: React.FC = () => {
       setFamilies(response.data.families || []);
       setAuthorityProvider(peopleSyncResponse.data.settings.authorityProvider);
       setPeopleEditingLocked(peopleSyncResponse.data.settings.peopleEditingLocked !== false);
+      setPeopleSyncEnabled(peopleSyncResponse.data.settings.syncEnabled !== false);
       setPlanningCenterTrackBackgroundChecks(!!response.data.planningCenterTrackBackgroundChecks);
     } catch (err: any) {
       setError('Failed to load families');
@@ -1434,6 +1439,9 @@ const PeoplePage: React.FC = () => {
     const person = people.find((candidate) => candidate.id === id);
     return personAuthorityPermissions(person?.externalLinks, authorityProvider, peopleEditingLocked).locked;
   });
+  const selectedHasProviderLink = authorityProvider !== 'none' && selectedPeople.some(id =>
+    Boolean(people.find(person => person.id === id)?.externalLinks?.[authorityProvider])
+  );
   const familyIsAuthorityLocked = (familyId: number | null | undefined) => {
     const family = families.find((candidate) => candidate.id === familyId);
     return family ? familyAuthorityPermissions(family, authorityProvider, peopleEditingLocked).locked : false;
@@ -1494,6 +1502,8 @@ const PeoplePage: React.FC = () => {
         }, 0)}
         lockManagedFields={selectedHasAuthorityLock}
         managedByLabel={authorityLabel(authorityProvider)}
+        providerNote={authorityProvider !== 'none' && selectedHasProviderLink
+          ? <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} /> : undefined}
         onSave={async () => {
           try {
             setIsLoading(true);
@@ -2511,8 +2521,12 @@ const PeoplePage: React.FC = () => {
                         {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
                       </div>
                     </div>
-                    {!locked && <ActionMenu
-                      items={[
+                    <ActionMenu
+                      items={locked ? [{
+                        label: 'Delete Permanently',
+                        icon: <TrashIcon className="h-4 w-4" />,
+                        onClick: () => setProviderNoticeAction('delete'),
+                      }] : [
                         {
                           label: 'Restore',
                           icon: <ArrowPathIcon className="h-4 w-4" />,
@@ -2525,7 +2539,7 @@ const PeoplePage: React.FC = () => {
                           className: 'text-red-600 hover:bg-red-50'
                         }
                       ]}
-                    />}
+                    />
                   </div>
                   );
                 })}
@@ -2575,6 +2589,27 @@ const PeoplePage: React.FC = () => {
       />
 
       {/* Removed duplicate Person Details Modal */}
+
+      {providerNoticeAction && authorityProvider !== 'none' && (
+        <Dialog open onClose={() => setProviderNoticeAction(null)} className="relative z-[9999]">
+          <div className="fixed inset-0 bg-gray-600/50" aria-hidden="true" />
+          <div className="fixed inset-0 flex items-center justify-center p-4">
+            <DialogPanel className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-md bg-white p-5 shadow-lg dark:bg-gray-800">
+              <DialogTitle className="mb-4 text-lg font-medium text-gray-900 dark:text-gray-100">People managed by {authorityLabel(authorityProvider)}</DialogTitle>
+              <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} />
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setProviderNoticeAction(null)} autoFocus className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Close</button>
+                {providerNoticeAction === 'archive' && !selectedHasAuthorityLock && (
+                  <button type="button" onClick={() => {
+                    setProviderNoticeAction(null);
+                    selectedPeople.forEach(personId => { archivePerson(personId); });
+                  }} className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700">Archive in LMPG</button>
+                )}
+              </div>
+            </DialogPanel>
+          </div>
+        </Dialog>
+      )}
 
       {/* Delete Person Confirmation Modal */}
       {showDeleteModal ? createPortal(
@@ -2695,6 +2730,12 @@ const PeoplePage: React.FC = () => {
               <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
+
+              {authorityProvider !== 'none' && Boolean(archivedPeople.find(person =>
+                person.id === permanentDeleteTarget.personId
+              )?.externalLinks?.[authorityProvider]) && (
+                <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} />
+              )}
 
               <div className="text-center mb-6">
                 <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -2975,14 +3016,17 @@ const PeoplePage: React.FC = () => {
                </button>
              </div>
            )}
-           {/* Lifecycle actions are hidden when any selected person is managed by the active authority. */}
-           {!selectedHasAuthorityLock && (
+           {/* Explain provider control instead of archiving a managed selection. */}
            <div className="flex items-center justify-end space-x-3">
              <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Archive Selected
              </div>
              <button
                 onClick={() => {
+                  if (selectedHasProviderLink) {
+                    setProviderNoticeAction('archive');
+                    return;
+                  }
                   // Archive all selected people
                   selectedPeople.forEach(personId => {
                     archivePerson(personId);
@@ -2994,7 +3038,6 @@ const PeoplePage: React.FC = () => {
                <TrashIcon className="h-6 w-6" />
              </button>
            </div>
-           )}
 
            {/* Merge is available only when every selected person is locally managed. */}
            {isAdmin && selectedPeople.length >= 2 && !selectedHasAuthorityLock && (
