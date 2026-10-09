@@ -70,7 +70,14 @@ router.get('/', async (req, res) => {
     }
     
     const sources = await gatheringSources(req.user.church_id, gatherings.map((gathering) => gathering.id));
-    gatherings = gatherings.map((gathering) => ({ ...gathering, syncSources: sources.get(Number(gathering.id)) || [] }));
+    gatherings = gatherings.map((gathering) => ({
+      ...gathering,
+      // SQLite stores JSON as text; date pickers need the schedule object after a reload.
+      custom_schedule: typeof gathering.custom_schedule === 'string'
+        ? JSON.parse(gathering.custom_schedule)
+        : gathering.custom_schedule,
+      syncSources: sources.get(Number(gathering.id)) || [],
+    }));
 
     // Use systematic conversion utility for field name conversion and BigInt handling
     const responseData = processApiResponse({ gatherings });

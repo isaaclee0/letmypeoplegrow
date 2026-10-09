@@ -9,6 +9,7 @@ const Database = require('../config/database');
 const logger = require('../config/logger');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const gatheringsRouter = require('./gatherings');
+const attendanceRouter = require('./attendance');
 
 logger.exceptions?.unhandle();
 logger.rejections?.unhandle();
@@ -56,12 +57,24 @@ async function startApp(churchId, userId) {
   const app = express();
   app.use(express.json());
   app.use('/api/gatherings', gatheringsRouter);
+  app.use('/api/attendance', attendanceRouter);
 
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
   return {
+    request: async (path, { method = 'GET', body } = {}) => {
+      const response = await fetch(`${baseUrl}/api${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: response.status, body: await response.json() };
+    },
     deleteGathering: async (gatheringId) => {
       const response = await fetch(`${baseUrl}/api/gatherings/${gatheringId}`, {
         method: 'DELETE',
@@ -100,3 +113,65 @@ test('an admin can delete a gathering created by another admin in the same churc
     }
   });
 });
+
+for (const role of ['admin', 'attendance_taker']) {
+  test(`custom daily headcount schedules survive loading attendance and reloading gatherings for ${role}`, async () => {
+    await withRouteChurchDb(async (churchId) => {
+      const userId = await seedAdmin(churchId, 'Headcount');
+      const app = await startApp(churchId, userId);
+      const customSchedule = {
+        type: 'recurring',
+        startDate: '2026-10-09',
+        endDate: '2026-10-16',
+        pattern: { frequency: 'daily', interval: 2 },
+      };
+
+      try {
+        const created = await app.request('/gatherings', {
+          method: 'POST',
+          body: { name: 'Daily headcount', attendanceType: 'headcount', customSchedule },
+        });
+        assert.equal(created.status, 201);
+        const gatheringId = created.body.id;
+        const regular = await app.request('/gatherings', {
+          method: 'POST',
+          body: {
+            name: 'Weekly attendance', attendanceType: 'standard',
+            dayOfWeek: 'Sunday', startTime: '10:00', frequency: 'weekly',
+          },
+        });
+        assert.equal(regular.status, 201);
+        await Database.query('UPDATE users SET role = ? WHERE id = ? AND church_id = ?', [role, userId, churchId]);
+
+        const before = await Database.query(
+          'SELECT custom_schedule FROM gathering_types WHERE id = ? AND church_id = ?',
+          [gatheringId, churchId],
+        );
+        assert.deepEqual(JSON.parse(before[0].custom_schedule), customSchedule);
+
+        const attendance = await app.request(`/attendance/headcount/${gatheringId}/2026-10-09?mode=combined`);
+        assert.equal(attendance.status, 200);
+
+        const after = await Database.query(
+          'SELECT custom_schedule FROM gathering_types WHERE id = ? AND church_id = ?',
+          [gatheringId, churchId],
+        );
+        assert.deepEqual(after, before, 'loading headcount attendance must not change the saved schedule');
+
+        for (let reload = 0; reload < 2; reload++) {
+          const gatherings = await app.request('/gatherings');
+          assert.equal(gatherings.status, 200);
+          const gathering = gatherings.body.gatherings.find(({ id }) => id === gatheringId);
+          assert.equal(gathering.attendanceType, 'headcount');
+          assert.deepEqual(gathering.customSchedule, customSchedule);
+          const weekly = gatherings.body.gatherings.find(({ id }) => id === regular.body.id);
+          assert.equal(weekly.customSchedule, null);
+          assert.equal(weekly.dayOfWeek, 'Sunday');
+          assert.equal(weekly.frequency, 'weekly');
+        }
+      } finally {
+        await app.close();
+      }
+    });
+  });
+}
