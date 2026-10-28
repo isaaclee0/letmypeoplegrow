@@ -1,4 +1,3 @@
-import GatheringSourceBadge from '../components/peopleSync/GatheringSourceBadge';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -3098,8 +3097,6 @@ const AttendancePage: React.FC = () => {
                 <ActiveUsersIndicator activeUsers={[]} />
               </div>
             </div>
-
-            <GatheringSourceBadge sources={selectedGathering.syncSources} />
 
             {isLoading ? (
               <div className="text-center py-8">

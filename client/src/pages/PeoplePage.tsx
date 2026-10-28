@@ -1484,6 +1484,12 @@ const PeoplePage: React.FC = () => {
         </div>
       </div>
 
+      {authorityProvider !== 'none' && (
+        <p role="note" className="rounded-md bg-blue-50 p-3 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-100">
+          Linked people are managed by {authorityLabel(authorityProvider)}.
+        </p>
+      )}
+
       {/* Removed individual person editor modal - now using mass edit modal for all edits */}
 
       {/* Mass Edit Modal */}
