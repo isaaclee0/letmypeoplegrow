@@ -14,11 +14,11 @@ const familiesRouter = require('./families');
 const settingsRouter = require('./settings');
 const { beginAuthoritySwitch, commitAuthoritySwitch, updatePeopleSyncPolicy } = require('../services/peopleSync/authority');
 
-async function seedUser(churchId) {
+async function seedUser(churchId, role = 'admin') {
   const res = await Database.query(
     `INSERT INTO users (email, role, first_name, last_name, is_active, church_id)
-     VALUES (?, 'admin', 'Admin', 'User', 1, ?)`,
-    [`admin-${Math.random().toString(36).slice(2)}@example.com`, churchId]
+     VALUES (?, ?, 'Test', 'User', 1, ?)`,
+    [`user-${Math.random().toString(36).slice(2)}@example.com`, role, churchId]
   );
   return res.insertId;
 }
@@ -78,8 +78,8 @@ async function getAssignments(churchId) {
   );
 }
 
-async function startPeopleRouteApp(churchId) {
-  const userId = await seedUser(churchId);
+async function startPeopleRouteApp(churchId, role = 'admin') {
+  const userId = await seedUser(churchId, role);
   Database.getRegistryDb().prepare(
     `INSERT INTO churches (church_id, church_name, is_approved) VALUES (?, 'Test Church', 1)`
   ).run(churchId);
@@ -132,6 +132,44 @@ async function activateAuthority(churchId, provider) {
   await beginAuthoritySwitch(churchId, provider);
   await commitAuthoritySwitch(churchId, provider);
 }
+
+test('coordinators receive only their church roster policy and retain existing write restrictions', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const familyId = await seedFamily(churchId, 'Coordinator Family');
+    const individualId = await seedIndividual(churchId);
+    await Database.query('UPDATE individuals SET family_id = ? WHERE id = ? AND church_id = ?', [familyId, individualId, churchId]);
+    await linkPerson(churchId, individualId, 'elvanto', 'elv-person');
+    await activateAuthority(churchId, 'elvanto');
+    await updatePeopleSyncPolicy(churchId, { syncEnabled: false, peopleEditingLocked: true });
+
+    const otherChurchId = 'otherchurch1';
+    Database.getChurchDb(otherChurchId);
+    await activateAuthority(otherChurchId, 'planning_center');
+    await updatePeopleSyncPolicy(otherChurchId, { syncEnabled: true, peopleEditingLocked: false });
+
+    const app = await startPeopleRouteApp(churchId, 'coordinator');
+    try {
+      const response = await app.request('/api/families');
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(response.body.peopleSyncPolicy, {
+        authorityProvider: 'elvanto', syncEnabled: false, peopleEditingLocked: true,
+      });
+      assert.strictEqual(response.body.families.length, 1);
+      assert.strictEqual(response.body.families[0].id, familyId);
+      assert.strictEqual(response.body.families[0].managedBy, 'elvanto');
+
+      const edit = await app.request(`/api/individuals/${individualId}`, {
+        method: 'PUT', body: JSON.stringify({ firstName: 'Changed' }),
+      });
+      assert.strictEqual(edit.status, 403);
+      const deletion = await app.request(`/api/individuals/${individualId}/permanent`, { method: 'DELETE' });
+      assert.strictEqual(deletion.status, 403);
+      assert.strictEqual(deletion.body.error, 'Insufficient permissions.');
+    } finally {
+      await app.close();
+    }
+  });
+});
 
 test('People exposes medical booleans only for people assigned to a relevant gathering', async () => {
   await withRouteChurchDb(async (churchId) => {

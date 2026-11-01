@@ -7,6 +7,7 @@ import ToastContainer from '../components/ToastContainer';
 import type { AuthorityProvider, ExternalLinks } from '../components/peopleSync/types';
 import {
   familiesAPI,
+  elvantoSyncAPI,
   gatheringsAPI,
   individualsAPI,
   integrationsAPI,
@@ -16,11 +17,13 @@ import {
 } from '../services/api';
 import PeoplePage from './PeoplePage';
 
+const authState = vi.hoisted(() => ({ role: 'admin' }));
+
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     user: {
       id: 1,
-      role: 'admin',
+      role: authState.role,
       firstName: 'Admin',
       lastName: 'User',
       hasSampleData: false,
@@ -78,6 +81,8 @@ function renderPeoplePage({
   batches = [],
   archivedPeople = [],
   peopleEditingLocked = true,
+  role = 'admin',
+  families = [],
 }: {
   authorityProvider: AuthorityProvider;
   people: TestPerson[];
@@ -87,17 +92,27 @@ function renderPeoplePage({
   batches?: Array<Record<string, unknown>>;
   archivedPeople?: TestPerson[];
   peopleEditingLocked?: boolean;
+  role?: string;
+  families?: Array<Record<string, unknown>>;
 }) {
+  authState.role = role;
   vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people, medicalNotesIndicator } } as never);
   vi.spyOn(individualsAPI, 'getArchived').mockResolvedValue({ data: { people: archivedPeople } } as never);
   vi.spyOn(familiesAPI, 'getAll').mockResolvedValue({
-    data: { families: [], planningCenterTrackBackgroundChecks: false },
+    data: {
+      families, planningCenterTrackBackgroundChecks: false,
+      peopleSyncPolicy: { authorityProvider, syncEnabled, peopleEditingLocked },
+    },
   } as never);
   vi.spyOn(gatheringsAPI, 'getAll').mockResolvedValue({ data: { gatherings: [] } } as never);
-  vi.spyOn(peopleSyncAPI, 'getSettings').mockResolvedValue({
-    data: { settings: { authorityProvider, syncEnabled, peopleEditingLocked } },
-  } as never);
+  const settingsRequest = vi.spyOn(peopleSyncAPI, 'getSettings');
+  if (role === 'admin') {
+    settingsRequest.mockResolvedValue({ data: { settings: { authorityProvider, syncEnabled, peopleEditingLocked } } } as never);
+  } else {
+    settingsRequest.mockRejectedValue({ response: { status: 403, data: { error: 'Insufficient permissions.' } } });
+  }
   vi.spyOn(integrationsAPI, 'getPlanningCenterSyncBatches').mockResolvedValue({ data: { batches } } as never);
+  vi.spyOn(elvantoSyncAPI, 'listBatches').mockResolvedValue({ data: { batches } } as never);
   vi.spyOn(visitorConfigAPI, 'getConfig').mockResolvedValue({
     data: { localVisitorServiceLimit: 6, travellerVisitorServiceLimit: 2 },
   } as never);
@@ -117,6 +132,51 @@ afterEach(() => {
 });
 
 describe('PeoplePage external source filter', () => {
+  it.each(['planning_center', 'elvanto'] as const)('loads coordinator families and %s editing locks without admin requests', async (authorityProvider) => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      role: 'coordinator', authorityProvider,
+      people: [person(1, { familyId: 7, familyName: 'Test Family', externalLinks: { [authorityProvider]: 'external-1' } })],
+      families: [{ id: 7, familyName: 'Test Family', memberCount: 1, managedBy: authorityProvider }],
+    });
+
+    expect(await screen.findByLabelText(/Link Status/)).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load families')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Family Settings')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add people' })).not.toBeInTheDocument();
+    await user.click(screen.getByText('Person 1'));
+    await user.click(screen.getByTitle('Edit Selected'));
+    expect(screen.getByPlaceholderText('Enter first name')).toBeDisabled();
+    expect(screen.getByText(/Ask an administrator.*sync schedule/)).toBeInTheDocument();
+    expect(peopleSyncAPI.getSettings).not.toHaveBeenCalled();
+    expect(integrationsAPI.getPlanningCenterSyncBatches).not.toHaveBeenCalled();
+    expect(elvantoSyncAPI.listBatches).not.toHaveBeenCalled();
+  });
+
+  it('lets a coordinator restore local archived people without offering permanent deletion', async () => {
+    const user = userEvent.setup();
+    const restore = vi.spyOn(individualsAPI, 'restore').mockResolvedValue({ data: {} } as never);
+    renderPeoplePage({ role: 'coordinator', authorityProvider: 'none', people: [], archivedPeople: [person(1)] });
+    await user.click(await screen.findByRole('button', { name: 'Show (1)' }));
+    await user.click(screen.getByTitle('More actions'));
+    expect(screen.queryByRole('button', { name: 'Delete Permanently' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(restore).toHaveBeenCalledWith(1));
+    expect(await screen.findByText('Person restored')).toBeInTheDocument();
+  });
+
+  it('does not offer coordinator lifecycle actions for locked archived people', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      role: 'coordinator', authorityProvider: 'planning_center', people: [],
+      archivedPeople: [person(1, { externalLinks: { planning_center: 'pco-1' } })],
+    });
+    await screen.findByLabelText(/Link Status/);
+    await user.click(screen.getByRole('button', { name: 'Show (1)' }));
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(screen.queryByTitle('More actions')).not.toBeInTheDocument();
+  });
+
   it('explains provider ownership and the batch schedule when editing a managed person', async () => {
     const user = userEvent.setup();
     renderPeoplePage({

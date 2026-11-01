@@ -24,9 +24,10 @@ interface Props {
   provider: SyncProvider;
   syncEnabled: boolean;
   editingLocked?: boolean;
+  canViewSyncSchedule?: boolean;
 }
 
-const ProviderManagedPeopleNote: React.FC<Props> = ({ provider, syncEnabled, editingLocked = true }) => {
+const ProviderManagedPeopleNote: React.FC<Props> = ({ provider, syncEnabled, editingLocked = true, canViewSyncSchedule = false }) => {
   const [batches, setBatches] = useState<PeopleSyncBatch[] | null>(null);
   const [failed, setFailed] = useState(false);
   const label = authorityLabel(provider);
@@ -35,7 +36,7 @@ const ProviderManagedPeopleNote: React.FC<Props> = ({ provider, syncEnabled, edi
     let current = true;
     setBatches(null);
     setFailed(false);
-    if (syncEnabled) {
+    if (syncEnabled && canViewSyncSchedule) {
       const request = provider === 'planning_center'
         ? integrationsAPI.getPlanningCenterSyncBatches()
         : elvantoSyncAPI.listBatches();
@@ -46,7 +47,7 @@ const ProviderManagedPeopleNote: React.FC<Props> = ({ provider, syncEnabled, edi
       });
     }
     return () => { current = false; };
-  }, [provider, syncEnabled]);
+  }, [provider, syncEnabled, canViewSyncSchedule]);
 
   return (
     <div role="note" className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
@@ -56,6 +57,8 @@ const ProviderManagedPeopleNote: React.FC<Props> = ({ provider, syncEnabled, edi
         : 'Local editing is enabled, but provider-managed details may be overwritten by the next sync.'}</p>
       {!syncEnabled ? (
         <p className="mt-2">Automatic syncing is paused. Changes in {label} will appear in LMPG after an administrator resumes syncing or completes a manual sync.</p>
+      ) : !canViewSyncSchedule ? (
+        <p className="mt-2">Changes appear in LMPG after the next successful sync. Ask an administrator to check the sync schedule or run a manual sync.</p>
       ) : failed ? (
         <p className="mt-2">The sync schedule could not be loaded. Ask an administrator to check Settings → Integrations for when changes will appear in LMPG.</p>
       ) : batches === null ? (

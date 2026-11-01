@@ -28,7 +28,7 @@ describe('provider-managed people sync guidance', () => {
       batch(), batch({ id: 2, name: 'Youth', scheduleFrequency: 'weekly', scheduleDay: 0 }),
       batch({ id: 3, name: 'Volunteers', scheduleFrequency: 'monthly', scheduleDay: 31 }),
     ] } } as never);
-    render(<ProviderManagedPeopleNote provider="elvanto" syncEnabled />);
+    render(<ProviderManagedPeopleNote provider="elvanto" syncEnabled canViewSyncSchedule />);
     expect(await screen.findByText('Members: daily overnight')).toBeInTheDocument();
     expect(screen.getByText('Youth: weekly on Sunday (overnight)')).toBeInTheDocument();
     expect(screen.getByText('Volunteers: monthly on day 31 (overnight; last day in shorter months)')).toBeInTheDocument();
@@ -42,7 +42,7 @@ describe('provider-managed people sync guidance', () => {
       batch({ id: 3, name: 'Missing', sourceStatus: 'missing' }),
       batch({ id: 4, name: 'Manual', scheduleEnabled: false }),
     ] } } as never);
-    render(<ProviderManagedPeopleNote provider="planning_center" syncEnabled />);
+    render(<ProviderManagedPeopleNote provider="planning_center" syncEnabled canViewSyncSchedule />);
     expect(await screen.findByText('Members: batch disabled')).toBeInTheDocument();
     expect(screen.getByText('Draft: sync blocked until an administrator reviews the source')).toBeInTheDocument();
     expect(screen.getByText('Missing: sync blocked because the source is missing')).toBeInTheDocument();
@@ -52,14 +52,14 @@ describe('provider-managed people sync guidance', () => {
 
   it('does not invent a schedule when the provider request fails', async () => {
     vi.spyOn(elvantoSyncAPI, 'listBatches').mockRejectedValue(new Error('Unavailable'));
-    render(<ProviderManagedPeopleNote provider="elvanto" syncEnabled />);
+    render(<ProviderManagedPeopleNote provider="elvanto" syncEnabled canViewSyncSchedule />);
     expect(await screen.findByText(/The sync schedule could not be loaded/)).toBeInTheDocument();
     expect(screen.queryByRole('list')).not.toBeInTheDocument();
   });
 
   it('explains when no batches have been configured', async () => {
     vi.spyOn(elvantoSyncAPI, 'listBatches').mockResolvedValue({ data: { batches: [] } } as never);
-    render(<ProviderManagedPeopleNote provider="elvanto" syncEnabled />);
+    render(<ProviderManagedPeopleNote provider="elvanto" syncEnabled canViewSyncSchedule />);
     expect(await screen.findByText(/No sync batches are configured/)).toBeInTheDocument();
   });
 

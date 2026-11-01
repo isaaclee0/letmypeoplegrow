@@ -104,10 +104,25 @@ router.get('/', async (req, res) => {
       memberCount: Number(family.memberCount)
     })));
 
-    const planningCenterSyncIndicator = (await getAuthority(req.user.church_id)).active === 'planning_center';
+    const [{ active: authorityProvider }, policy] = await Promise.all([
+      getAuthority(req.user.church_id),
+      getPeopleSyncPolicy(req.user.church_id),
+    ]);
+    const planningCenterSyncIndicator = authorityProvider === 'planning_center';
     const planningCenterTrackBackgroundChecks = !!(settingsRows[0]?.planning_center_track_background_checks);
 
-    res.json({ families: processedFamilies, planningCenterSyncIndicator, planningCenterTrackBackgroundChecks });
+    res.json({
+      families: processedFamilies,
+      planningCenterSyncIndicator,
+      planningCenterTrackBackgroundChecks,
+      // Roster viewers need these flags to display provider locks, without
+      // access to the admin-only integration settings or sync batches.
+      peopleSyncPolicy: {
+        authorityProvider,
+        peopleEditingLocked: policy.peopleEditingLocked,
+        syncEnabled: policy.syncEnabled,
+      },
+    });
   } catch (error) {
     console.error('Get families error:', error);
     res.status(500).json({ error: 'Failed to retrieve families.' });

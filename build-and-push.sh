@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # Build and push Docker images to Docker Hub
 # Usage: ./build-and-push.sh [version]
 # If no version is provided, reads from VERSION file
@@ -32,7 +34,7 @@ if ! docker buildx inspect $BUILDER >/dev/null 2>&1; then
     BUILDER="cloud-builder"
 else
     # Test if cloud builder is working, fallback to local if not
-    if ! docker buildx build --builder $BUILDER --platform linux/amd64 --dry-run . >/dev/null 2>&1; then
+    if ! docker buildx inspect "$BUILDER" --bootstrap >/dev/null 2>&1; then
         echo "Cloud builder not working. Using local builder..."
         docker buildx create --use --name cloud-builder --driver docker-container
         BUILDER="cloud-builder"
@@ -78,4 +80,4 @@ echo "  Server: $SERVER_IMAGE:$VERSION"
 echo "  Client: $CLIENT_IMAGE:$VERSION"
 echo ""
 echo "To deploy, use:"
-echo "  IMAGE_TAG=$VERSION docker-compose -f docker-compose.prod.yml up -d" 
+echo "  IMAGE_TAG=$VERSION docker-compose -f docker-compose.prod.yml up -d"

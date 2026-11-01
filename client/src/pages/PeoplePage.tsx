@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Dialog, DialogPanel, DialogTitle } from '@headlessui/react';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI, contactsAPI, usersAPI, peopleSyncAPI } from '../services/api';
+import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI, contactsAPI, usersAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
@@ -561,14 +561,12 @@ const PeoplePage: React.FC = () => {
 
   const loadFamilies = async () => {
     try {
-      const [response, peopleSyncResponse] = await Promise.all([
-        familiesAPI.getAll(),
-        peopleSyncAPI.getSettings(),
-      ]);
+      const response = await familiesAPI.getAll();
+      const { peopleSyncPolicy } = response.data;
       setFamilies(response.data.families || []);
-      setAuthorityProvider(peopleSyncResponse.data.settings.authorityProvider);
-      setPeopleEditingLocked(peopleSyncResponse.data.settings.peopleEditingLocked !== false);
-      setPeopleSyncEnabled(peopleSyncResponse.data.settings.syncEnabled !== false);
+      setAuthorityProvider(peopleSyncPolicy.authorityProvider);
+      setPeopleEditingLocked(peopleSyncPolicy.peopleEditingLocked !== false);
+      setPeopleSyncEnabled(peopleSyncPolicy.syncEnabled !== false);
       setPlanningCenterTrackBackgroundChecks(!!response.data.planningCenterTrackBackgroundChecks);
     } catch (err: any) {
       setError('Failed to load families');
@@ -1509,7 +1507,7 @@ const PeoplePage: React.FC = () => {
         lockManagedFields={selectedHasAuthorityLock}
         managedByLabel={authorityLabel(authorityProvider)}
         providerNote={authorityProvider !== 'none' && selectedHasProviderLink
-          ? <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} /> : undefined}
+          ? <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} canViewSyncSchedule={isAdmin} /> : undefined}
         onSave={async () => {
           try {
             setIsLoading(true);
@@ -2532,6 +2530,7 @@ const PeoplePage: React.FC = () => {
                         label: 'Delete Permanently',
                         icon: <TrashIcon className="h-4 w-4" />,
                         onClick: () => setProviderNoticeAction('delete'),
+                        hidden: !isAdmin,
                       }] : [
                         {
                           label: 'Restore',
@@ -2542,7 +2541,8 @@ const PeoplePage: React.FC = () => {
                           label: 'Delete Permanently',
                           icon: <TrashIcon className="h-4 w-4" />,
                           onClick: () => confirmPermanentDelete(person.id, `${person.firstName} ${person.lastName}`),
-                          className: 'text-red-600 hover:bg-red-50'
+                          className: 'text-red-600 hover:bg-red-50',
+                          hidden: !isAdmin,
                         }
                       ]}
                     />
@@ -2602,7 +2602,7 @@ const PeoplePage: React.FC = () => {
           <div className="fixed inset-0 flex items-center justify-center p-4">
             <DialogPanel className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-md bg-white p-5 shadow-lg dark:bg-gray-800">
               <DialogTitle className="mb-4 text-lg font-medium text-gray-900 dark:text-gray-100">People managed by {authorityLabel(authorityProvider)}</DialogTitle>
-              <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} />
+              <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} canViewSyncSchedule={isAdmin} />
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setProviderNoticeAction(null)} autoFocus className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Close</button>
                 {providerNoticeAction === 'archive' && !selectedHasAuthorityLock && (
@@ -2740,7 +2740,7 @@ const PeoplePage: React.FC = () => {
               {authorityProvider !== 'none' && Boolean(archivedPeople.find(person =>
                 person.id === permanentDeleteTarget.personId
               )?.externalLinks?.[authorityProvider]) && (
-                <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} />
+                <ProviderManagedPeopleNote provider={authorityProvider} syncEnabled={peopleSyncEnabled} editingLocked={peopleEditingLocked} canViewSyncSchedule={isAdmin} />
               )}
 
               <div className="text-center mb-6">

@@ -96,7 +96,10 @@ function renderPeoplePage({
   vi.spyOn(individualsAPI, 'getAll').mockResolvedValue({ data: { people } } as never);
   vi.spyOn(individualsAPI, 'getArchived').mockResolvedValue({ data: { people: [] } } as never);
   vi.spyOn(familiesAPI, 'getAll').mockResolvedValue({
-    data: { families: [], planningCenterTrackBackgroundChecks: false },
+    data: {
+      families: [], planningCenterTrackBackgroundChecks: false,
+      peopleSyncPolicy: { authorityProvider, peopleEditingLocked, syncEnabled: true },
+    },
   } as never);
   vi.spyOn(gatheringsAPI, 'getAll').mockResolvedValue({ data: { gatherings: [] } } as never);
   vi.spyOn(peopleSyncAPI, 'getSettings').mockResolvedValue({
