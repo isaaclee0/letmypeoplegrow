@@ -24,8 +24,8 @@ CLIENT_IMAGE="$REGISTRY/letmypeoplegrow-client"
 
 echo "Building and pushing version: $VERSION"
 
-# Use Docker Build Cloud for faster builds
-BUILDER="cloud-staugustine1-oneclick"
+# Use Docker Build Cloud by default, or an existing builder supplied via BUILDER.
+BUILDER="${BUILDER:-cloud-staugustine1-oneclick}"
 
 # Check if builder exists and is working
 if ! docker buildx inspect $BUILDER >/dev/null 2>&1; then
