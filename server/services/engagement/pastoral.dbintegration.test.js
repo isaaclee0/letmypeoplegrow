@@ -203,7 +203,7 @@ test('reconciles decline and re-engagement episodes from factual events without 
        WHERE church_id = ? AND event_id = ?`,
       [churchId, eventId],
     ))[0].count, 1);
-    await applyPastoralInsightAction(churchId, actorId, positive.id, { action: 'dismiss' });
+    await applyPastoralInsightAction(churchId, actorId, positive.id, { action: 'dismiss' }, { now: AS_OF });
     assert.equal((await Database.query(
       `SELECT state FROM engagement_decline_deliveries
        WHERE church_id = ? AND event_id = ?`,

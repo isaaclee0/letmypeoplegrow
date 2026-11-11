@@ -357,4 +357,17 @@ describe('review identity row model', () => {
     expect(isReviewDirty(initial, selected)).toBe(true);
     expect(selectedChangeCount(reviewWith55Identities(), selected)).toBe(6);
   });
+  it('requires outside-list link-and-archive decisions to be accepted again after a signed correction preview', () => {
+    const review = reviewWith55Identities();
+    review.plan.archive = [
+      { id: 'outside:17', externalPersonId: 'outside-person', individualId: 17, reason: 'outside_all_sync_sources', linkRequired: true },
+      { id: 'archive:18', externalPersonId: 'terminal-person', individualId: 18, reason: 'provider_state_archived' },
+    ];
+    // Being independently present in a local-only bucket must not preserve
+    // acceptance of the compound proposal across a new signed preview.
+    review.plan.unmatchedLocalRegulars = [{ id: 'local:17', individualId: 17, reason: 'no_provider_link', reviewRequired: true }];
+    const merged = mergeSelectionsForPreview(stateWith({ acceptedArchiveIds: new Set([17, 18]) }), review);
+    expect([...merged.acceptedArchiveIds]).toEqual([18]);
+  });
+
 });

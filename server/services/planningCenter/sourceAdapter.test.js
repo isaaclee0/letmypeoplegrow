@@ -149,6 +149,65 @@ test('fetches every Planning Center person page as one normalized all-people sna
   assert.ok(calls.every((call) => call.method === 'GET'));
 });
 
+for (const sourceKind of ['planning_center_list', 'all']) {
+  test(`${sourceKind} preserves household options without promoting contextual people or household display references to membership`, async () => {
+    const calls = [];
+    const baseUrl = sourceKind === 'all' ? `${API}/people` : `${API}/lists/42/people`;
+    const firstUrl = `${baseUrl}?per_page=100&include=households.people,field_data`;
+    const secondUrl = `${baseUrl}?page=2`;
+    const multipleHouseholds = person('p1');
+    multipleHouseholds.relationships.households.data.push({ type: 'Household', id: 'h2' });
+    const contextWithoutMembership = person('p2');
+    delete contextWithoutMembership.relationships.households;
+    const household = (id, ids) => ({
+      type: 'Household', id,
+      attributes: { name: 'Lovelace Household', contact_email: 'private@example.test' },
+      relationships: { people: { data: ids.map((id) => ({ type: 'Person', id })) } },
+    });
+    const request = async ({ url, method }) => {
+      calls.push({ url, method });
+      if (url === `${API}/lists/42`) return response(200, {
+        data: { type: 'List', id: '42', attributes: { name: 'Sunday Team', total_people: 2 } },
+      });
+      if (url === firstUrl) return response(200, {
+        data: [multipleHouseholds],
+        included: [
+          household('h1', ['p1', 'p2', 'p3']), household('h2', ['p1', 'p3']),
+          household('h3', ['p2']), { type: 'Household', id: 'h4', attributes: {} },
+          contextWithoutMembership, person('p3', { firstName: 'Earlier context' }),
+        ],
+        links: { next: secondUrl },
+      });
+      if (url === secondUrl) return response(200, {
+        data: [person('p3', { firstName: 'Source member', householdId: 'h2' })],
+        included: [person('p3', { firstName: 'Later context', householdId: 'h1' })],
+        links: { next: null },
+      });
+      throw new Error(`Unexpected provider call: ${url}`);
+    };
+    const snapshot = sourceKind === 'all'
+      ? await fetchPlanningCenterAllSnapshot({ accessToken: 'secret', request })
+      : await fetchPlanningCenterSourceSnapshot({ accessToken: 'secret', sourceKind, sourceExternalId: '42', request });
+
+    assert.deepEqual(snapshot.memberExternalIds, ['p1', 'p3']);
+    assert.deepEqual(snapshot.people.map(({ id }) => id), ['p1', 'p3']);
+    assert.deepEqual(snapshot.people[0].householdIds, ['h1', 'h2']);
+    assert.equal(snapshot.people[1].firstName, 'Source member');
+    assert.deepEqual(snapshot.people[1].householdIds, ['h2']);
+    assert.deepEqual(snapshot.contextPeople.map(({ id, householdIds }) => ({ id, householdIds })), [{ id: 'p2', householdIds: null }]);
+    assert.deepEqual(snapshot.families, [
+      { id: 'h1', name: 'Lovelace Household', memberExternalIds: ['p1'], householdMemberExternalIds: ['p1', 'p2', 'p3'], primaryContactExternalId: null },
+      { id: 'h2', name: 'Lovelace Household', memberExternalIds: ['p1', 'p3'], householdMemberExternalIds: ['p1', 'p3'], primaryContactExternalId: null },
+      { id: 'h3', name: 'Lovelace Household', memberExternalIds: [], householdMemberExternalIds: ['p2'], primaryContactExternalId: null },
+      { id: 'h4', memberExternalIds: [], primaryContactExternalId: null },
+    ]);
+    assert.equal(JSON.stringify(snapshot).includes('private@example.test'), false);
+    assert.deepEqual(calls.map(({ url }) => url), sourceKind === 'all'
+      ? [firstUrl, secondUrl] : [`${API}/lists/42`, firstUrl, secondUrl]);
+    assert.ok(calls.every(({ method }) => method === 'GET'));
+  });
+}
+
 test('fails closed instead of returning accumulated people when an all-people page is malformed', async () => {
   await assert.rejects(
     () => fetchPlanningCenterAllSnapshot({
@@ -219,4 +278,16 @@ test('fails closed when a List-membership page contains a non-Person or ID-less 
       (err) => err.code === 'SYNC_SOURCE_INCOMPLETE'
     );
   }
+});
+
+test('basic reconciliation directory excludes custom field data while reading complete identities', async () => {
+  const calls = [];
+  const snapshot = await fetchPlanningCenterAllSnapshot({accessToken:'secret', includeFieldData:false,
+    request:async ({url})=>{
+      calls.push(url);
+      return response(200,{data:[person('outside')],included:[],links:{next:null}});
+    }});
+  assert.deepEqual(calls,[`${API}/people?per_page=100&include=households.people`]);
+  assert.equal(snapshot.complete,true);
+  assert.deepEqual(snapshot.memberExternalIds,['outside']);
 });

@@ -10,6 +10,12 @@ const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
 const { getSupportedCountries, supportsMobileNumbers } = require('../utils/phoneNumber');
 const { normalizeTimeZone, timeZoneFromCoordinates, getChurchDate, getZonedParts, addDateOnly, loadChurchTimeZone } = require('../utils/churchTime');
+const {
+  getOnboardingStatus,
+  startGuidedOnboarding,
+  saveGuidedProgress,
+  completeOnboarding,
+} = require('../services/guidedOnboarding');
 
 // Helper function to create sample attendance sessions for testing
 const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId, churchId, timeZone) => {
@@ -89,12 +95,12 @@ async function assertNoCrossChurchTierReferences(conn, churchId) {
 }
 
 // Helper function to save onboarding progress
-const saveOnboardingProgress = async (userId, currentStep, data = {}, completedSteps = []) => {
+const saveOnboardingProgress = async (churchId, userId, currentStep, data = {}, completedSteps = []) => {
   try {
     // Check if progress record exists
     const existingProgress = await Database.query(
       'SELECT id FROM onboarding_progress WHERE user_id = ? AND church_id = ?',
-      [userId, req.user.church_id]
+      [userId, churchId]
     );
 
     if (existingProgress.length > 0) {
@@ -110,7 +116,7 @@ const saveOnboardingProgress = async (userId, currentStep, data = {}, completedS
       if (completedSteps.length > 0) {
         const currentCompleted = await Database.query(
           'SELECT completed_steps FROM onboarding_progress WHERE user_id = ? AND church_id = ?',
-          [userId, req.user.church_id]
+          [userId, churchId]
         );
         
         let existingCompleted = [];
@@ -149,9 +155,9 @@ const saveOnboardingProgress = async (userId, currentStep, data = {}, completedS
       });
       
       if (updateColumns.length > 0) {
-        updateValues.push(userId);
+        updateValues.push(userId, churchId);
         await Database.query(
-          `UPDATE onboarding_progress SET ${updateColumns.join(', ')}, updated_at = datetime('now') WHERE user_id = ?`,
+          `UPDATE onboarding_progress SET ${updateColumns.join(', ')}, updated_at = datetime('now') WHERE user_id = ? AND church_id = ?`,
           updateValues
         );
       }
@@ -159,6 +165,7 @@ const saveOnboardingProgress = async (userId, currentStep, data = {}, completedS
       // Create new progress record
       const progressData = {
         user_id: userId,
+        church_id: churchId,
         current_step: currentStep,
         completed_steps: JSON.stringify(completedSteps)
       };
@@ -200,22 +207,30 @@ const upload = multer({
 // Check onboarding status
 router.get('/status', verifyToken, requireRole(['admin']), async (req, res) => {
   try {
-    const settings = await Database.query('SELECT * FROM church_settings WHERE church_id = ? LIMIT 1', [req.user.church_id]);
-    
-    // Get user's onboarding progress
-    const progress = await Database.query(
-      'SELECT * FROM onboarding_progress WHERE user_id = ? AND church_id = ?',
-      [req.user.id, req.user.church_id]
-    );
-    
-    res.json({
-      completed: settings.length > 0 && settings[0].onboarding_completed,
-      settings: settings.length > 0 ? settings[0] : null,
-      progress: progress.length > 0 ? progress[0] : null
-    });
+    res.json(await getOnboardingStatus(req.user.church_id, req.user.id));
   } catch (error) {
     console.error('Get onboarding status error:', error);
     res.status(500).json({ error: 'Failed to get onboarding status' });
+  }
+});
+
+router.post('/guided-start', verifyToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const { status = 200, ...result } = await startGuidedOnboarding(req.user.church_id, req.user.id);
+    res.status(status).json(result);
+  } catch (error) {
+    console.error('Start guided onboarding error:', error);
+    res.status(500).json({ error: 'Failed to start guided setup' });
+  }
+});
+
+router.put('/guided-progress', verifyToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const { status = 200, ...result } = await saveGuidedProgress(req.user.church_id, req.user.id, req.body?.state);
+    res.status(status).json(result);
+  } catch (error) {
+    console.error('Save guided onboarding progress error:', error);
+    res.status(500).json({ error: 'Failed to save guided setup progress' });
   }
 });
 
@@ -332,7 +347,7 @@ router.post('/church-info',
 
       // Save progress
       const churchInfo = { churchName, countryCode, timezone, emailFromName, emailFromAddress };
-      await saveOnboardingProgress(req.user.id, 2, { church_info: churchInfo }, [1]);
+      await saveOnboardingProgress(req.user.church_id, req.user.id, 2, { church_info: churchInfo }, [1]);
 
       res.json({ message: 'Organisation information saved successfully' });
     } catch (error) {
@@ -399,7 +414,7 @@ router.post('/gathering',
       `, [req.user.id]);
 
       // Save progress
-      await saveOnboardingProgress(req.user.id, 2, { gatherings: userGatherings });
+      await saveOnboardingProgress(req.user.church_id, req.user.id, 2, { gatherings: userGatherings });
 
       res.json({ 
         message: 'Gathering created successfully',
@@ -550,7 +565,7 @@ router.post('/upload-csv/:gatheringId',
         gatheringId: Number(gatheringId)
       };
       
-      await saveOnboardingProgress(req.user.id, 3, { csv_upload: uploadResult }, [2]);
+      await saveOnboardingProgress(req.user.church_id, req.user.id, 3, { csv_upload: uploadResult }, [2]);
 
       res.json(uploadResult);
 
@@ -710,7 +725,7 @@ router.post('/import-paste/:gatheringId',
         gatheringId: Number(gatheringId)
       };
       
-      await saveOnboardingProgress(req.user.id, 3, { csv_upload: uploadResult }, [2]);
+      await saveOnboardingProgress(req.user.church_id, req.user.id, 3, { csv_upload: uploadResult }, [2]);
 
       res.json(uploadResult);
 
@@ -728,16 +743,14 @@ router.post('/complete',
   auditLog('ONBOARDING_COMPLETE'),
   async (req, res) => {
     try {
-      await Database.query(`
-        UPDATE church_settings 
-        SET onboarding_completed = 1, updated_at = datetime('now')
-        WHERE id = (SELECT id FROM church_settings LIMIT 1)
-      `);
+      const { status, guided, ...failure } = await completeOnboarding(req.user.church_id, req.user.id);
+      if (status) return res.status(status).json(failure);
 
-      // Mark onboarding as completed in progress
-      await saveOnboardingProgress(req.user.id, 4, {}, [3, 4]);
+      if (guided.version === 0) {
+        await saveOnboardingProgress(req.user.church_id, req.user.id, 4, {}, [3, 4]);
+      }
 
-      res.json({ message: 'Onboarding completed successfully' });
+      res.json({ message: 'Onboarding completed successfully', guided });
     } catch (error) {
       console.error('Complete onboarding error:', error);
       res.status(500).json({ error: 'Failed to complete onboarding' });
@@ -762,7 +775,7 @@ router.post('/save-progress',
 
       const { currentStep, data = {} } = req.body;
       
-      await saveOnboardingProgress(req.user.id, currentStep, data);
+      await saveOnboardingProgress(req.user.church_id, req.user.id, currentStep, data);
 
       res.json({ message: 'Progress saved successfully' });
     } catch (error) {

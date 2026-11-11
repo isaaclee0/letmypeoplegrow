@@ -132,6 +132,23 @@ afterEach(() => {
 });
 
 describe('PeoplePage external source filter', () => {
+  it('offers admin duplicate correction for a linked selection while retaining ordinary edit locks', async () => {
+    const user = userEvent.setup();
+    renderPeoplePage({
+      authorityProvider: 'planning_center',
+      people: [person(385), person(686, { externalLinks: { planning_center: 'pco-person' } })],
+    });
+    await user.click(await screen.findByText('Person 385'));
+    await user.click(screen.getByText('Person 686'));
+    await user.click(screen.getByTitle('Merge (deduplicate)'));
+    expect(screen.getByRole('combobox', { name: 'Record to keep' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Merge duplicate people' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByText('Person 385'));
+    await user.click(screen.getByTitle('Edit Selected'));
+    expect(screen.getByPlaceholderText('Enter first name')).toBeDisabled();
+  });
+
   it.each(['planning_center', 'elvanto'] as const)('loads coordinator families and %s editing locks without admin requests', async (authorityProvider) => {
     const user = userEvent.setup();
     renderPeoplePage({

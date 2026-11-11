@@ -252,11 +252,12 @@ export interface AddPersonAction {
   reviewRequired: true;
 }
 
-// No producer yet (same caveat as LinkFamilyAction). Shape inferred from
-// apply.js's addFamilies handling (familyName, externalFamilyId).
 export interface AddFamilyAction {
   id: string;
   externalFamilyId?: string | null;
+  // A local default for this person, with no corresponding provider household.
+  singlePersonExternalId?: string;
+  memberExternalIds?: string[];
   familyName: string;
   reason?: string;
 }
@@ -303,6 +304,13 @@ export interface ArchiveAction {
   externalPersonId: string;
   individualId: number;
   reason: string;
+  // Present for a signed outside_all_sync_sources compound proposal.
+  // Acceptance links this exact pair when needed and archives only in LMPG.
+  linkRequired?: boolean;
+  externalFirstName?: string;
+  externalLastName?: string;
+  sourceNames?: string[];
+  pcoHouseholdNames?: string[];
 }
 
 export interface ReactivateAction {
@@ -345,10 +353,16 @@ export interface AddToGatheringAction {
 
 export interface RemoveFromGatheringAction {
   id: string;
-  batchId: number;
+  batchId: number | null;
   gatheringTypeId: number;
   individualId: number;
   reason: string;
+  reviewRequired?: boolean;
+  gatheringName?: string | null;
+  externalPersonId?: string;
+  sourceBatchIds?: number[];
+  sourceIdentities?: Array<{ batchId: number; kind: SourceKind; externalId: string }>;
+  sourceNames?: string[];
 }
 
 // Base shape from matcher.js's own `ambiguous` entries, plus plan.js's
@@ -362,13 +376,41 @@ export interface AmbiguousPersonAction {
   matcherBuckets?: string[];
 }
 
-// plan.js never generates this bucket's contents itself -- it only clones
-// whatever `input.familyConflicts` the caller passes (orchestrator.js
-// always passes an empty array today; family-conflict detection is future
-// work), so there is no real shape to pin down yet.
+// Reconciliation proposals are built server-side and covered by the review
+// signature. The client submits their action IDs, never arbitrary destinations.
+export interface FamilyResolution {
+  kind: 'household' | 'detach' | 'single_person';
+  destination:
+    | { kind: 'existing'; familyId: number; familyName?: string }
+    | { kind: 'create'; familyName: string }
+    | { kind: 'none' };
+  moves: Array<{ externalPersonId: string; individualId: number; fromFamilyId: number | null }>;
+}
+
 export interface FamilyConflictAction {
   id?: string;
+  // Server-proven chooser coverage; contextual single-household relatives may also be present.
+  householdChoiceGroupIds?: string[];
+  externalFamilyId?: string | null;
+  externalFamilyName?: string | null;
+  memberExternalIds?: string[];
+  candidateFamilyIds?: number[];
+  unresolvedExternalPersonIds?: string[];
+  reason?: string;
+  resolution?: FamilyResolution;
   [key: string]: unknown;
+}
+
+// A household or attendance-list difference a reviewer chose to keep as LMPG
+// has it. The planner leaves it out of review while the facts on both sides
+// still match; "Ask again" forgets the keep (see peopleSyncAPI).
+export interface KeptReconciliation {
+  keepId: number;
+  kind: 'household' | 'gathering_removal';
+  subjectKey: string;
+  keptAt: string | null;
+  bucket: 'familyConflicts' | 'removeFromGathering';
+  action: FamilyConflictAction | RemoveFromGatheringAction;
 }
 
 export interface UnmatchedLocalRegularAction {
@@ -429,6 +471,7 @@ export interface IdentityCreatePerson {
   lastName: string;
   isChild: boolean | null;
   externalFamilyId: string | null;
+  singlePersonFamilyName?: string;
   peopleType: PeopleType;
 }
 
@@ -437,6 +480,7 @@ export interface IdentityReviewEntry {
   candidateIndividualIds: number[];
   excludedIndividualIds: number[];
   held: boolean;
+  gatheringAssignments?: { batchId: number; gatheringTypeId: number }[];
   canCreate: boolean;
   createPerson: IdentityCreatePerson | null;
 }
@@ -468,6 +512,72 @@ export interface PeopleSyncReviewContext {
 // action shapes carry those keys) -- not plan.js's internal shape, which
 // also carries a `presenceProjection` field the sanitizer deliberately
 // drops before it ever reaches a route response.
+export type HouseholdDestination =
+  | { kind: 'keep' }
+  | { kind: 'existing'; familyId: number }
+  | { kind: 'create' }
+  | { kind: 'forget' };
+
+export interface HouseholdChoiceEdit {
+  destination: HouseholdDestination;
+  displayName?: string;
+}
+
+export type HouseholdChoiceEdits = Record<string, HouseholdChoiceEdit>;
+
+export interface HouseholdChoiceGroup {
+  id: string;
+  people: Array<PeopleSyncPersonName & {
+    externalPersonId: string;
+    individualId: number;
+    currentFamilyId: number | null;
+    sourceFingerprint: string | null;
+    currentFamilyName: string | null;
+  }>;
+  sourceHouseholds: Array<{
+    externalFamilyId: string;
+    name: string;
+    members: Array<PeopleSyncPersonName & { externalPersonId: string; inSource: boolean }>;
+  }>;
+  selectedDestination: { kind: 'keep' } | { kind: 'existing'; familyId: number };
+  displayName: string;
+  suggestedName: string;
+  sourceChanged: boolean;
+  saved: boolean;
+  invalidReason: string | null;
+}
+
+export interface HouseholdLocalFamily {
+  id: number;
+  familyName: string;
+  memberNames: string[];
+}
+
+export interface HouseholdPreference {
+  externalPersonId: string;
+  individualId: number;
+  familyId: number | null;
+  groupId: string;
+  sourceFingerprint: string | null;
+}
+
+export interface HouseholdChoiceDecision {
+  groupId: string;
+  destination: HouseholdDestination;
+  resolvedName: string | null;
+  fromName: string | null;
+  people: Array<{ externalPersonId: string; individualId: number; fromFamilyId: number | null; sourceFingerprint: string | null }>;
+}
+
+export interface HouseholdChoicesPlan {
+  version: 2;
+  groups: HouseholdChoiceGroup[];
+  localFamilies: HouseholdLocalFamily[];
+  edits: HouseholdChoiceEdits;
+  basePreferences: HouseholdPreference[];
+  decisions: HouseholdChoiceDecision[];
+}
+
 export interface PeopleSyncPlan {
   provider: SyncProvider;
   authoritative: boolean;
@@ -492,6 +602,20 @@ export interface PeopleSyncPlan {
   familyConflicts: FamilyConflictAction[];
   unmatchedLocalRegulars: UnmatchedLocalRegularAction[];
   skipped: SkippedAction[];
+  // Present only when something was kept; not an action bucket.
+  keptReconciliations?: KeptReconciliation[];
+  householdChoices?: HouseholdChoicesPlan;
+  sourceContext?: {
+    promotions?: Array<{ batchId: number; expectedBaseRevision: number; expectedDraftDigest: string }>;
+    reviewedLists?: Array<{
+      batchId: number;
+      name: string;
+      gatheringTypeId: number | null;
+      activeSource: Pick<ProviderSource, 'kind' | 'externalId' | 'name'> | null;
+      selectedSource: Pick<ProviderSource, 'kind' | 'externalId' | 'name'>;
+      isDraft: boolean;
+    }>;
+  };
 }
 
 // The 17 action-bucket keys of PeopleSyncPlan (i.e. plan.js's own BUCKETS
@@ -499,7 +623,7 @@ export interface PeopleSyncPlan {
 // interface above.
 export type PeopleSyncBucketName = Exclude<
   keyof PeopleSyncPlan,
-  'provider' | 'authoritative' | 'snapshot' | 'people' | 'reviewContext'
+  'provider' | 'authoritative' | 'snapshot' | 'people' | 'reviewContext' | 'keptReconciliations' | 'householdChoices' | 'sourceContext'
 >;
 
 // server/services/peopleSync/plan.js's summarizePlan(): bucket name -> count.
@@ -511,6 +635,7 @@ export type PeopleSyncPlanSummary = Record<PeopleSyncBucketName, number>;
 // apply.js's own comment on emptyResult), plus three extra tallies.
 export type PeopleSyncApplyCounts = Record<PeopleSyncBucketName, number> & {
   familyNamesUpdated: number;
+  householdChoices?: number;
   gatheringAssigned: number;
   gatheringRemoved: number;
 };
@@ -615,6 +740,13 @@ export type IdentityDecision =
   | { outcome: 'defer'; excludeIndividualId?: number };
 
 export interface PeopleSyncSelections {
+  // Exact card-wide edits from the signed household preview.
+  householdChoices?: HouseholdChoiceEdits;
+  // IDs of server-built, signed proposals. Omitted means leave unchanged.
+  acceptFamilyResolutionIds?: string[];
+  acceptGatheringRemovalIds?: string[];
+  // The same signed proposals, declined and remembered ("keep LMPG as it is").
+  keepReconciliationIds?: string[];
   // V2 selections replace legacy identity fields with one decision for each
   // signed external identity. Omit both fields for pre-v2 review responses.
   decisionContractVersion?: 2;

@@ -74,10 +74,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           localStorage.setItem('user', JSON.stringify(newUser));
           console.log('✅ User authenticated and validated:', newUser.email);
           
-          if (newUser.role === 'admin') {
+          if (newUser.role === 'admin' && newUser.isChurchApproved !== false) {
             try {
               const onboardingResponse = await onboardingAPI.getStatus();
-              setNeedsOnboarding(prev => prev !== !onboardingResponse.data.completed ? !onboardingResponse.data.completed : prev);
+              setNeedsOnboarding(prev => prev !== (onboardingResponse.data.guided?.required === true) ? (onboardingResponse.data.guided?.required === true) : prev);
             } catch (onboardingError) {
               console.log('ℹ️ Could not check onboarding status (this is normal if not authenticated)');
             }
@@ -149,10 +149,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(prev => JSON.stringify(prev) !== JSON.stringify(userData) ? userData : prev);
     
     // Check onboarding status for admin users
-    if (userData.role === 'admin') {
+    if (userData.role === 'admin' && userData.isChurchApproved !== false) {
       try {
         const onboardingResponse = await onboardingAPI.getStatus();
-        setNeedsOnboarding(!onboardingResponse.data.completed);
+        setNeedsOnboarding((onboardingResponse.data.guided?.required === true));
       } catch (onboardingError) {
         console.error('Failed to check onboarding status:', onboardingError);
       }
@@ -190,18 +190,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const refreshOnboardingStatus = async () => {
-    if (user?.role === 'admin') {
+  const refreshOnboardingStatus = async (throwOnError = false) => {
+    if (user?.role === 'admin' && user.isChurchApproved !== false) {
       try {
         const onboardingResponse = await onboardingAPI.getStatus();
-        setNeedsOnboarding(!onboardingResponse.data.completed);
+        setNeedsOnboarding((onboardingResponse.data.guided?.required === true));
       } catch (onboardingError) {
         console.error('Failed to check onboarding status:', onboardingError);
+        if (throwOnError) throw onboardingError;
       }
     }
   };
 
-  const refreshUserData = async () => {
+  const refreshUserData = async (throwOnError = false) => {
     try {
       console.log('🔄 Manually refreshing user data...');
       localStorage.removeItem('user'); // Clear cached data
@@ -212,6 +213,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       console.log('✅ User data refreshed successfully');
     } catch (error) {
       console.error('❌ Failed to refresh user data:', error);
+      if (throwOnError) throw error;
     }
   };
 

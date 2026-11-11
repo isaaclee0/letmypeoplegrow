@@ -92,7 +92,7 @@ test('normalizePerson produces the Task 5 normalized shape with exact IDs and tr
   assert.equal(result.modifiedAt, '2024-03-01 09:30:00');
   assert.deepEqual(Object.keys(result).sort(), [
     'attributes', 'categoryId', 'child', 'familyId', 'familyRelationship',
-    'firstName', 'id', 'lastName', 'modifiedAt', 'preferredName', 'provider', 'state',
+    'firstName', 'householdIds', 'id', 'lastName', 'modifiedAt', 'preferredName', 'provider', 'state',
   ]);
 });
 
@@ -322,4 +322,10 @@ test('normalizeSnapshot wires buildElvantoFamilies output into snapshot.families
   const snapshot = normalizeSnapshot([fixtures.activePerson, fixtures.spousePerson, fixtures.childPerson]);
   assert.equal(snapshot.families.length, 1);
   assert.equal(snapshot.families[0].id, 'fam-100');
+});
+
+test('reconciliation distinguishes absent family data from explicit no-family', () => {
+  assert.deepEqual(normalizePerson({ id: '1', firstname: 'Mark', lastname: 'Test' }).householdIds, null);
+  assert.deepEqual(normalizePerson({ id: '1', firstname: 'Mark', lastname: 'Test', family_id: null }).householdIds, []);
+  assert.deepEqual(normalizePerson({ id: '1', firstname: 'Mark', lastname: 'Test', family_id: 'house' }).householdIds, ['house']);
 });

@@ -3045,8 +3045,8 @@ const PeoplePage: React.FC = () => {
              </button>
            </div>
 
-           {/* Merge is available only when every selected person is locally managed. */}
-           {isAdmin && selectedPeople.length >= 2 && !selectedHasAuthorityLock && (
+           {/* Admin duplicate correction can retain one compatible provider identity. */}
+           {isAdmin && selectedPeople.length >= 2 && (
                <div className="flex items-center justify-end space-x-3">
                  <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Merge

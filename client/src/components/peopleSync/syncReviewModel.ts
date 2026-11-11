@@ -261,8 +261,10 @@ export function mergeSelectionsForPreview(previous: SyncSelectionState, nextRevi
       const decision = previous.identityDecisions?.[externalId] ?? null;
       return [externalId, isValidDecision(context.identities[externalId], manualCandidateIds, decision) ? decision : null];
     }));
+  const outsideArchiveIds = new Set(nextReview.plan.archive.filter((action) => action.reason === 'outside_all_sync_sources').map((action) => action.individualId));
   const permittedArchiveIds = new Set([
-    ...nextReview.plan.archive.map((action) => action.individualId),
+    // A compound identity+archive proposal must be reaccepted after a new signed preview.
+    ...nextReview.plan.archive.filter((action) => action.reason !== 'outside_all_sync_sources').map((action) => action.individualId),
     ...nextReview.plan.unmatchedLocalRegulars.map((action) => action.individualId),
     ...nextReview.plan.ambiguousPeople.flatMap((action) => action.candidateIndividualIds),
   ]);
@@ -271,8 +273,12 @@ export function mergeSelectionsForPreview(previous: SyncSelectionState, nextRevi
     ...previous,
     identityDecisions,
     linkCorrections: signedCorrections(context.linkCorrections),
-    acceptedArchiveIds: new Set([...previous.acceptedArchiveIds].filter((id) => permittedArchiveIds.has(id))),
+    acceptedArchiveIds: new Set([...previous.acceptedArchiveIds].filter((id) => permittedArchiveIds.has(id) && !outsideArchiveIds.has(id))),
     acceptedFamilyRenameIds: new Set([...previous.acceptedFamilyRenameIds].filter((id) => permittedRenameIds.has(id))),
+    // A correction can change the proposed household or roster while keeping
+    // its action ID. Require a fresh choice against that new signed preview.
+    acceptedFamilyResolutionIds: new Set(),
+    acceptedGatheringRemovalIds: new Set(),
   };
 }
 
@@ -287,5 +293,9 @@ export function selectedChangeCount(review: PeopleSyncReview, state: SyncSelecti
   return identityCount
     + Object.keys(state.linkCorrections || {}).length
     + state.acceptedArchiveIds.size
-    + state.acceptedFamilyRenameIds.size;
+    + state.acceptedFamilyRenameIds.size
+    + review.plan.familyConflicts.filter((action) => action.id && action.resolution
+      && state.acceptedFamilyResolutionIds?.has(action.id)).length
+    + review.plan.removeFromGathering.filter((action) => action.reviewRequired
+      && state.acceptedGatheringRemovalIds?.has(action.id)).length;
 }

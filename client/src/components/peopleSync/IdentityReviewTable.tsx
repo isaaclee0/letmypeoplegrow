@@ -448,16 +448,40 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
       ? `Change LMPG match for ${externalName}`
       : `Correct linked person for ${externalName}`;
     const map = mobile ? mobileFocusRefs : desktopFocusRefs;
+    const needsChoice = activeTab === 'decisions' && (row.status === 'needs_attention' || row.status === 'skipped');
+    const entry = reviewContext?.identities[row.externalId];
     return (
+      <div className="space-y-2">
+      {needsChoice && entry?.held && <p className="text-xs text-amber-800 dark:text-amber-200">Previously left for later. Choose an action to include this person.</p>}
+      {needsChoice && entry?.canCreate && <button
+        type="button"
+        aria-label={`Add ${externalName} to LMPG`}
+        onClick={() => setDecision(row.externalId, {
+          outcome: 'create',
+          ...(row.decision?.excludeIndividualId === undefined ? {} : { excludeIndividualId: row.decision.excludeIndividualId }),
+        })}
+        className="rounded-md border border-primary-300 bg-primary-50 px-2.5 py-1.5 text-left text-sm font-semibold text-primary-800 hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-primary-700 dark:bg-primary-950/30 dark:text-primary-200"
+      >Add as new person</button>}
       <button
         ref={(element) => setFocusRef(map, row.externalId, element)}
+        data-identity-picker
         type="button"
         aria-label={label}
         onClick={() => openPrimaryAction(row)}
         className="max-w-full rounded-md text-left font-semibold text-primary-700 underline decoration-primary-300 underline-offset-2 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:text-primary-300 dark:hover:text-primary-200"
       >
-        {row.localLabel}
+        {needsChoice ? 'Choose existing person' : row.localLabel}
       </button>
+      {needsChoice && row.status !== 'skipped' && <button
+        type="button"
+        aria-label={`Leave ${externalName} for later`}
+        onClick={() => setDecision(row.externalId, {
+          outcome: 'defer',
+          ...(row.decision?.excludeIndividualId === undefined ? {} : { excludeIndividualId: row.decision.excludeIndividualId }),
+        })}
+        className="block rounded text-xs text-gray-600 underline underline-offset-2 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:text-gray-300"
+      >Leave for later</button>}
+      </div>
     );
   };
 

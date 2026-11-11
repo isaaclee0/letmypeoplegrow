@@ -236,6 +236,8 @@ function normalizePerson(raw, memberships = {}) {
     state: deriveElvantoState(raw),
     child: deriveChildState(raw),
     familyId: trimmedOrNull(raw.family_id),
+    householdIds: Object.hasOwn(raw, 'family_id') && raw.family_id !== undefined
+      ? (trimmedOrNull(raw.family_id) ? [trimmedOrNull(raw.family_id)] : []) : null,
     familyRelationship: trimmedOrNull(raw.family_relationship),
     categoryId: categoryIdOf(raw),
     modifiedAt: trimmedOrNull(raw.date_modified),

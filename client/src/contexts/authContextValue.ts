@@ -15,8 +15,8 @@ export interface AuthContextType {
   login: (token: string, userData: User) => Promise<void>;
   logout: () => void;
   updateUser: (userData: Partial<User>) => void;
-  refreshOnboardingStatus: () => Promise<void>;
-  refreshUserData: () => Promise<void>;
+  refreshOnboardingStatus: (throwOnError?: boolean) => Promise<void>;
+  refreshUserData: (throwOnError?: boolean) => Promise<void>;
   refreshTokenAndUserData: () => Promise<boolean>;
   switchChurch: (targetChurchId: string) => Promise<void>;
 }

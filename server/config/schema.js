@@ -162,6 +162,68 @@ CREATE TABLE IF NOT EXISTS people_sync_match_holds (
 CREATE INDEX IF NOT EXISTS idx_people_sync_match_holds_lookup
   ON people_sync_match_holds(church_id, provider, external_person_id);
 
+-- A reviewer chose "keep LMPG as it is" for a household or attendance-list
+-- difference. The planner hides that difference while its fingerprint (the
+-- facts on both sides when it was kept) still matches; any change on either
+-- side brings it back for review. Provider-wide, like holds/exclusions.
+CREATE TABLE IF NOT EXISTS people_sync_reconciliation_keeps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  kind TEXT NOT NULL CHECK(kind IN ('household', 'gathering_removal')),
+  subject_key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, kind, subject_key),
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_reconciliation_keeps_lookup
+  ON people_sync_reconciliation_keeps(church_id, provider);
+
+-- Reviewed household preferences are provider-wide and bound to an established
+-- local person. They never replace or modify the provider's own memberships.
+CREATE TABLE IF NOT EXISTS people_sync_household_preferences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  external_person_id TEXT NOT NULL,
+  individual_id INTEGER NOT NULL,
+  household_id TEXT NOT NULL,
+  display_name TEXT,
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, external_person_id),
+  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_household_preferences_lookup
+  ON people_sync_household_preferences(church_id, provider);
+
+-- LMPG placement decisions do not select or claim a provider household.
+-- Retain a deleted family's ID so the next review can flag the missing target
+-- instead of silently turning a remembered household into "no family".
+CREATE TABLE IF NOT EXISTS people_sync_local_households (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  external_person_id TEXT NOT NULL,
+  individual_id INTEGER NOT NULL,
+  family_id INTEGER,
+  group_id TEXT NOT NULL,
+  source_fingerprint TEXT,
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, external_person_id),
+  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_local_households_lookup
+  ON people_sync_local_households(church_id, provider);
+
 CREATE TABLE IF NOT EXISTS people_sync_review_applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   church_id TEXT NOT NULL,
@@ -310,6 +372,24 @@ CREATE INDEX IF NOT EXISTS idx_people_sync_runs_church ON people_sync_runs(churc
 CREATE INDEX IF NOT EXISTS idx_people_sync_runs_lookup ON people_sync_runs(church_id, provider, batch_id, started_at);
 `;
 
+const ONBOARDING_PROGRESS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS onboarding_progress (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE,
+  current_step INTEGER DEFAULT 1,
+  church_info TEXT,
+  gatherings TEXT,
+  csv_upload TEXT,
+  completed_steps TEXT,
+  guided_state TEXT,
+  church_id TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_onboard_user ON onboarding_progress(user_id);
+`;
+
 const CHURCH_SCHEMA = `
 CREATE TABLE IF NOT EXISTS migrations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,6 +464,7 @@ CREATE TABLE IF NOT EXISTS church_settings (
   email_from_address TEXT DEFAULT 'noreply@letmypeoplegrow.com.au',
   brevo_api_key TEXT,
   onboarding_completed INTEGER DEFAULT 0,
+  onboarding_version INTEGER NOT NULL DEFAULT 0,
   has_sample_data INTEGER DEFAULT 0,
   default_badge_text TEXT,
   default_child_badge_text TEXT,
@@ -759,20 +840,7 @@ CREATE INDEX IF NOT EXISTS idx_kiosk_gathering_date ON kiosk_checkins(gathering_
 CREATE INDEX IF NOT EXISTS idx_kiosk_individual ON kiosk_checkins(individual_id);
 CREATE INDEX IF NOT EXISTS idx_kiosk_church ON kiosk_checkins(church_id);
 
-CREATE TABLE IF NOT EXISTS onboarding_progress (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL UNIQUE,
-  current_step INTEGER DEFAULT 1,
-  church_info TEXT,
-  gatherings TEXT,
-  csv_upload TEXT,
-  completed_steps TEXT,
-  church_id TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_onboard_user ON onboarding_progress(user_id);
+${ONBOARDING_PROGRESS_SCHEMA}
 
 CREATE TABLE IF NOT EXISTS visitor_config (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -904,6 +972,7 @@ const UPDATED_AT_TRIGGERS = UPDATED_AT_TRIGGER_DEFINITIONS
 module.exports = {
   REGISTRY_SCHEMA,
   CHURCH_SCHEMA,
+  ONBOARDING_PROGRESS_SCHEMA,
   PROVIDER_NEUTRAL_SYNC_SCHEMA,
   peopleSyncRunsTableSql,
   UPDATED_AT_TRIGGERS,

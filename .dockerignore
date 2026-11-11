@@ -50,6 +50,8 @@
 **/data/**
 **/backups
 **/backups/**
+**/*.local.json
+server/scripts/rehearse-sync-reconciliation.cjs
 **/sqldumps
 **/sqldumps/**
 **/migration.sql

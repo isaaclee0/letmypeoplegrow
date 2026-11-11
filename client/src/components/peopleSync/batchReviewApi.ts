@@ -6,6 +6,7 @@ import {
 import { tagLegacyPeopleReview } from './types';
 import type {
   EstablishedLinkCorrection,
+  HouseholdChoiceEdits,
   PeopleReviewToken,
   PeopleSyncApplyResult,
   PeopleSyncBatch,
@@ -21,20 +22,26 @@ export interface BatchReviewAdapter {
   provider: SyncProvider;
   returnTo: string;
   listBatches: () => Promise<PeopleSyncBatch[]>;
-  loadReview: (batch: PeopleSyncBatch) => Promise<PeopleSyncOperationReview>;
+  loadReview: (batch: PeopleSyncBatch | null) => Promise<PeopleSyncOperationReview>;
   previewCorrections: (
-    batch: PeopleSyncBatch,
+    batch: PeopleSyncBatch | null,
     baseReviewToken: PeopleReviewToken<'people_sync'>,
     linkCorrections: Record<string, EstablishedLinkCorrection>,
   ) => Promise<PeopleSyncOperationCorrectionPreview>;
+  previewHouseholdChoices?: (
+    batch: PeopleSyncBatch | null,
+    baseReviewToken: PeopleReviewToken<'people_sync'>,
+    householdChoices: HouseholdChoiceEdits,
+  ) => Promise<PeopleSyncOperationCorrectionPreview>;
   applyReview: (
-    batch: PeopleSyncBatch,
+    batch: PeopleSyncBatch | null,
     reviewToken: PeopleReviewToken<'people_sync'>,
     selections: PeopleSyncSelections,
   ) => Promise<PeopleSyncApplyResult>;
 }
 
-function assertBatchReviewable(batch: PeopleSyncBatch, provider: SyncProvider): void {
+function assertBatchReviewable(batch: PeopleSyncBatch | null, provider: SyncProvider): asserts batch is PeopleSyncBatch {
+  if (!batch) throw new Error('This provider requires a sync batch.');
   if (batch.provider !== provider) throw new Error('This sync batch belongs to a different provider.');
   if (batch.reviewable) return;
   if (batch.operationalState === 'prepared') throw new Error(PEOPLE_SYNC_BATCH_PREPARED_MESSAGE);
@@ -46,6 +53,26 @@ function responseBody<T extends object>(data: T & { success?: boolean }): T {
   return body as T;
 }
 
+function assertIntegrationSources(review: Pick<PeopleSyncOperationReview, 'plan'>): void {
+  const lists = review.plan.sourceContext?.reviewedLists;
+  const validSource = (source: unknown): boolean => {
+    if (!source || typeof source !== 'object') return false;
+    const value = source as Record<string, unknown>;
+    return value.kind === 'planning_center_list'
+      && typeof value.externalId === 'string' && value.externalId.trim().length > 0
+      && typeof value.name === 'string' && value.name.trim().length > 0;
+  };
+  if (!Array.isArray(lists) || lists.length === 0
+    || new Set(lists.map((list) => list?.batchId)).size !== lists.length
+    || !lists.every((list) => list && Number.isSafeInteger(list.batchId) && list.batchId > 0
+      && typeof list.name === 'string' && list.name.trim().length > 0
+      && (list.gatheringTypeId === null || (Number.isSafeInteger(list.gatheringTypeId) && list.gatheringTypeId > 0))
+      && typeof list.isDraft === 'boolean' && validSource(list.selectedSource)
+      && (list.activeSource === null || validSource(list.activeSource)))) {
+    throw new Error('The reviewed list scope is missing or invalid. Refresh this review.');
+  }
+}
+
 const planningCenterAdapter: BatchReviewAdapter = {
   provider: 'planning_center',
   returnTo: '/app/settings?tab=integrations&integration=planning-center',
@@ -54,21 +81,32 @@ const planningCenterAdapter: BatchReviewAdapter = {
     return response.data.batches;
   },
   async loadReview(batch) {
-    assertBatchReviewable(batch, 'planning_center');
-    const response = await integrationsAPI.getPlanningCenterBatchPlan(batch.id);
-    return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
+    if (batch) assertBatchReviewable(batch, 'planning_center');
+    const response = await (batch ? integrationsAPI.getPlanningCenterBatchPlan(batch.id) : integrationsAPI.getPlanningCenterSyncPlan());
+    const review = tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
+    if (!batch) assertIntegrationSources(review);
+    return review;
   },
   async previewCorrections(batch, baseReviewToken, linkCorrections) {
-    assertBatchReviewable(batch, 'planning_center');
-    const response = await integrationsAPI.previewPlanningCenterLinkCorrections(batch.id, {
-      baseReviewToken,
-      linkCorrections,
-    });
-    return tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
+    if (batch) assertBatchReviewable(batch, 'planning_center');
+    const body = { baseReviewToken, linkCorrections };
+    const response = await (batch ? integrationsAPI.previewPlanningCenterLinkCorrections(batch.id, body) : integrationsAPI.previewPlanningCenterSyncLinkCorrections(body));
+    const review = tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
+    if (!batch) assertIntegrationSources(review);
+    return review;
+  },
+  async previewHouseholdChoices(batch, baseReviewToken, householdChoices) {
+    if (batch) assertBatchReviewable(batch, 'planning_center');
+    const body = { baseReviewToken, householdChoices };
+    const response = await (batch ? integrationsAPI.previewPlanningCenterHouseholdChoices(batch.id, body) : integrationsAPI.previewPlanningCenterSyncHouseholdChoices(body));
+    const review = tagLegacyPeopleReview(responseBody(response.data), 'people_sync');
+    if (!batch) assertIntegrationSources(review);
+    return review;
   },
   async applyReview(batch, reviewToken, selections) {
-    assertBatchReviewable(batch, 'planning_center');
-    const response = await integrationsAPI.applyPlanningCenterBatch(batch.id, { reviewToken, selections });
+    if (batch) assertBatchReviewable(batch, 'planning_center');
+    const body = { reviewToken, selections };
+    const response = await (batch ? integrationsAPI.applyPlanningCenterBatch(batch.id, body) : integrationsAPI.applyPlanningCenterSync(body));
     return responseBody<PeopleSyncApplyResult>(response.data);
   },
 };

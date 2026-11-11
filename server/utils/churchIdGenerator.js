@@ -1,69 +1,39 @@
 const Database = require('../config/database');
 const crypto = require('crypto');
 
-const generateSecureChurchId = async (churchName) => {
+const churchIdCandidate = (churchName, randomBytes) => {
   const baseId = churchName.toLowerCase()
     .replace(/[^a-z0-9]/g, '')
     .substring(0, 3) || 'chr';
-  const randomSuffix = crypto.randomBytes(6).toString('hex');
-  const secureId = `${baseId}_${randomSuffix}`;
-
-  const existing = Database.listChurches().find(c => c.church_id === secureId);
-  if (existing) {
-    return generateSecureChurchId(churchName);
-  }
-  return secureId;
+  return `${baseId.padEnd(3, 'x')}_${crypto.randomBytes(randomBytes).toString('hex')}`;
 };
 
-const generateSimpleChurchId = async (churchName) => {
-  const baseId = churchName.toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
-    .substring(0, 3) || 'chr';
-  const randomSuffix = crypto.randomBytes(3).toString('hex');
-  const developmentId = `${baseId}_${randomSuffix}`;
-
-  const existing = Database.listChurches().find(c => c.church_id === developmentId);
-  if (existing) {
-    return generateSimpleChurchId(churchName);
-  }
-  return developmentId;
+const generateUnusedChurchId = (churchName, randomBytes) => {
+  const churchIds = new Set(Database.listChurches().map(church => church.church_id));
+  let candidate;
+  do {
+    candidate = churchIdCandidate(churchName, randomBytes);
+  } while (churchIds.has(candidate));
+  return candidate;
 };
 
-const getOrCreateChurchId = async (churchName) => {
-  try {
-    const churches = Database.listChurches();
-    const existing = churches.find(c => c.church_name === churchName);
-    if (existing) {
-      return existing.church_id;
-    }
+const generateSecureChurchId = async (churchName) => generateUnusedChurchId(churchName, 6);
+const generateSimpleChurchId = async (churchName) => generateUnusedChurchId(churchName, 3);
 
-    let newChurchId;
-    if (process.env.NODE_ENV === 'production') {
-      newChurchId = await generateSecureChurchId(churchName);
-    } else {
-      newChurchId = await generateSimpleChurchId(churchName);
-    }
-
-    Database.ensureChurch(newChurchId, churchName);
-
-    await Database.setChurchContext(newChurchId, async () => {
-      try {
-        await Database.query(
-          `INSERT INTO church_settings (church_id, church_name, country_code, timezone, onboarding_completed)
-           VALUES (?, ?, 'AU', 'Australia/Sydney', 0)`,
-          [newChurchId, churchName]
-        );
-        console.log(`✅ Created church_settings for "${churchName}" with ID: ${newChurchId}`);
-      } catch (insertError) {
-        console.warn(`⚠️ Could not create church_settings for ${newChurchId}:`, insertError.message);
-      }
-    });
-
-    return newChurchId;
-  } catch (error) {
-    console.error('Error getting or creating church ID:', error);
-    throw error;
-  }
+// Claim a new pending registry row. A name match is never proof of membership,
+// and an ID collision must be retried before opening any church database.
+const reserveNewChurchId = (churchName) => {
+  const registry = Database.getRegistryDb();
+  const insert = registry.prepare(`
+    INSERT INTO churches (church_id, church_name) VALUES (?, ?)
+    ON CONFLICT(church_id) DO NOTHING
+  `);
+  const randomBytes = process.env.NODE_ENV === 'production' ? 6 : 3;
+  let candidate;
+  do {
+    candidate = churchIdCandidate(churchName, randomBytes);
+  } while (!insert.run(candidate, churchName).changes);
+  return candidate;
 };
 
 const isValidChurchId = (churchId) => {
@@ -86,7 +56,7 @@ const sanitizeChurchIdForLogging = (churchId) => {
 module.exports = {
   generateSecureChurchId,
   generateSimpleChurchId,
-  getOrCreateChurchId,
+  reserveNewChurchId,
   isValidChurchId,
   sanitizeChurchIdForLogging
 };

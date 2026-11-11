@@ -881,6 +881,17 @@ function computePcoRedirectUri(req) {
   return `${proto}://${host}/api/integrations/planning-center/callback`;
 }
 
+function pcoReturnUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith('/app/') || /[\\\x00-\x1f\x7f]/.test(value)) return null;
+  const url = new URL(value, 'https://app.invalid');
+  return url.pathname.startsWith('/app/') ? url : null;
+}
+
+function redirectPcoResult(res, url, result) {
+  url.searchParams.set('pco', result);
+  return res.redirect(`${url.pathname}${url.search}${url.hash}`);
+}
+
 // Initiate OAuth flow
 router.get('/planning-center/authorize', (req, res) => {
   const clientId = pcoEnv('CLIENT_ID');
@@ -901,8 +912,7 @@ router.get('/planning-center/authorize', (req, res) => {
 
   // Optional post-OAuth redirect target. Only app-relative '/app/...' paths are
   // allowed (prevents open redirect). Falls back to Settings when absent/invalid.
-  const rawReturnTo = typeof req.query.returnTo === 'string' ? req.query.returnTo : '';
-  const returnTo = /^\/app\//.test(rawReturnTo) ? rawReturnTo : '';
+  const returnTo = pcoReturnUrl(req.query.returnTo) ? req.query.returnTo : '';
 
   // Generate state parameter for security (optional but recommended).
   // Carry the exact redirect_uri so the callback's token exchange uses an
@@ -929,12 +939,10 @@ router.get('/planning-center/authorize', (req, res) => {
 
 // OAuth callback
 router.get('/planning-center/callback', async (req, res) => {
+  let returnUrl;
   try {
-    const { code, state } = req.query;
-
-    if (!code) {
-      return res.status(400).send('Authorization code missing');
-    }
+    const { code, state, error: providerError } = req.query;
+    const hasCode = typeof code === 'string' && code.length > 0;
 
     // Decode state — only for returnTo/redirectUri (both are pure UX/protocol
     // concerns, not security-sensitive). `state` is opaque, unsigned, and
@@ -942,13 +950,21 @@ router.get('/planning-center/callback', async (req, res) => {
     // "which user/church" — that comes from req.user (the verified JWT
     // identity) below instead. Still validated for well-formedness so a
     // malformed/tampered value fails closed rather than silently proceeding.
-    let returnTo, stateRedirectUri;
+    let stateRedirectUri;
     try {
       const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-      returnTo = stateData.returnTo; // may be undefined for older flows
+      returnUrl = pcoReturnUrl(stateData.returnTo);
       stateRedirectUri = stateData.redirectUri; // may be undefined for older flows
     } catch (e) {
-      return res.status(400).send('Invalid state parameter');
+      return res.status(400).send(hasCode ? 'Invalid state parameter' : 'Authorization code missing');
+    }
+
+    if (!hasCode || providerError) {
+      if (returnUrl) {
+        const outcome = providerError && providerError !== 'access_denied' ? 'error' : 'cancelled';
+        return redirectPcoResult(res, returnUrl, outcome);
+      }
+      return res.status(400).send('Authorization code missing');
     }
 
     // Must match the redirect_uri sent during /authorize. Prefer the value
@@ -985,6 +1001,7 @@ router.get('/planning-center/callback', async (req, res) => {
         clientSecretHasWhitespace: clientSecret ? /\s/.test(clientSecret) : false,
         redirectUri,
       });
+      if (returnUrl) return redirectPcoResult(res, returnUrl, 'error');
       return res.status(500).send('Failed to obtain access token');
     }
 
@@ -1026,15 +1043,11 @@ router.get('/planning-center/callback', async (req, res) => {
       metadata: { accountName },
     });
 
-    // Re-validate returnTo on the way out (defense in depth).
-    if (returnTo && /^\/app\//.test(returnTo)) {
-      const sep = returnTo.includes('?') ? '&' : '?';
-      res.redirect(`${returnTo}${sep}pco=connected`);
-    } else {
-      res.redirect('/app/settings?tab=integrations&pco_success=true');
-    }
+    if (returnUrl) return redirectPcoResult(res, returnUrl, 'connected');
+    return res.redirect('/app/settings?tab=integrations&pco_success=true');
   } catch (error) {
     console.error('Planning Center OAuth callback error:', error);
+    if (returnUrl) return redirectPcoResult(res, returnUrl, 'error');
     res.status(500).send('OAuth callback failed');
   }
 });

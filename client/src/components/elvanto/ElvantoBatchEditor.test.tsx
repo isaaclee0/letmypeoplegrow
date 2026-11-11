@@ -38,10 +38,9 @@ describe('ElvantoBatchEditor source drafts', () => {
   beforeEach(() => vi.clearAllMocks());
   it('saves an onboarding Category-to-gathering mapping with weekly sync', async () => {
     vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch } } as never);
-    render(<ElvantoBatchEditor batch={null} gatherings={[{ id: 5, name: 'Youth' }]} defaultScheduleEnabled defaultGatheringAutoRemoveEnabled createLabel="Save mapping" onSaved={vi.fn()} onCancel={vi.fn()} />);
+    render(<ElvantoBatchEditor batch={null} gatherings={[{ id: 5, name: 'Youth' }]} defaultGatheringId={5} defaultScheduleEnabled defaultGatheringAutoRemoveEnabled createLabel="Save mapping" onSaved={vi.fn()} onCancel={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'category-1' } });
-    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
-    fireEvent.change(screen.getByLabelText('Existing gathering'), { target: { value: '5' } });
+    expect(screen.getByLabelText('Existing gathering')).toHaveValue('5');
     fireEvent.click(screen.getByRole('button', { name: 'Save mapping' }));
     await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ sourceExternalId: 'category-1', gatheringTypeId: 5, gatheringAutoRemoveEnabled: true, scheduleEnabled: true })));
   });

@@ -173,7 +173,7 @@ function makeCredentialBoundBackgroundHarness(churchId, { pauseStoredFetch = fal
   };
 }
 
-function mockPcoTokenExchange(t) {
+function mockPcoTokenExchange(t, statusCode = 200) {
   t.mock.method(https, 'request', (_options, callback) => {
     const request = new EventEmitter();
     request.setTimeout = () => {};
@@ -181,15 +181,15 @@ function mockPcoTokenExchange(t) {
     request.destroy = (error) => request.emit('error', error);
     request.end = () => {
       const response = new EventEmitter();
-      response.statusCode = 200;
+      response.statusCode = statusCode;
       response.headers = { 'content-type': 'application/json' };
       callback(response);
       queueMicrotask(() => {
-        response.emit('data', JSON.stringify({
+        response.emit('data', JSON.stringify(statusCode === 200 ? {
           access_token: 'replacement-access-token',
           refresh_token: 'replacement-refresh-token',
           expires_in: 7200,
-        }));
+        } : { error: 'invalid_grant' }));
         response.emit('end');
       });
     };
@@ -385,6 +385,46 @@ test('PCO status preserves typed transient credential-refresh failures without r
   }
 });
 
+test('a declined OAuth consent returns to onboarding without exchanging a code', async (t) => {
+  const request = t.mock.method(https, 'request', () => { throw new Error('Unexpected provider request'); });
+  await withRouteChurchDb(async ({ app }) => {
+    const state = Buffer.from(JSON.stringify({ returnTo: '/app/onboarding?step=people#connect' })).toString('base64');
+    const query = new URLSearchParams({ error: 'access_denied', state });
+    const response = await app.request(`/api/integrations/planning-center/callback?${query}`, { redirect: 'manual' });
+    assert.equal(response.status, 302);
+    assert.equal(response.location, '/app/onboarding?step=people&pco=cancelled#connect');
+    assert.equal(request.mock.callCount(), 0);
+  });
+});
+
+test('an OAuth token exchange error redirects only to a valid app return path', async (t) => {
+  mockPcoTokenExchange(t, 400);
+  await withRouteChurchDb(async ({ app }) => {
+    for (const [returnTo, status, location] of [
+      ['/app/onboarding', 302, '/app/onboarding?pco=error'],
+      ['/app/../outside', 500, null],
+      ['//example.com/app/onboarding', 500, null],
+      [undefined, 500, null],
+    ]) {
+      const state = Buffer.from(JSON.stringify({ returnTo })).toString('base64');
+      const query = new URLSearchParams({ code: 'expired-code', state });
+      const response = await app.request(`/api/integrations/planning-center/callback?${query}`, { redirect: 'manual' });
+      assert.equal(response.status, status);
+      assert.equal(response.location, location);
+      if (!location) assert.equal(response.body, 'Failed to obtain access token');
+    }
+  });
+});
+
+test('an OAuth callback with no code and no return target keeps the legacy error', async () => {
+  await withRouteChurchDb(async ({ app }) => {
+    const response = await app.request('/api/integrations/planning-center/callback?error=access_denied', { redirect: 'manual' });
+    assert.equal(response.status, 400);
+    assert.equal(response.body, 'Authorization code missing');
+    assert.equal(response.location, null);
+  });
+});
+
 test('successful OAuth credential replacement invalidates the church background-check snapshot', async (t) => {
   const previousClientId = process.env.PLANNING_CENTER_CLIENT_ID;
   const previousClientSecret = process.env.PLANNING_CENTER_CLIENT_SECRET;
@@ -403,6 +443,7 @@ test('successful OAuth credential replacement invalidates the church background-
 
         const state = Buffer.from(JSON.stringify({
           redirectUri: 'http://localhost/api/integrations/planning-center/callback',
+          returnTo: '/app/onboarding?step=people#connect',
         })).toString('base64');
         await withPcoStatusStubs({
           validatePlanningCenterToken: async () => ({
@@ -415,7 +456,7 @@ test('successful OAuth credential replacement invalidates the church background-
             { redirect: 'manual' }
           );
           assert.equal(response.status, 302);
-          assert.match(response.location, /pco_success=true/);
+          assert.equal(response.location, '/app/onboarding?step=people&pco=connected#connect');
         });
 
         await backgroundRefresh.refresh();

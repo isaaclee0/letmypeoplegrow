@@ -2449,3 +2449,219 @@ test('cancellation during an awaited missing-health write prevents health and no
   assert.equal(committedHealth, 0);
   assert.equal(notifications, 0);
 });
+
+test('reconciliation protects legacy roster rows when another enabled gathering source is awaiting its first review', async () => {
+  const { deps } = makeDeps({
+    batches: [batch({ gatheringTypeId: 100 }), batch({ id: 2, gatheringTypeId: 100, source: null, draftSource: source('draft'), initialSourceReviewPending: true })],
+    localIndividuals: [localPerson(1, 'Bruce', 'Smith')], personLinks: [personLink('bruce', 1)],
+    gatheringMemberships: [{ gatheringTypeId: 100, individualId: 1, addedBySyncBatchId: null }],
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), { people: [] }),
+  });
+  const result = await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  assert.deepEqual(result.plan.removeFromGathering, []);
+});
+
+test('a raw member of a gathering source stays on its unowned roster even if lifecycle filtering excludes them', async () => {
+  const { deps } = makeDeps({
+    batches: [batch({ gatheringTypeId: 100 })],
+    localIndividuals: [localPerson(1, 'Bruce', 'Smith')], personLinks: [personLink('bruce', 1)],
+    gatheringMemberships: [{ gatheringTypeId: 100, individualId: 1 }],
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), { people: [person('bruce', { state: 'contact' })] }),
+    extra: { getSyncSettings: async () => ({ includeContacts: false }) },
+  });
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  assert.deepEqual(review.plan.removeFromGathering, []);
+});
+
+test('legacy removal identifies every source actually read, including a batch draft, in batch ID order', async () => {
+  const { deps } = makeDeps({
+    batches: [
+      batch({ id: 12, gatheringTypeId: 100, source: source('other', 'Other group') }),
+      batch({ id: 3, gatheringTypeId: 100, source: source('old', 'Former group'), draftSource: source('new', 'New group'), draftSourceBaseRevision: 2 }),
+    ],
+    localIndividuals: [localPerson(1, 'Bruce', 'Smith')], personLinks: [personLink('bruce', 1)],
+    gatheringMemberships: [{ gatheringTypeId: 100, individualId: 1 }],
+    fetchSourceSnapshot: async ({ sourceExternalId }) => sourceSnapshot(source(sourceExternalId, sourceExternalId === 'new' ? 'New group' : 'Other group'), { people: [] }),
+  });
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 3, trigger: 'manual' }, deps);
+  const [removal] = review.plan.removeFromGathering;
+  assert.deepEqual(removal.sourceIdentities, [
+    { batchId: 3, kind: 'elvanto_group', externalId: 'new' },
+    { batchId: 12, kind: 'elvanto_group', externalId: 'other' },
+  ]);
+  assert.deepEqual(removal.sourceNames, ['New group', 'Other group']);
+});
+
+test('unattended legacy reconciliation stays unselected and marks the run as needing review', async () => {
+  const notified = [];
+  const { deps, applied } = makeDeps({
+    batches: [batch({ gatheringTypeId: 100 })],
+    localIndividuals: [localPerson(1, 'Bruce', 'Smith')], personLinks: [personLink('bruce', 1)],
+    gatheringMemberships: [{ gatheringTypeId: 100, individualId: 1, addedBySyncBatchId: null }],
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), { people: [] }),
+    extra: { notifyReviewRequired: async (input) => { notified.push(input); } },
+  });
+  const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+  assert.equal(result.status, 'review_required');
+  assert.deepEqual(applied[0].selections.acceptGatheringRemovalIds || [], []);
+  assert.equal(notified[0].counts.gatheringRemovals, 1);
+});
+
+test('reconciliation merges household context across sources and blocks contradictory member household evidence', async () => {
+  const { deps } = makeDeps({
+    batches: [batch(), batch({ id: 2, source: source('group-2') })],
+    localIndividuals: [localPerson(1, 'Bruce', 'Smith', { familyId: 10 }), localPerson(2, 'Bronwyn', 'Smith', { familyId: 20 })],
+    localFamilies: [{ id: 10, familyName: 'First' }, { id: 20, familyName: 'Second' }],
+    personLinks: [personLink('bruce', 1), personLink('bronwyn', 2)],
+    fetchSourceSnapshot: async ({ sourceExternalId }) => {
+      const first = sourceExternalId === 'group-1';
+      const people = first ? [person('bruce', { familyId: 'hh', householdIds: ['hh'] })]
+        : [person('bruce', { familyId: 'other', householdIds: ['other'] }), person('bronwyn', { familyId: 'hh', householdIds: ['hh'] })];
+      return sourceSnapshot(source(sourceExternalId), { people, families: [{ id: 'hh', memberExternalIds: first ? ['bruce'] : ['bronwyn'] }] });
+    },
+  });
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  assert.equal(review.plan.familyConflicts.length, 1);
+  assert.deepEqual(review.plan.familyConflicts[0].memberExternalIds, ['bronwyn', 'bruce']);
+  assert.equal(review.plan.familyConflicts[0].resolution, undefined);
+});
+
+for (const reversed of [false, true]) {
+  test(`PCO overlapping lists preserve main-record household details when related people omit them (reversed=${reversed})`, async () => {
+    const { createPcoAdapter } = require('./pcoAdapter');
+    const { fetchPlanningCenterSourceSnapshot } = require('../planningCenter/sourceAdapter');
+    const pcoSource = (id) => ({ kind: 'planning_center_list', externalId: id, name: id });
+    const adapter = createPcoAdapter({
+      withPlanningCenterSourceToken: async (_churchId, operation) => operation('offline-fixture'),
+      fetchAllSnapshot: async () => sourceSnapshot({ kind: 'all', externalId: 'all', name: 'Everyone' }, { provider: 'planning_center', people: [], memberExternalIds: [] }),
+      fetchSourceSnapshot: (options) => fetchPlanningCenterSourceSnapshot({ ...options, request: async ({ url }) => {
+        const listId = new URL(url).pathname.split('/')[4];
+        if (!url.includes('/people?')) return { status: 200, data: { data: { type: 'List', id: listId, attributes: { name: listId } } } };
+        const memberId = (listId === 'first') !== reversed ? 'bruce' : 'bronwyn';
+        const contextId = memberId === 'bruce' ? 'bronwyn' : 'bruce';
+        const rawPerson = (id) => ({ type: 'Person', id, attributes: { first_name: id, last_name: 'Smith', status: 'active' } });
+        return { status: 200, data: {
+          data: [{ ...rawPerson(memberId), relationships: { households: { data: [{ type: 'Household', id: 'hh' }] } } }],
+          included: [
+            { type: 'Household', id: 'hh', attributes: { name: 'Smith household' },
+              relationships: { people: { data: [{ type: 'Person', id: 'bruce' }, { type: 'Person', id: 'bronwyn' }] } } },
+            rawPerson(contextId),
+          ],
+          links: { next: null },
+        } };
+      } }),
+    });
+    const { deps, plans } = makeDeps({
+      batches: [batch({ provider: 'planning_center', source: pcoSource('first') }), batch({ id: 2, provider: 'planning_center', source: pcoSource('second') })],
+      authorityState: { active: 'planning_center', pending: null },
+      localIndividuals: [localPerson(1, 'Bruce', 'Smith', { familyId: 10 }), localPerson(2, 'Bronwyn', 'Smith', { familyId: 20 })],
+      localFamilies: [{ id: 10, familyName: 'First' }, { id: 20, familyName: 'Second' }],
+      personLinks: [personLink('bruce', 1), personLink('bronwyn', 2)],
+      extra: { getProvider: () => adapter },
+    });
+    const review = await buildReview({ churchId: 'church-a', provider: 'planning_center', batchId: 1, trigger: 'manual' }, deps);
+    assert.equal(review.plan.familyConflicts.length, 1);
+    assert.equal(review.plan.familyConflicts[0].reason, 'multiple_local_families');
+    assert.equal(review.plan.familyConflicts[0].resolution.kind, 'household');
+    assert.deepEqual(review.plan.familyConflicts[0].resolution.moves.map(({ individualId }) => individualId).sort(), [1, 2]);
+    assert.ok(plans[0].externalPeople.every((p) => p.familyId === 'hh' && p.householdIds?.[0] === 'hh'));
+  });
+}
+
+for (const { name, observations, expected } of [
+  { name: 'unknown before known', observations: [null, ['hh']], expected: ['hh'] },
+  { name: 'unknown after known', observations: [['hh'], null], expected: ['hh'] },
+  { name: 'explicitly empty after unknown', observations: [null, []], expected: [] },
+  { name: 'only unknown', observations: [null, null], expected: null },
+  { name: 'different known households separated by unknown', observations: [['hh'], null, ['other']], expected: null },
+  { name: 'explicitly empty conflicts with membership', observations: [[], null, ['hh']], expected: null },
+  { name: 'multiple households are retained', observations: [null, ['other', 'hh'], ['hh', 'other']], expected: ['hh', 'other'] },
+]) {
+  test(`source merging preserves household evidence: ${name}`, async () => {
+    const { deps, plans } = makeDeps({
+      batches: observations.map((_, index) => batch({ id: index + 1, source: source(`group-${index + 1}`) })),
+      fetchSourceSnapshot: async ({ sourceExternalId }) => {
+        const ids = observations[Number(sourceExternalId.split('-')[1]) - 1];
+        return sourceSnapshot(source(sourceExternalId), { people: [person('member', { householdIds: ids, familyId: ids?.[0] ?? null })] });
+      },
+    });
+    await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+    for (const people of [plans[0].externalPeople, plans[0].householdPeople]) {
+      const member = people.find((p) => p.id === 'member');
+      assert.deepEqual(member.householdIds, expected);
+      if (expected?.length === 1) assert.equal(member.familyId, 'hh');
+    }
+  });
+}
+
+test('offline PCO source reader and adapter preserve household evidence through signed review planning', async () => {
+  const { createPcoAdapter } = require('./pcoAdapter');
+  const { fetchPlanningCenterSourceSnapshot } = require('../planningCenter/sourceAdapter');
+  const pcoSource = { kind: 'planning_center_list', externalId: 'list', name: 'Members' };
+  const digests = [];
+  for (const householdData of [[{ id: 'hh', type: 'Household' }], undefined, [{ id: 'hh' }, { id: 'other' }]]) {
+    const adapter = createPcoAdapter({
+      withPlanningCenterSourceToken: async (_churchId, operation) => operation('offline-fixture'),
+      fetchAllSnapshot: async () => sourceSnapshot({ kind: 'all', externalId: 'all', name: 'Everyone' }, { provider: 'planning_center', people: [], memberExternalIds: [] }),
+      fetchSourceSnapshot: (options) => fetchPlanningCenterSourceSnapshot({ ...options, request: async ({ url }) => ({
+        status: 200,
+        data: url.endsWith('/lists/list') ? { data: { type: 'List', id: 'list', attributes: { name: 'Members' } } } : {
+          data: [
+            { type: 'Person', id: 'bruce', attributes: { first_name: 'Bruce', last_name: 'Smith', status: 'active' },
+              relationships: householdData === undefined ? {} : { households: { data: householdData } } },
+            { type: 'Person', id: 'bronwyn', attributes: { first_name: 'Bronwyn', last_name: 'Smith', status: 'active' },
+              relationships: { households: { data: [{ id: 'hh', type: 'Household' }] } } },
+          ],
+          included: [{ type: 'Household', id: 'hh', attributes: { name: 'Smith household' } }],
+          links: { next: null },
+        },
+      }) }),
+    });
+    const { deps } = makeDeps({
+      batches: [batch({ provider: 'planning_center', source: pcoSource })],
+      authorityState: { active: 'planning_center', pending: null },
+      localIndividuals: [localPerson(1, 'Bruce', 'Smith', { familyId: 10 }), localPerson(2, 'Bronwyn', 'Smith', { familyId: 20 })],
+      localFamilies: [{ id: 10, familyName: 'First' }, { id: 20, familyName: 'Second' }],
+      personLinks: [personLink('bruce', 1), personLink('bronwyn', 2)],
+      extra: { getProvider: () => adapter },
+    });
+    const result = await buildReview({ churchId: 'church-a', provider: 'planning_center', batchId: 1, trigger: 'manual' }, deps);
+    digests.push(result.reviewToken);
+    if (householdData?.length === 1) {
+      assert.equal(result.plan.familyConflicts[0].resolution.kind, 'household');
+      assert.deepEqual(result.plan.familyConflicts[0].resolution.moves.map(({ individualId }) => individualId), [2, 1]);
+    } else assert.ok(result.plan.familyConflicts.every((action) => !action.resolution));
+  }
+  assert.equal(new Set(digests).size, 3);
+});
+
+test('a missing source names the source and its batch, keeps its code, and never echoes provider detail', async () => {
+  const { deps, failedHealth } = makeDeps({
+    batches: [batch({ name: 'Little Squirts Attendees', source: source('list-9', 'Little Squirts Attendees') })],
+    fetchSourceSnapshot: async () => {
+      throw Object.assign(new Error('source is unavailable (status 404) https://provider.example/secret'), { code: 'SYNC_SOURCE_UNAVAILABLE' });
+    },
+  });
+  await assert.rejects(
+    buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps),
+    (error) => error.code === 'SYNC_SOURCE_UNAVAILABLE' && error.status === 502
+      && error.message.startsWith('Elvanto couldn’t find the group “Little Squirts Attendees” (used by the “Little Squirts Attendees” batch).')
+      && /isn’t allowed to see it/.test(error.message) && /disable that batch/.test(error.message)
+      && !/404|provider\.example|secret/.test(error.message)
+  );
+  assert.equal(failedHealth[0].code, 'SYNC_SOURCE_UNAVAILABLE');
+});
+
+for (const [code, expected] of [
+  ['SYNC_SOURCE_AUTH', /rejected the stored connection while reading the group “Members”.*Reconnect Elvanto/],
+  ['SYNC_SOURCE_RATE_LIMIT', /limiting requests, so the group “Members”.*couldn’t be read/],
+  ['SYNC_SOURCE_CHECK_FAILED', /didn’t return a complete copy of the group “Members”/],
+]) {
+  test(`${code} from a source read explains which source failed`, async () => {
+    const { deps } = makeDeps({ fetchSourceSnapshot: async () => { throw Object.assign(new Error('raw provider text'), { code }); } });
+    await assert.rejects(
+      buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps),
+      (error) => error.code === code && expected.test(error.message) && !/raw provider text/.test(error.message)
+    );
+  });
+}

@@ -5,6 +5,7 @@ const fs = require('fs');
 const {
   REGISTRY_SCHEMA,
   CHURCH_SCHEMA,
+  ONBOARDING_PROGRESS_SCHEMA,
   PROVIDER_NEUTRAL_SYNC_SCHEMA,
   peopleSyncRunsTableSql,
   UPDATED_AT_TRIGGER_DEFINITIONS,
@@ -319,6 +320,10 @@ function ensureCompatibleUpdatedAtTriggers(db) {
 
 function ensureProviderNeutralSyncSchema(db) {
   db.exec(PROVIDER_NEUTRAL_SYNC_SCHEMA);
+  const localHouseholdColumns = db.prepare('PRAGMA table_info(people_sync_local_households)').all();
+  if (!localHouseholdColumns.some((column) => column.name === 'source_fingerprint')) {
+    db.exec('ALTER TABLE people_sync_local_households ADD COLUMN source_fingerprint TEXT');
+  }
 
   const settingsColumns = db.prepare('PRAGMA table_info(people_sync_settings)').all();
   if (!settingsColumns.some((column) => column.name === 'sync_enabled')) {
@@ -579,6 +584,25 @@ class Database {
       const cols = db.prepare('PRAGMA table_info(church_settings)').all();
       if (!cols.some(c => c.name === 'has_sample_data')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN has_sample_data INTEGER DEFAULT 0');
+      }
+      if (!cols.some(c => c.name === 'onboarding_version')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN onboarding_version INTEGER NOT NULL DEFAULT 0');
+      }
+      const onboardingCols = db.prepare('PRAGMA table_info(onboarding_progress)').all();
+      if (!onboardingCols.length) {
+        db.exec(ONBOARDING_PROGRESS_SCHEMA);
+      } else if (!onboardingCols.some(c => c.name === 'guided_state')) {
+        db.transaction(() => {
+          db.exec('ALTER TABLE onboarding_progress ADD COLUMN guided_state TEXT');
+          db.prepare(`
+            UPDATE onboarding_progress
+            SET church_id = ?
+            WHERE church_id IS NULL AND EXISTS (
+              SELECT 1 FROM users
+              WHERE users.id = onboarding_progress.user_id AND users.church_id = ?
+            )
+          `).run(churchId, churchId);
+        })();
       }
 
       // Migrate gathering_types table

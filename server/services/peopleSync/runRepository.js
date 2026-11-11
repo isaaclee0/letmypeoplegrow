@@ -8,7 +8,7 @@ const COUNT_KEYS = new Set([
   'linkPeople', 'linkFamilies', 'addPeople', 'addFamilies', 'updateManagedFields', 'promoteToRegular',
   'demoteToLocalVisitor', 'archive', 'reactivate', 'moveFamily', 'renameFamily', 'addToGathering',
   'removeFromGathering', 'ambiguousPeople', 'familyConflicts', 'unmatchedLocalRegulars', 'skipped',
-  'familyNamesUpdated', 'gatheringAssigned', 'gatheringRemoved',
+  'familyNamesUpdated', 'householdChoices', 'gatheringAssigned', 'gatheringRemoved',
   'backgroundCheckSynced', 'backgroundCheckSyncFailed',
   'medicalNotesSynced', 'medicalNotesSyncFailed',
 ]);

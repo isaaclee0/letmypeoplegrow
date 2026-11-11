@@ -45,6 +45,9 @@ function projectPerson(p, fieldDataById) {
     // "not cleared" for someone who was simply never checked.
     passedBackgroundCheck: typeof a.passed_background_check === 'boolean' ? a.passed_background_check : null,
     householdId: (hh && hh[0] && hh[0].id) || null,
+    // Unknown, explicitly empty, and multiple memberships must stay distinct.
+    householdIds: Array.isArray(hh) && hh.every((item) => item?.id)
+      ? [...new Set(hh.map((item) => String(item.id)))].sort() : null,
     fieldValues,
   };
 }
@@ -71,6 +74,7 @@ function toNormalizedPcoPerson(pcoPerson) {
     // Absence from a List and missing status are not archival evidence.
     state: pcoPerson.status === 'inactive' ? 'archived' : pcoPerson.status === 'active' ? 'active' : 'unknown',
     familyId: pcoPerson.householdId ?? null,
+    householdIds: pcoPerson.householdIds ?? null,
     // Retains optional PCO details used by unrelated field and background
     // check features. Provider-owned List membership is resolved separately
     // by sourceAdapter.js, never from these attributes.
@@ -82,26 +86,42 @@ function toNormalizedPcoPerson(pcoPerson) {
   };
 }
 
-// Projects PCO Households (as seen via each projected person's householdId,
+// Projects PCO Households (as seen via each projected person's householdIds,
 // plus metadata collected during the source read) into the provider-neutral
 // family shape used by matching and the lean review directory. Only the
 // household name and identity/member references cross this boundary; raw
 // Household attributes remain in the discarded provider page.
-function projectPcoHouseholds(people, householdPrimaryContacts, householdNames) {
+function projectPcoHouseholds(people, householdPrimaryContacts, householdNames, householdMembers) {
   const memberIdsByHousehold = new Map();
   for (const person of people || []) {
-    if (!person || !person.householdId) continue;
-    if (!memberIdsByHousehold.has(person.householdId)) memberIdsByHousehold.set(person.householdId, []);
-    memberIdsByHousehold.get(person.householdId).push(person.id);
+    if (!person) continue;
+    // Legacy callers can provide only householdId. Explicitly unknown or empty
+    // householdIds must not acquire membership from that compatibility field.
+    const householdIds = Array.isArray(person.householdIds) ? person.householdIds
+      : person.householdIds === undefined && person.householdId ? [person.householdId] : [];
+    for (const householdId of householdIds) {
+      if (!memberIdsByHousehold.has(householdId)) memberIdsByHousehold.set(householdId, new Set());
+      memberIdsByHousehold.get(householdId).add(person.id);
+    }
   }
   const primaryContacts = householdPrimaryContacts instanceof Map ? householdPrimaryContacts : new Map();
   const names = householdNames instanceof Map ? householdNames : new Map();
-  const families = [...memberIdsByHousehold.entries()].map(([householdId, memberExternalIds]) => {
+  const displayMembers = householdMembers instanceof Map ? householdMembers : new Map();
+  // A Household resource can be a useful option even when none of the projected
+  // Person records explicitly confirms membership in it. Keep its identity.
+  const householdIds = new Set([
+    ...memberIdsByHousehold.keys(), ...primaryContacts.keys(), ...names.keys(), ...displayMembers.keys(),
+  ]);
+  const families = [...householdIds].map((householdId) => {
     const name = String(names.get(householdId) ?? '').trim();
     return {
       id: householdId,
       ...(name ? { name } : {}),
-      memberExternalIds: [...memberExternalIds].sort(),
+      memberExternalIds: [...(memberIdsByHousehold.get(householdId) || [])].sort(),
+      // Household.people is display context only, never Person membership or
+      // source eligibility evidence.
+      ...(displayMembers.has(householdId)
+        ? { householdMemberExternalIds: [...new Set(displayMembers.get(householdId))].sort() } : {}),
       primaryContactExternalId: primaryContacts.get(householdId) || null,
     };
   });

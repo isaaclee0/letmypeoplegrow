@@ -9,6 +9,8 @@ import { SmartCacheProvider } from './contexts/SmartCacheContext';
 import { CheckInsProvider } from './contexts/CheckInsContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import GuidedOnboardingPage from './pages/GuidedOnboardingPage';
+import OnboardingGate from './components/onboarding/OnboardingGate';
 import AttendancePage from './pages/AttendancePage';
 import ReportsPage from './pages/ReportsPage';
 import ManageGatheringsPage from './pages/ManageGatheringsPage';
@@ -27,6 +29,10 @@ import CheckInsPage from './pages/CheckInsPage';
 import PeopleSyncBatchReviewPage from './pages/PeopleSyncBatchReviewPage';
 import PeopleSyncAuthorityReviewPage from './pages/PeopleSyncAuthorityReviewPage';
 import PendingApprovalPage from './pages/PendingApprovalPage';
+// Dev-only prototype; the DEV guard keeps it (and its local fixture) out of production builds.
+const SyncDecisionPrototypePage = import.meta.env.DEV
+  ? React.lazy(() => import('./dev/SyncDecisionPrototypePage'))
+  : null;
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -174,11 +180,12 @@ function App() {
                   element={
                     <ProtectedRoute>
                       <WebSocketConnectionWrapper>
-                        <Layout />
+                        <OnboardingGate><Layout /></OnboardingGate>
                       </WebSocketConnectionWrapper>
                     </ProtectedRoute>
                   }
                 >
+                  <Route path="onboarding" element={<RoleProtectedRoute allowedRoles={['admin']}><GuidedOnboardingPage /></RoleProtectedRoute>} />
                   <Route index element={
                     <ProtectedRoute>
                       <DefaultAppRoute />
@@ -206,6 +213,14 @@ function App() {
                     }
                   />
                   <Route
+                    path="settings/integrations/planning-center/review"
+                    element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <PeopleSyncBatchReviewPage integrationWide />
+                      </RoleProtectedRoute>
+                    }
+                  />
+                  <Route
                     path="settings/integrations/:provider/batches/:batchId/review"
                     element={
                       <RoleProtectedRoute allowedRoles={['admin']}>
@@ -213,6 +228,18 @@ function App() {
                       </RoleProtectedRoute>
                     }
                   />
+                  {SyncDecisionPrototypePage && (
+                    <Route
+                      path="dev/sync-review"
+                      element={
+                        <RoleProtectedRoute allowedRoles={['admin']}>
+                          <React.Suspense fallback={<LoadingSpinner />}>
+                            <SyncDecisionPrototypePage />
+                          </React.Suspense>
+                        </RoleProtectedRoute>
+                      }
+                    />
+                  )}
                   <Route path="profile" element={<Navigate to="/app/settings?tab=myinfo" replace />} />
                   <Route
                     path="ai-insights"

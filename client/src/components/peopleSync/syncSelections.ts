@@ -19,6 +19,9 @@ export interface SyncSelectionState {
   visitorChoices: Record<string, VisitorChoice | null>;
   acceptedArchiveIds: Set<number>;
   acceptedFamilyRenameIds: Set<string>;
+  acceptedFamilyResolutionIds?: Set<string>;
+  acceptedGatheringRemovalIds?: Set<string>;
+  keptReconciliationIds?: Set<string>;
 }
 
 export function initializeSyncSelectionState(review: PeopleSyncReview): SyncSelectionState {
@@ -30,6 +33,8 @@ export function initializeSyncSelectionState(review: PeopleSyncReview): SyncSele
     visitorChoices: {},
     acceptedArchiveIds: new Set(),
     acceptedFamilyRenameIds: new Set(),
+    acceptedFamilyResolutionIds: new Set(),
+    acceptedGatheringRemovalIds: new Set(),
   };
 }
 
@@ -74,11 +79,18 @@ export function incompleteIdentityExternalIds(
 
 function destructiveSelections(state: SyncSelectionState): Pick<
   PeopleSyncSelections,
-  'acceptArchiveIndividualIds' | 'acceptFamilyRenameIds'
+  'acceptArchiveIndividualIds' | 'acceptFamilyRenameIds' | 'acceptFamilyResolutionIds' | 'acceptGatheringRemovalIds'
+  | 'keepReconciliationIds'
 > {
   return {
     acceptArchiveIndividualIds: [...state.acceptedArchiveIds].sort((left, right) => left - right),
     acceptFamilyRenameIds: [...state.acceptedFamilyRenameIds].sort(),
+    ...(state.acceptedFamilyResolutionIds?.size
+      ? { acceptFamilyResolutionIds: [...state.acceptedFamilyResolutionIds].sort() } : {}),
+    ...(state.acceptedGatheringRemovalIds?.size
+      ? { acceptGatheringRemovalIds: [...state.acceptedGatheringRemovalIds].sort() } : {}),
+    ...(state.keptReconciliationIds?.size
+      ? { keepReconciliationIds: [...state.keptReconciliationIds].sort() } : {}),
   };
 }
 

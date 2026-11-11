@@ -235,7 +235,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     try {
       setPlanningCenterConnecting(true);
       setPlanningCenterError(null);
-      const response = await integrationsAPI.authorizePlanningCenter();
+      const response = await integrationsAPI.authorizePlanningCenter('/app/settings?tab=integrations&integration=planning-center');
       window.location.href = response.data.authUrl;
     } catch (error: any) {
       logger.error('Failed to authorize Planning Center:', error);
@@ -297,6 +297,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   }, [peopleSyncBatchRevision, reloadAfterBatchMutation, status.connected]);
 
   const modernBatches = batches.filter((batch) => batch.legacyProviderBatchId === null);
+  const enabledBatches = modernBatches.filter((batch) => batch.enabled);
+  const canReviewIntegration = peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center'
+    && !peopleSyncSettings.pendingAuthorityProvider && !batchesLoading && !batchesError
+    && enabledBatches.length > 0 && enabledBatches.every((batch) => batch.reviewable && batch.operationalState !== 'prepared');
   const legacyBatches = batches.filter((batch) => batch.legacyProviderBatchId !== null);
 
   const peopleSourceControl = peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider !== 'planning_center' ? (
@@ -351,7 +355,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
       {!showImport && status.enabled && (
         <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div className="flex items-center space-x-4">
               <div className="shrink-0">
                 <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
@@ -373,7 +377,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 )}
               </div>
             </div>
-            <div className="flex items-center space-x-3">
+            <div className="flex flex-wrap items-center gap-3">
               {status.loading ? (
                 <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
               ) : status.connected ? (
@@ -384,8 +388,18 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </span>
                   {headerPeopleSyncControl}
                   <button
+                    type="button"
+                    onClick={handlePlanningCenterConnect}
+                    disabled={planningCenterConnecting}
+                    title="Renew Planning Center access after your permissions change."
+                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ArrowPathIcon className={`w-4 h-4 mr-2 ${planningCenterConnecting ? 'animate-spin' : ''}`} />
+                    {planningCenterConnecting ? 'Reconnecting…' : 'Reconnect Planning Center'}
+                  </button>
+                  <button
                     onClick={() => setShowPlanningCenterDisconnectModal(true)}
-                    disabled={peopleSyncStatus !== 'known'}
+                    disabled={peopleSyncStatus !== 'known' || planningCenterConnecting}
                     className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                   >
                     Disconnect
@@ -400,6 +414,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             </div>
           </div>
 
+          {planningCenterError && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{planningCenterError}</p>}
+
           {/* Connection Form - Only show when not connected */}
           {!status.connected && !status.loading && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
@@ -411,17 +427,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   ? 'Reconnect to replace the stored credentials. Your Lists, batches, and linked people will remain unchanged.'
                   : "You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data."}
               </p>
-
-              {planningCenterError && (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
-                  <div className="flex">
-                    <ShieldExclamationIcon className="h-5 w-5 text-red-400 shrink-0" />
-                    <div className="ml-2">
-                      <p className="text-sm text-red-700 dark:text-red-400">{planningCenterError}</p>
-                    </div>
-                  </div>
-                </div>
-              )}
 
               <div className="flex justify-end">
                 <button
@@ -467,7 +472,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
           {status.connected && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
-              {/* Sync batches */}
+              {/* List configuration and one integration-wide review */}
               <div>
                 {syncStats && (
                   <div className="mt-4">
@@ -487,39 +492,38 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </div>
                 )}
 
+                {canReviewIntegration && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-950/20">
+                  <p className="text-sm text-gray-700 dark:text-gray-200">Review people and attendance-list changes across all enabled lists together.</p>
+                  <button type="button" onClick={() => navigate('/app/settings/integrations/planning-center/review')}
+                    className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                    Review &amp; sync
+                  </button>
+                </div>}
+
                 <div className="mt-4 flex items-center justify-between">
-                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Sync batches</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Synced lists</p>
                   {editingBatch === null && (
                     <button type="button" onClick={() => { setBatchNotice(null); setEditingBatch('new'); }}
                       className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
-                      New batch
+                      Add list
                     </button>
                   )}
                 </div>
 
                 {batchesError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{batchesError}</p>}
                 {batchNotice && <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-300">{batchNotice}</p>}
-                {batchesLoading && <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading batches…</p>}
+                {batchesLoading && <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading lists…</p>}
 
                 {editingBatch !== null && (
                   <div className="mt-3">
                     <PlanningCenterBatchEditor
                       batch={editingBatch === 'new' ? null : editingBatch}
-                      onSaved={(savedBatch) => {
-                        if (editingBatch === 'new') {
-                          if (peopleSyncSettings.authorityProvider === 'none') {
-                            navigate('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
-                            return;
-                          }
-                          if (peopleSyncSettings.authorityProvider === 'planning_center') {
-                            navigate(`/app/settings/integrations/planning-center/batches/${savedBatch.id}/review`);
-                            return;
-                          }
-                          navigate('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
-                          return;
+                      onSaved={() => {
+                        if (peopleSyncSettings.authorityProvider === 'planning_center') {
+                          navigate('/app/settings/integrations/planning-center/review');
+                        } else {
+                          navigate(`/app/settings/integrations/planning-center/authority-review${editingBatch === 'new' ? '?reason=first-batch' : ''}`);
                         }
-                        setEditingBatch(null);
-                        void reloadAfterBatchMutation();
                       }}
                       onCancel={() => setEditingBatch(null)}
                     />
@@ -527,7 +531,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 )}
 
                 {!batchesLoading && modernBatches.length === 0 && editingBatch === null && (
-                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No sync batches yet — create one to start importing people from Planning Center.</p>
+                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No synced lists yet — add one to start importing people from Planning Center.</p>
                 )}
 
                 <ul className="mt-3 space-y-3">
@@ -563,16 +567,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
-                          {batch.reviewable && (
-                            <button
-                              type="button"
-                              onClick={() => navigate(`/app/settings/integrations/planning-center/batches/${batch.id}/review`)}
-                              aria-label={`${batch.operationalState === 'source_review_required' ? 'Review source & sync' : 'Review & sync'} ${batch.name}`}
-                              className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-                            >
-                              {batch.operationalState === 'source_review_required' ? 'Review source & sync' : 'Review & sync'}
-                            </button>
-                          )}
                           {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard source draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>
@@ -646,7 +640,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
                 {!peopleLinked ? (
                   <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Link your people to Planning Center first — add a sync batch above and run it — before importing
+                    Link your people to Planning Center first — add a list above and review the sync — before importing
                     check-in history. This keeps imported attendance matched to the right person instead of creating
                     duplicates.
                   </p>

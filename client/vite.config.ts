@@ -25,6 +25,12 @@ export default defineConfig({
     port: 3000,
     strictPort: true,
     hmr: false, // Disable HMR for Docker development to avoid WebSocket issues
+    // Setting deny replaces Vite's defaults. Keep its credential and Git
+    // protections and also refuse private rehearsal files, including /@fs URLs.
+    fs: {
+      deny: ['.env', '.env.*', '*.{crt,pem,key,p12,pfx,cer,der}', '.npmrc', '.yarnrc.yml',
+        '**/.git/**', '**/backups/**', '**/*.local.json'],
+    },
     watch: {
       usePolling: true,
       interval: 1000,

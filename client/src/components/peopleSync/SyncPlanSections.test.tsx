@@ -361,11 +361,11 @@ describe('SyncPlanSections', () => {
 
     render(<DecisionHarness />);
     expect(screen.getByText('Update Local Match')).toBeInTheDocument();
-    expect(screen.getByText('Add Source Match to a gathering')).toBeInTheDocument();
+    expect(screen.getByText('Add Source Match to Gathering 2')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Add source match instead' }));
     expect(screen.queryByText('Update Local Match')).not.toBeInTheDocument();
-    expect(screen.queryByText('Add Source Match to a gathering')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add Source Match to Gathering 2')).not.toBeInTheDocument();
   });
 
   it('removes a new person gathering addition when its identity changes from create to defer', async () => {
@@ -410,11 +410,11 @@ describe('SyncPlanSections', () => {
     }
 
     render(<DecisionHarness />);
-    expect(screen.getByText('Add Source Held to a gathering')).toBeInTheDocument();
+    expect(screen.getByText('Add Source Held to Gathering 2')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Decide later' }));
 
-    expect(screen.queryByText('Add Source Held to a gathering')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add Source Held to Gathering 2')).not.toBeInTheDocument();
     expect(screen.getByText('Source Held will be skipped for now.')).toBeInTheDocument();
   });
 });

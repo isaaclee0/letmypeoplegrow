@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useChurchTime } from '../hooks/useChurchTime';
 import { usersAPI, gatheringsAPI, contactsAPI } from '../services/api';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   UserIcon,
   UserGroupIcon,
@@ -197,7 +197,9 @@ function ContactModal({
 const UsersPage: React.FC = () => {
   const { formatInstant } = useChurchTime();
   const { user: currentUser } = useAuth();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const onboardingInvite = currentUser?.role === 'admin' && searchParams.get('onboarding') === '1';
   const [users, setUsers] = useState<User[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
@@ -207,6 +209,7 @@ const UsersPage: React.FC = () => {
   
   // Modal states
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteError, setInviteError] = useState('');
   const [showUserDetails, setShowUserDetails] = useState(false);
   const [showAssignGatherings, setShowAssignGatherings] = useState(false);
   const [showEditUserModal, setShowEditUserModal] = useState(false);
@@ -276,6 +279,13 @@ const UsersPage: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    setShowInviteModal(onboardingInvite);
+    setShowInviteConfirmation(false);
+    setInviteError('');
+    if (onboardingInvite) setActiveTab('users');
+  }, [onboardingInvite]);
 
   useEffect(() => {
     if (activeTab === 'contacts') {
@@ -436,35 +446,16 @@ const UsersPage: React.FC = () => {
     return Object.keys(errors).length === 0;
   };
 
-  const handleSendInvitation = async () => {
-    try {
-      setError('');
-      setValidationErrors({});
-      
-      // Validate form
-      if (!validateInviteForm()) {
-        return;
-      }
+  const handleSendInvitation = () => {
+    setInviteError('');
+    setSuccess('');
+    if (validateInviteForm()) setShowInviteConfirmation(true);
+  };
 
-      // Show confirmation modal
-      setShowInviteConfirmation(true);
-    } catch (err: any) {
-      setIsSubmitting(false);
-      const serverErrors = err.response?.data?.errors;
-      const errorMessage = err.response?.data?.error || (Array.isArray(serverErrors) && serverErrors.length ? serverErrors[0]?.msg : 'Failed to send invitation');
-      setError(errorMessage);
-      
-      // Clear error message after 8 seconds
-      setTimeout(() => setError(''), 8000);
-      
-      console.error('Failed to send invitation:', {
-        error: errorMessage,
-        formData: inviteForm,
-        response: err.response?.data,
-        status: err.response?.status,
-        statusText: err.response?.statusText
-      });
-    }
+  const cancelInvitation = () => {
+    setInviteError('');
+    setShowInviteModal(false);
+    if (onboardingInvite) navigate('/app/onboarding', { replace: true });
   };
 
   const handleConfirmInvitation = async () => {
@@ -475,12 +466,22 @@ const UsersPage: React.FC = () => {
       // Set primary contact method to email
       const primaryContactMethod = 'email';
 
-      await fetch('/api/invitations/send', {
+      const response = await fetch('/api/invitations/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ ...inviteForm, primaryContactMethod })
       });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        const message = data?.error || data?.errors?.[0]?.msg;
+        setInviteError(typeof message === 'string' ? message : 'Failed to send invitation. Please try again.');
+        return;
+      }
+      if (onboardingInvite) {
+        navigate('/app/onboarding?invited=1', { replace: true });
+        return;
+      }
       
       setSuccess('User invited successfully! They can now log in using their email or mobile number with a one-time code.');
       setShowInviteModal(false);
@@ -500,24 +501,10 @@ const UsersPage: React.FC = () => {
       // Clear success message after 5 seconds
       setTimeout(() => setSuccess(''), 5000);
       
+    } catch {
+      setInviteError('Failed to send invitation. Please try again.');
+    } finally {
       setIsSubmitting(false);
-      
-    } catch (err: any) {
-      setIsSubmitting(false);
-      const serverErrors = err.response?.data?.errors;
-      const errorMessage = err.response?.data?.error || (Array.isArray(serverErrors) && serverErrors.length ? serverErrors[0]?.msg : 'Failed to send invitation');
-      setError(errorMessage);
-      
-      // Clear error message after 8 seconds
-      setTimeout(() => setError(''), 8000);
-      
-      console.error('Failed to send invitation:', {
-        error: errorMessage,
-        formData: inviteForm,
-        response: err.response?.data,
-        status: err.response?.status,
-        statusText: err.response?.statusText
-      });
     }
   };
 
@@ -847,17 +834,9 @@ const UsersPage: React.FC = () => {
     return formatInstant(value, { dateStyle: 'medium', timeStyle: 'short' }) || '—';
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4 pb-32">
-      <div className="px-1">
+  const pageHeading = (
+    <div className="flex flex-wrap items-start justify-between gap-3 px-1">
+      <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
           Manage Users
         </h1>
@@ -865,6 +844,28 @@ const UsersPage: React.FC = () => {
           Manage users, send invitations, and assign gathering access
         </p>
       </div>
+      {onboardingInvite && (
+        <Link to="/app/onboarding" replace className="py-1 text-sm font-medium text-primary-700 underline dark:text-primary-300">
+          Back to setup
+        </Link>
+      )}
+    </div>
+  );
+
+  if (isLoading) {
+    return (
+      <div>
+        {onboardingInvite && pageHeading}
+        <div className="flex justify-center items-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 pb-32">
+      {pageHeading}
 
       {/* Alerts */}
       {error && (
@@ -1214,11 +1215,16 @@ const UsersPage: React.FC = () => {
       {/* Pending Invitations Section removed */}
 
       {/* Invite User Modal */}
-      {showInviteModal ? createPortal(
+      {showInviteModal && !showInviteConfirmation ? createPortal(
         <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
+          <div role="dialog" aria-labelledby="invite-user-title" className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Invite New User</h3>
+              <h3 id="invite-user-title" className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Invite New User</h3>
+              {inviteError && (
+                <p role="alert" className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                  {inviteError}
+                </p>
+              )}
               
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1370,8 +1376,9 @@ const UsersPage: React.FC = () => {
 
               <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
                 <button
-                  onClick={() => setShowInviteModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+                  onClick={cancelInvitation}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -1714,14 +1721,15 @@ const UsersPage: React.FC = () => {
       {/* Invite User Confirmation Modal */}
       {showInviteConfirmation ? createPortal(
         <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
+          <div role="dialog" aria-labelledby="confirm-invitation-title" className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                <h3 id="confirm-invitation-title" className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Invitation
                 </h3>
                 <button
                   onClick={() => setShowInviteConfirmation(false)}
+                  aria-label="Close confirmation"
                   className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />

@@ -14,6 +14,10 @@ vi.mock('../../services/api', () => ({
   PEOPLE_SYNC_BATCH_PREPARED_MESSAGE: 'This batch is prepared for a different people source. Switch source of truth before reviewing or running it.',
   integrationsAPI: {
     getPlanningCenterSyncBatches: vi.fn(),
+    getPlanningCenterSyncPlan: vi.fn(),
+    previewPlanningCenterSyncLinkCorrections: vi.fn(),
+    previewPlanningCenterSyncHouseholdChoices: vi.fn(),
+    applyPlanningCenterSync: vi.fn(),
     getPlanningCenterBatchPlan: vi.fn(),
     previewPlanningCenterLinkCorrections: vi.fn(),
     applyPlanningCenterBatch: vi.fn(),
@@ -34,6 +38,9 @@ const emptyPlan = (provider: 'planning_center' | 'elvanto'): PeopleSyncPlan => (
   promoteToRegular: [], demoteToLocalVisitor: [], archive: [], reactivate: [], moveFamily: [],
   renameFamily: [], addToGathering: [], removeFromGathering: [], ambiguousPeople: [],
   familyConflicts: [], unmatchedLocalRegulars: [], skipped: [],
+  sourceContext: { promotions: [], reviewedLists: [{ batchId: 7, name: 'Members', gatheringTypeId: null,
+    activeSource: { kind: 'planning_center_list', externalId: 'members', name: 'Members' },
+    selectedSource: { kind: 'planning_center_list', externalId: 'members', name: 'Members' }, isDraft: false }] },
 });
 
 const reviewFor = (provider: 'planning_center' | 'elvanto', token: string): PeopleSyncReview => {
@@ -140,6 +147,34 @@ describe('batchReviewApi', () => {
       reviewToken: 'pco-preview-token',
       selections,
     });
+  });
+
+  it('uses the combined Planning Center API with a null batch scope for the entire signed review flow', async () => {
+    const review = reviewFor('planning_center', 'combined-token');
+    vi.mocked(integrationsAPI.getPlanningCenterSyncPlan).mockResolvedValue({ data: { success: true, ...review } } as never);
+    vi.mocked(integrationsAPI.previewPlanningCenterSyncLinkCorrections).mockResolvedValue({ data: { success: true, ...review } } as never);
+    vi.mocked(integrationsAPI.previewPlanningCenterSyncHouseholdChoices).mockResolvedValue({ data: { success: true, ...review } } as never);
+    vi.mocked(integrationsAPI.applyPlanningCenterSync).mockResolvedValue({ data: { success: true, status: 'applied' } } as never);
+    const adapter = batchReviewApi('planning-center')!;
+    await expect(adapter.loadReview(null)).resolves.toMatchObject({ operationKind: 'people_sync', reviewToken: 'combined-token' });
+    await adapter.previewCorrections(null, 'base-token' as never, {});
+    await adapter.previewHouseholdChoices!(null, 'base-token' as never, { card: { destination: { kind: 'keep' } } });
+    await adapter.applyReview(null, 'combined-token' as never, { decisionContractVersion: 2 });
+    expect(integrationsAPI.getPlanningCenterSyncPlan).toHaveBeenCalledWith();
+    expect(integrationsAPI.previewPlanningCenterSyncLinkCorrections).toHaveBeenCalledWith({ baseReviewToken: 'base-token', linkCorrections: {} });
+    expect(integrationsAPI.previewPlanningCenterSyncHouseholdChoices).toHaveBeenCalledWith({ baseReviewToken: 'base-token', householdChoices: { card: { destination: { kind: 'keep' } } } });
+    expect(integrationsAPI.applyPlanningCenterSync).toHaveBeenCalledWith({ reviewToken: 'combined-token', selections: { decisionContractVersion: 2 } });
+    expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsigned source summaries from either combined correction preview endpoint', async () => {
+    const review = reviewFor('planning_center', 'missing-scope');
+    delete review.plan.sourceContext;
+    vi.mocked(integrationsAPI.previewPlanningCenterSyncLinkCorrections).mockResolvedValueOnce({ data: { success: true, ...review } } as never);
+    vi.mocked(integrationsAPI.previewPlanningCenterSyncHouseholdChoices).mockResolvedValueOnce({ data: { success: true, ...review } } as never);
+    const adapter = batchReviewApi('planning-center')!;
+    await expect(adapter.previewCorrections(null, 'base-token' as never, {})).rejects.toThrow('The reviewed list scope is missing or invalid.');
+    await expect(adapter.previewHouseholdChoices!(null, 'base-token' as never, {})).rejects.toThrow('The reviewed list scope is missing or invalid.');
   });
 
   it('normalizes the Elvanto batch review contract', async () => {

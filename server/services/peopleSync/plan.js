@@ -1,4 +1,5 @@
 const { buildFamilyName } = require('./familyName');
+const { addReviewedFamilyActions, addReviewedGatheringRemovals } = require('./reconciliation');
 
 const BUCKETS = [
   'linkPeople', 'linkFamilies', 'addPeople', 'addFamilies', 'updateManagedFields',
@@ -334,7 +335,7 @@ function familyConflict(externalFamilyId, memberExternalIds, candidateFamilyIds,
 }
 
 function addFamilyActions(context) {
-  const { plan, input, localById, identities, conflictIds, populationIds } = context;
+  const { plan, input, localById, identities, conflictIds, populationIds, localHouseholdExternalIds } = context;
   const externalFamilies = normalizedExternalFamilies(input.externalFamilies || []);
   if (!externalFamilies.length) return;
 
@@ -362,7 +363,9 @@ function addFamilyActions(context) {
   const addPeopleByExternal = new Map(plan.addPeople.map((action) => [action.externalPersonId, action]));
 
   for (const family of externalFamilies) {
-    const memberExternalIds = family.memberExternalIds;
+    // Local household arrangements own these people's family placement. Keep
+    // provider evidence intact and exclude them only from family planning.
+    const memberExternalIds = family.memberExternalIds.filter((id) => !localHouseholdExternalIds.has(id));
     if (!memberExternalIds.some((id) => populationIds.has(id))) continue;
 
     const linkedFamilyIds = [...(linkedFamilyIdsByExternal.get(family.id) || [])].sort((a, b) => a - b);
@@ -551,15 +554,21 @@ function computePeopleSyncPlan(input = {}) {
   const context = {
     plan, input, matcherResult, conflictIds, externalById, localById, identities,
     protectedIndividualIds, populationIds, batches, eligibleByBatch,
+    localHouseholdExternalIds: idsFrom(input.localHouseholdExternalIds),
   };
   addLifecycleAndManagedActions(context);
   addUnmatchedActions(context);
   addFamilyActions(context);
+  addReviewedFamilyActions(context);
   addGatheringActions(context);
+  addReviewedGatheringRemovals(context);
 
   for (const bucket of BUCKETS) {
     plan[bucket] = uniqueBy(plan[bucket], (item) => item?.id ?? canonicalString(item)).sort(compareById);
   }
+  // Differences a reviewer kept as LMPG has them (not an action bucket;
+  // only present when something was kept, so other plans are unchanged).
+  if (plan.keptReconciliations) plan.keptReconciliations.sort((a, b) => a.keepId - b.keepId);
   return plan;
 }
 
@@ -585,6 +594,7 @@ function projectAdditiveImportPlan(syncPlan, authorityProvider) {
       reason: 'authority_requires_visitor',
     }));
   }
+  plan.familyConflicts = plan.familyConflicts.map(({ resolution, ...conflict }) => conflict);
   plan.operationKind = 'people_import';
   plan.authoritative = false;
   return plan;

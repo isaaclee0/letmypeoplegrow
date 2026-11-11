@@ -2,6 +2,7 @@ import React from 'react';
 import PeopleImportOutcomeSections from '../peopleImport/PeopleImportOutcomeSections';
 import type { SyncSelectionState } from './syncSelections';
 import type { ArchiveAction, IdentityDecision, PeopleReviewOperationKind, PeopleSyncReview } from './types';
+import type { ReviewGathering } from './GatheringReviewFilter';
 
 const ARCHIVE_REASON_COPY: Record<string, string> = {
   provider_state_archived: 'Archived in the provider',
@@ -75,10 +76,12 @@ export function deriveSyncPlanView(review: PeopleSyncReview, state: SyncSelectio
     demoteToLocalVisitor: isV2 ? plan.demoteToLocalVisitor.filter(suggestionStillAccepted) : plan.demoteToLocalVisitor,
     moveFamily: isV2 ? plan.moveFamily.filter(suggestionStillAccepted) : plan.moveFamily,
     linkFamilies: plan.linkFamilies,
-    addFamilies: plan.addFamilies,
+    addFamilies: isV2 ? plan.addFamilies.filter((action) => !action.singlePersonExternalId
+      || state.identityDecisions?.[action.singlePersonExternalId]?.outcome === 'create') : plan.addFamilies,
     renameFamily: plan.renameFamily,
     addToGathering: isV2 ? plan.addToGathering.filter(gatheringAdditionStillSelected) : plan.addToGathering,
-    removeFromGathering: isV2 ? plan.removeFromGathering.filter(suggestionStillAccepted) : plan.removeFromGathering,
+    removeFromGathering: (isV2 ? plan.removeFromGathering.filter(suggestionStillAccepted) : plan.removeFromGathering)
+      .filter((action) => !action.reviewRequired || state.acceptedGatheringRemovalIds?.has(action.id)),
     archive: (isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive).filter(isTerminalArchive),
     reactivate: isV2 ? plan.reactivate.filter(suggestionStillAccepted) : plan.reactivate,
     skipped: plan.skipped,
@@ -125,6 +128,7 @@ function DenseChangeList({ children }: { children: React.ReactNode }) {
 export interface SyncPlanSectionsProps {
   operationKind: PeopleReviewOperationKind;
   review: PeopleSyncReview;
+  gatherings?: ReviewGathering[];
   state: SyncSelectionState;
   archiveActions: ArchiveAction[];
   onStateChange: (state: SyncSelectionState) => void;
@@ -134,6 +138,7 @@ export interface SyncPlanSectionsProps {
 export default function SyncPlanSections({
   operationKind,
   review,
+  gatherings = [],
   state,
   archiveActions,
   onStateChange,
@@ -149,6 +154,7 @@ export default function SyncPlanSections({
   const localOnlyCount = review.coverage?.unlinkedActiveLocalRegulars ?? 0;
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
+  const gatheringName = (id: number) => gatherings.find((gathering) => gathering.id === id)?.name || `Gathering ${id}`;
 
   const toggleArchive = (individualId: number) => {
     const acceptedArchiveIds = new Set(state.acceptedArchiveIds);
@@ -218,8 +224,8 @@ export default function SyncPlanSections({
         tone={view.removeFromGathering.length > 0 ? 'amber' : 'neutral'}
       >
         <DenseChangeList>
-          {view.addToGathering.map((action) => <li key={action.id}>Add {externalPerson(action.externalPersonId)} to a gathering</li>)}
-          {view.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from a gathering</li>)}
+          {view.addToGathering.map((action) => <li key={action.id}>Add {externalPerson(action.externalPersonId)} to {gatheringName(action.gatheringTypeId)}</li>)}
+          {view.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from {action.gatheringName || gatheringName(action.gatheringTypeId)}</li>)}
         </DenseChangeList>
       </CompactSection>
 

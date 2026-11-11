@@ -15,11 +15,10 @@ describe('PlanningCenterBatchEditor', () => {
   it('saves the onboarding List-to-gathering mapping with weekly sync and membership removal', async () => {
     vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: { gatherings: [{ id: 5, name: 'Youth' }] } } as never);
     vi.mocked(integrationsAPI.createPlanningCenterSyncBatch).mockResolvedValue({ data: { batch } } as never);
-    render(<PlanningCenterBatchEditor batch={null} defaultScheduleEnabled defaultGatheringAutoRemoveEnabled createLabel="Save mapping" onSaved={vi.fn()} onCancel={vi.fn()} />);
+    render(<PlanningCenterBatchEditor batch={null} defaultGatheringId={5} defaultScheduleEnabled defaultGatheringAutoRemoveEnabled createLabel="Save mapping" onSaved={vi.fn()} onCancel={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-1' } });
-    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
     await screen.findByRole('option', { name: 'Youth' });
-    fireEvent.change(screen.getByLabelText('Existing gathering'), { target: { value: '5' } });
+    expect(screen.getByLabelText('Existing gathering')).toHaveValue('5');
     fireEvent.click(screen.getByRole('button', { name: 'Save mapping' }));
     await waitFor(() => expect(integrationsAPI.createPlanningCenterSyncBatch).toHaveBeenCalledWith(expect.objectContaining({ sourceExternalId: 'list-1', gatheringTypeId: 5, gatheringAutoRemoveEnabled: true, scheduleEnabled: true, scheduleFrequency: 'weekly' })));
   });

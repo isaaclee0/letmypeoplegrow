@@ -5,6 +5,28 @@ const assert = require('node:assert/strict');
 
 const { buildReviewContext, buildReviewDirectory } = require('./reviewContext');
 
+test('held identities retain only eligible enabled gathering assignments, deduplicated by gathering', () => {
+  const context = buildReviewContext({
+    plan: { ambiguousPeople: [{ externalPersonId: 'held' }, { externalPersonId: 'outside' }] },
+    externalPeople: [{ id: 'held', firstName: 'Alex', state: 'active' }],
+    holds: [{ externalPersonId: 'held' }, { externalPersonId: 'outside' }],
+    decisionScopeExternalIds: new Set(['held']),
+    batches: [
+      { id: 8, gatheringTypeId: 10 }, { id: 2, gatheringTypeId: 10 },
+      { id: 3, gatheringTypeId: 11 }, { id: 4, gatheringTypeId: 12, enabled: false },
+      { id: 5, gatheringTypeId: 13 }, { id: 6, gatheringTypeId: null },
+    ],
+    eligibleByBatch: new Map([
+      [8, new Set(['held'])], [2, new Set(['held'])], [3, new Set(['held'])],
+      [4, new Set(['held'])], [5, new Set(['outside'])], [6, new Set(['held'])],
+    ]),
+  });
+  assert.deepEqual(context.identities.held.gatheringAssignments, [
+    { batchId: 2, gatheringTypeId: 10 }, { batchId: 3, gatheringTypeId: 11 },
+  ]);
+  assert.equal(context.identities.outside, undefined);
+});
+
 test('signs source-visible established links while eligibility uses the projected mapping', () => {
   const context = buildReviewContext({
     plan: { linkPeople: [], ambiguousPeople: [], addPeople: [] },

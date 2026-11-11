@@ -45,6 +45,58 @@ test('exports the active, contact, and batch-default people type precedence for 
   ]), 'regular');
 });
 
+test('local household management cannot supply family links or block a new unmanaged household member', () => {
+  const managed = person({ familyId: 'house-1', householdIds: ['house-1', 'house-2'] });
+  const newcomer = person({ id: 'new', firstName: 'New', lastName: 'Member', familyId: 'house-1', householdIds: ['house-1'] });
+  const state = input({
+    provider: 'planning_center', activeAuthority: 'planning_center',
+    externalPeople: [managed, newcomer], householdPeople: [managed, newcomer],
+    externalFamilies: [
+      { id: 'house-1', memberExternalIds: ['ext-1', 'new'], primaryContactExternalId: 'ext-1' },
+      { id: 'house-2', memberExternalIds: ['ext-1'] },
+    ],
+    localPeople: [local({ familyId: 9 })], localFamilies: [{ id: 9, familyName: 'Managed local household' }],
+    personLinks: [{ externalPersonId: 'ext-1', individualId: 1 }], familyLinks: [],
+    matcher: matcher({ linked: [{ externalPersonId: 'ext-1', individualId: 1 }], unmatchedExternalIds: ['new'] }),
+    batches: [batch({ eligibleExternalPersonIds: ['ext-1', 'new'] })],
+    localHouseholdExternalIds: new Set(['ext-1']),
+  });
+  const original = structuredClone(state);
+  const plan = computePeopleSyncPlan(state);
+  assert.deepEqual(plan.linkFamilies, []);
+  assert.deepEqual(plan.familyConflicts, []);
+  assert.deepEqual(plan.addFamilies, [{
+    id: 'addFamilies:house-1', externalFamilyId: 'house-1', familyName: 'Member, New',
+    memberExternalIds: ['new'], reason: 'all_household_members_new',
+  }]);
+  assert.deepEqual(plan.addPeople.map(({ externalPersonId }) => externalPersonId), ['new']);
+  assert.deepEqual(state, original, 'raw provider records and existing links remain unchanged');
+});
+
+test('local household management preserves managed fields, lifecycle, and gathering planning', () => {
+  const state = input({
+    provider: 'planning_center', activeAuthority: 'planning_center',
+    externalPeople: [
+      person({ firstName: 'Updated', familyId: 'house-1', householdIds: ['house-1', 'house-2'] }),
+      person({ id: 'archived', state: 'archived', familyId: null, householdIds: [] }),
+    ],
+    externalFamilies: [{ id: 'house-1', memberExternalIds: ['ext-1'] }],
+    localPeople: [local({ familyId: 9, peopleType: 'local_visitor' }), local({ id: 2, familyId: 9 })],
+    localFamilies: [{ id: 9, familyName: 'Local household' }], familyLinks: [],
+    personLinks: [{ externalPersonId: 'ext-1', individualId: 1 }, { externalPersonId: 'archived', individualId: 2 }],
+    matcher: matcher({ linked: [{ externalPersonId: 'ext-1', individualId: 1 }, { externalPersonId: 'archived', individualId: 2 }] }),
+    batches: [batch({ gatheringTypeId: 100 })], localHouseholdExternalIds: new Set(['ext-1', 'archived']),
+  });
+  const plan = computePeopleSyncPlan(state);
+  assert.deepEqual(plan.linkFamilies, []);
+  assert.deepEqual(plan.addFamilies, []);
+  assert.deepEqual(plan.familyConflicts, []);
+  assert.deepEqual(plan.updateManagedFields[0].changes, [{ field: 'firstName', localValue: 'Ada', externalValue: 'Updated' }]);
+  assert.deepEqual(plan.promoteToRegular.map(({ externalPersonId }) => externalPersonId), ['ext-1']);
+  assert.deepEqual(plan.archive.map(({ externalPersonId }) => externalPersonId), ['archived']);
+  assert.deepEqual(plan.addToGathering.map(({ externalPersonId, gatheringTypeId }) => [externalPersonId, gatheringTypeId]), [['ext-1', 100]]);
+});
+
 const bucketNames = [
   'linkPeople', 'linkFamilies', 'addPeople', 'addFamilies', 'updateManagedFields',
   'promoteToRegular', 'demoteToLocalVisitor', 'archive', 'reactivate', 'moveFamily',

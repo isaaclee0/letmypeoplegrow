@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { useChurchTime } from '../hooks/useChurchTime';
 import { addDateOnly, differenceInDateOnlyDays } from '../utils/churchTime';
+import { getCustomGatheringDates } from '../utils/customGatheringDates';
 import {
   gatheringsAPI,
   attendanceAPI,
@@ -87,6 +88,8 @@ const AttendancePage: React.FC = () => {
   const { today, formatDateOnly } = useChurchTime();
   const { showSuccess, showToast } = useToast();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedGatheringId = Number(searchParams.get('gathering'));
   const { badgeConfig, getBadgeInfo, isLoading: badgeSettingsLoading } = useBadgeSettings();
   // Initialize selectedDate to today - will be updated by gathering selection logic
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -556,86 +559,12 @@ const AttendancePage: React.FC = () => {
   const computeValidDatesForGathering = useCallback((gathering: GatheringType): string[] => {
     if (!gathering) return [];
 
-    if (gathering.attendanceType === 'headcount' && gathering.customSchedule) {
-      const customSchedule = gathering.customSchedule;
-      const dates: string[] = [];
-
-      if (customSchedule.type === 'one_off') {
-        dates.push(customSchedule.startDate);
-      } else if (customSchedule.type === 'recurring' && customSchedule.pattern) {
-        const pattern = customSchedule.pattern;
-        const scheduleStart = parseISO(customSchedule.startDate);
-        const scheduleEnd = customSchedule.endDate ? parseISO(customSchedule.endDate) : parseISO(addDateOnly(today(), { days: 28 }));
-        
-        if (pattern.frequency === 'daily') {
-          if (pattern.customDates && pattern.customDates.length > 0) {
-            dates.push(...pattern.customDates);
-          } else {
-            let currentDate = scheduleStart;
-            while (isBefore(currentDate, scheduleEnd)) {
-              dates.push(format(currentDate, 'yyyy-MM-dd'));
-              currentDate = addDays(currentDate, pattern.interval || 1);
-            }
-          }
-        } else if (pattern.frequency === 'weekly') {
-          const dayMap: { [key: string]: number } = {
-            'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-            'Thursday': 4, 'Friday': 5, 'Saturday': 6
-          };
-
-          if (pattern.daysOfWeek && pattern.daysOfWeek.length > 0) {
-            const targetDays = pattern.daysOfWeek.map(day => dayMap[day]).filter(day => day !== undefined);
-            let currentDate = scheduleStart;
-            while (isBefore(currentDate, scheduleEnd)) {
-              const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 });
-              for (const targetDay of targetDays) {
-                const eventDate = addDays(weekStart, targetDay);
-                if (isBefore(eventDate, scheduleEnd) && !isBefore(eventDate, scheduleStart)) {
-                  dates.push(format(eventDate, 'yyyy-MM-dd'));
-                }
-              }
-              currentDate = addWeeks(currentDate, pattern.interval || 1);
-            }
-          }
-        } else if (pattern.frequency === 'biweekly') {
-          const dayMap: { [key: string]: number } = {
-            'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-            'Thursday': 4, 'Friday': 5, 'Saturday': 6
-          };
-          
-          if (pattern.daysOfWeek && pattern.daysOfWeek.length > 0) {
-            const targetDays = pattern.daysOfWeek.map(day => dayMap[day]).filter(day => day !== undefined);
-            let currentDate = scheduleStart;
-            let weekCount = 0;
-            while (isBefore(currentDate, scheduleEnd)) {
-              if (weekCount % 2 === 0) {
-                const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 });
-                for (const targetDay of targetDays) {
-                  const eventDate = addDays(weekStart, targetDay);
-                  if (isBefore(eventDate, scheduleEnd) && !isBefore(eventDate, scheduleStart)) {
-                    dates.push(format(eventDate, 'yyyy-MM-dd'));
-                  }
-                }
-              }
-              currentDate = addWeeks(currentDate, 1);
-              weekCount++;
-            }
-          }
-        } else if (pattern.frequency === 'monthly') {
-          if (pattern.dayOfMonth) {
-            let currentDate = scheduleStart;
-            while (isBefore(currentDate, scheduleEnd)) {
-              const eventDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), pattern.dayOfMonth);
-              if (isBefore(eventDate, scheduleEnd) && !isBefore(eventDate, scheduleStart)) {
-                dates.push(format(eventDate, 'yyyy-MM-dd'));
-              }
-              currentDate = addWeeks(currentDate, 4);
-            }
-          }
-        }
-      }
-
-      return dates.sort((a, b) => b.localeCompare(a));
+    if (gathering.customSchedule) {
+      const schedule = gathering.customSchedule;
+      const through = schedule.type === 'recurring' && !schedule.pattern?.customDates?.length
+        ? schedule.endDate || addDateOnly(today(), { days: 28 })
+        : undefined;
+      return getCustomGatheringDates(schedule, undefined, through).reverse();
     }
 
     const dayMap: { [key: string]: number } = {
@@ -802,6 +731,7 @@ const AttendancePage: React.FC = () => {
 
   // Load gatherings when user data is available (CACHE-FIRST approach)
   useEffect(() => {
+    let cancelled = false;
     const loadGatherings = async () => {
       if (!user) return; // Wait for user data to be available
       setIsLoadingGatherings(true);
@@ -824,7 +754,10 @@ const AttendancePage: React.FC = () => {
               setGatherings(userGatherings);
             
             // IMPORTANT: Also select a gathering from cache to prevent "No valid dates" flash
-            if (userGatherings.length > 0 && !selectedGathering) {
+            const requestedGathering = userGatherings.find((g: GatheringType) => g.id === requestedGatheringId);
+            if (requestedGathering) {
+              setSelectedGathering(requestedGathering);
+            } else if (userGatherings.length > 0 && !selectedGathering && !requestedGatheringId) {
               // Try to use cached attendance data to select the right gathering
               try {
                 const cachedAttendance = localStorage.getItem('attendance_cached_data');
@@ -860,6 +793,7 @@ const AttendancePage: React.FC = () => {
       // STEP 2: Fetch fresh data from server (always, even if cache loaded)
       try {
         const response = await gatheringsAPI.getAll();
+        if (cancelled) return;
         // All users (including admins) only see their assigned gatherings
         // Admins can assign themselves to any gathering they want to see
         const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
@@ -886,10 +820,10 @@ const AttendancePage: React.FC = () => {
             lastViewed = getLastViewed();
           }
           
-          let gatheringToSelect: GatheringType | null = null;
+          let gatheringToSelect: GatheringType | null =
+            userGatherings.find((g: GatheringType) => g.id === requestedGatheringId) || null;
 
-          // Try last viewed first
-          if (lastViewed) {
+          if (!gatheringToSelect && lastViewed) {
             gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId) || null;
           }
 
@@ -947,11 +881,13 @@ const AttendancePage: React.FC = () => {
             }
           }
           
+          if (cancelled) return;
           setSelectedGathering(finalGatheringToSelect);
         }
         setIsLoadingGatherings(false);
         logger.log('✅ Fresh gatherings loaded from server and cached');
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to load fresh gatherings:', err);
         setIsLoadingGatherings(false);
         // If we already loaded from cache, just log the error
@@ -965,7 +901,8 @@ const AttendancePage: React.FC = () => {
     };
 
     loadGatherings();
-  }, [user, user?.gatheringAssignments, isOfflineMode]); // Re-run when user data, gathering assignments, or offline mode changes
+    return () => { cancelled = true; };
+  }, [user, user?.gatheringAssignments, isOfflineMode, requestedGatheringId]); // Re-run when user data, gathering assignments, or offline mode changes
 
   // Synchronously determine the best date for a gathering.
   // Uses localStorage (fast) to avoid the async race condition that caused stale data.
@@ -2641,7 +2578,15 @@ const AttendancePage: React.FC = () => {
                   onChange={(e) => {
                     const gathering = (orderedGatherings.length ? orderedGatherings : gatherings)
                       .find(g => g.id === parseInt(e.target.value));
-                    if (gathering) handleGatheringChange(gathering);
+                    if (gathering) {
+                      handleGatheringChange(gathering);
+                      if (searchParams.has('gathering')) {
+                        setSearchParams(params => {
+                          params.set('gathering', String(gathering.id));
+                          return params;
+                        }, { replace: true });
+                      }
+                    }
                   }}
                   className="flex-1 h-10 px-3 text-center text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900/50 text-gray-900 dark:text-gray-100 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 focus:ring-primary-500 focus:border-primary-500"
                 >

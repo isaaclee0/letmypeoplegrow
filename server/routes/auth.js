@@ -4,13 +4,16 @@ const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const moment = require('moment');
 const crypto = require('crypto');
+const { isISO31661Alpha2 } = require('validator');
 
 const Database = require('../config/database');
 const { sendOTCEmail, sendNewChurchApprovalEmail } = require('../utils/email');
 const { generateOTC, sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
 const { verifyToken } = require('../middleware/auth');
 const { checkSmsSendAllowed, recordSmsSend } = require('../utils/smsRateLimit');
-const { normalizeTimeZone } = require('../utils/churchTime');
+const { normalizeTimeZone, timeZoneFromCoordinates } = require('../utils/churchTime');
+const { reserveNewChurchId } = require('../utils/churchIdGenerator');
+const locationSearch = require('../services/locationSearch');
 const logger = require('../config/logger');
 
 const router = express.Router();
@@ -758,11 +761,47 @@ router.post('/set-default-gathering',
   }
 );
 
+const signupLocationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'Too many location searches. Wait a minute and try again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+function validLocationName(value) {
+  return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 255;
+}
+
+function validCountryCode(value) {
+  return typeof value === 'string' && isISO31661Alpha2(value.toUpperCase());
+}
+
+router.get('/location-search', signupLocationLimiter, async (req, res) => {
+  const { q } = req.query;
+  if (q !== undefined && (typeof q !== 'string' || q.length > 120)) {
+    return res.status(400).json({ error: 'Search must be 120 characters or fewer.' });
+  }
+  const query = q?.trim() ?? '';
+  if (query.length < 3) return res.json({ results: [] });
+
+  try {
+    const results = await locationSearch.search(query);
+    return res.json({
+      results: results.filter(result => validLocationName(result.displayName) && validCountryCode(result.countryCode)).slice(0, 8),
+    });
+  } catch (_) {
+    return res.status(502).json({ error: 'Location search is temporarily unavailable.' });
+  }
+});
+
 router.post('/register',
   [
     body('email').isEmail().withMessage('Valid email address is required'),
     body('firstName').trim().isLength({ min: 1, max: 100 }).withMessage('First name is required (max 100 characters)'),
     body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name is required (max 100 characters)'),
+    body('churchName').optional().isString().bail().trim().isLength({ min: 1, max: 255 })
+      .withMessage('Organisation name must be between 1 and 255 characters'),
     body('role').optional().isIn(['admin', 'attendance_taker', 'coordinator']).withMessage('Role must be either admin, attendance_taker, or coordinator')
   ],
   async (req, res) => {
@@ -770,37 +809,60 @@ router.post('/register',
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const { email, firstName, lastName, role, churchName } = req.body;
+      const {
+        email, firstName, lastName, role, churchName = 'New Church',
+        locationName, locationLat, locationLng, countryCode,
+      } = req.body;
       const userRole = role || 'admin';
-
-      const existingLookup = Database.lookupChurchByEmail(email);
-      if (existingLookup) {
-        return res.status(409).json({ error: 'A user with this email address already exists.' });
+      const hasLocation = [locationName, locationLat, locationLng, countryCode].some(value => value !== undefined);
+      let timezone = 'Australia/Sydney';
+      if (hasLocation) {
+        if (!validLocationName(locationName) || !validCountryCode(countryCode)) {
+          return res.status(400).json({ error: 'Select a valid location and country, or set the location later.' });
+        }
+        if (!Number.isFinite(locationLat) || locationLat < -90 || locationLat > 90 ||
+            !Number.isFinite(locationLng) || locationLng < -180 || locationLng > 180) {
+          return res.status(400).json({ error: 'Select a location with valid coordinates, or set the location later.' });
+        }
+        timezone = timeZoneFromCoordinates(locationLat, locationLng);
       }
-
-      const { getOrCreateChurchId } = require('../utils/churchIdGenerator');
-      const churchId = await getOrCreateChurchId(churchName || 'New Church');
-
-      let userId;
-      await Database.setChurchContext(churchId, async () => {
-        const result = await Database.query(
-          `INSERT INTO users (email, first_name, last_name, role, is_active, first_login_completed, church_id)
-           VALUES (?, ?, ?, ?, 1, 0, ?)`,
-          [email, firstName, lastName, userRole, churchId]
-        );
-        userId = result.insertId;
-      });
-
-      Database.registerUserLookup(userId, email, null, churchId);
 
       const code = isDev ? '000000' : generateOTC();
       const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
 
-      await Database.queryForChurch(
-        churchId,
-        `INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id) VALUES (?, 'email', ?, ?, ?)`,
-        [email, code, expiresAt, churchId]
-      );
+      // Serialize lookup and reservation in the registry; publish the login
+      // lookup only after the new database has its settings, user and code.
+      const registry = Database.getRegistryDb();
+      const churchId = registry.transaction(() => {
+        if (Database.lookupChurchByEmail(email)) return null;
+
+        const newChurchId = reserveNewChurchId(churchName);
+        const db = Database.getChurchDb(newChurchId);
+        db.transaction(() => {
+          db.prepare(`
+            INSERT INTO church_settings
+              (church_id, church_name, country_code, timezone, location_name, location_lat, location_lng, onboarding_completed, onboarding_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 2)
+          `).run(newChurchId, churchName, countryCode?.toUpperCase() ?? 'AU', timezone,
+            locationName?.trim() ?? null, locationLat ?? null, locationLng ?? null);
+
+          const { lastInsertRowid: userId } = db.prepare(`
+            INSERT INTO users (email, first_name, last_name, role, is_active, first_login_completed, church_id)
+            VALUES (?, ?, ?, ?, 1, 0, ?)
+          `).run(email, firstName, lastName, userRole, newChurchId);
+
+          db.prepare(`
+            INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id)
+            VALUES (?, 'email', ?, ?, ?)
+          `).run(email, code, expiresAt, newChurchId);
+          Database.registerUserLookup(userId, email, null, newChurchId);
+        })();
+        return newChurchId;
+      }).immediate();
+
+      if (!churchId) {
+        return res.status(409).json({ error: 'A user with this email address already exists.' });
+      }
 
       setImmediate(async () => {
         // Development never contacts delivery providers, even when keys are configured.
@@ -811,7 +873,7 @@ router.post('/register',
         // Notify app admin that a new church needs approval
         try {
           await sendNewChurchApprovalEmail(
-            churchName || 'New Church',
+            churchName,
             churchId,
             `${firstName} ${lastName}`,
             email

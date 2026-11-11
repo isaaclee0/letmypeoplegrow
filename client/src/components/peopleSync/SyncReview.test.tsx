@@ -462,7 +462,7 @@ describe('SyncReview compact V2 workflow', () => {
       onApply={vi.fn()}
       applying={false}
     />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Change LMPG match for Blair Jones' })).toHaveTextContent('Choose a decision'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Change LMPG match for Blair Jones' })).toHaveTextContent('Choose existing person'));
     expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeEnabled();
   });
 

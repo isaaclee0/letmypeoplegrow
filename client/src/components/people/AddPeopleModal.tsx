@@ -1,9 +1,10 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { individualsAPI, familiesAPI, csvImportAPI } from '../../services/api';
 import { generateFamilyName } from '../../utils/familyNameUtils';
 import logger from '../../utils/logger';
+import { normalizePeopleTable, parsePeopleTable } from '../../utils/peopleTable';
 
 interface PersonForm {
   firstName: string;
@@ -47,10 +48,21 @@ interface IndividualCard {
   siblingGroupId: string | null;  // null = solo; shared value = linked siblings
 }
 
+export interface PeopleImportSummary {
+  imported: number;
+  duplicates: number;
+  skipped: number;
+}
+
+function importSummary(data?: Partial<PeopleImportSummary>): PeopleImportSummary | undefined {
+  if (!data || typeof data.imported !== 'number' || typeof data.duplicates !== 'number' || typeof data.skipped !== 'number') return;
+  return { imported: data.imported, duplicates: data.duplicates, skipped: data.skipped };
+}
+
 interface AddPeopleModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => Promise<void>;
+  onSuccess: (summary?: PeopleImportSummary) => Promise<void>;
   gatheringTypes: GatheringType[];
   people: Person[];
   defaultMode?: 'individual' | 'family';
@@ -58,6 +70,8 @@ interface AddPeopleModalProps {
   providerContent?: React.ReactNode;
   allowManual?: boolean;
   initialMethod?: 'person' | 'csv' | 'copy-paste';
+  embedded?: boolean;
+  initialGatheringId?: number;
 }
 
 const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
@@ -70,11 +84,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   showModeToggle,
   providerContent,
   allowManual = true,
-  initialMethod = 'person'
+  initialMethod = 'person',
+  embedded = false,
+  initialGatheringId,
 }) => {
   const [addModalMode, setAddModalMode] = useState<'person' | 'csv' | 'copy-paste' | 'provider'>('person');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingRefresh, setPendingRefresh] = useState<{ summary?: PeopleImportSummary } | null>(null);
 
   // Individual mode state
   const [isIndividualMode, setIsIndividualMode] = useState(false);
@@ -99,13 +116,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
   const [csvData, setCsvData] = useState('');
   const [copyPasteData, setCopyPasteData] = useState('');
-  const [potentialDuplicates, setPotentialDuplicates] = useState<Array<{firstName: string, lastName: string, reason: string}>>([]);
-  const [tsvAnalysis, setTsvAnalysis] = useState<{
-    newPeople: number;
-    existingPeople: number;
-    unknownGatherings: string[];
-    totalRows: number;
-  } | null>(null);
+  const fileRead = useRef(0);
 
   // Modal tab slider state
   const [isModalTabDragging, setIsModalTabDragging] = useState(false);
@@ -119,26 +130,20 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   const modalTabTouchThrottleDelay = 16; // ~60fps
 
   // Helper function to analyze TSV data for potential duplicates
-  const analyzeTSVForDuplicates = useCallback((tsvData: string) => {
-    if (!tsvData || people.length === 0) {
-      setPotentialDuplicates([]);
-      return;
-    }
+  const potentialDuplicates = useMemo(() => {
+    if (!csvData || people.length === 0) return [];
 
     try {
-      const lines = tsvData.trim().split('\n');
+      const lines = parsePeopleTable(csvData);
       let existingCount = 0;
       let totalCount = 0;
 
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-
-        if (i === 0 && (line.toLowerCase().includes('first') || line.toLowerCase().includes('name'))) {
+        const columns = lines[i];
+        if (i === 0 && /^(first[ _]?name)$/i.test(columns[0])) {
           continue;
         }
 
-        const columns = line.split('\t');
         if (columns.length < 2) continue;
 
         const firstName = columns[0].trim();
@@ -162,14 +167,11 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       const actualDuplicates: Array<{firstName: string, lastName: string, reason: string}> = [];
 
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-
-        if (i === 0 && (line.toLowerCase().includes('first') || line.toLowerCase().includes('name'))) {
+        const columns = lines[i];
+        if (i === 0 && /^(first[ _]?name)$/i.test(columns[0])) {
           continue;
         }
 
-        const columns = line.split('\t');
         if (columns.length < 2) continue;
 
         const firstName = columns[0].trim();
@@ -212,36 +214,30 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         }
       }
 
-      setPotentialDuplicates(actualDuplicates);
+      return actualDuplicates;
     } catch (error) {
       console.error('Error analyzing TSV for duplicates:', error);
-      setPotentialDuplicates([]);
+      return [];
     }
-  }, [people]);
+  }, [csvData, people]);
 
   // Helper function to analyze TSV data and determine what changes will be made
-  const analyzeTSVData = useCallback((tsvData: string) => {
-    if (!tsvData || people.length === 0 || gatheringTypes.length === 0) {
-      setTsvAnalysis(null);
-      return;
-    }
+  const tsvAnalysis = useMemo(() => {
+    if (!csvData) return null;
 
     try {
-      const lines = tsvData.trim().split('\n');
+      const lines = parsePeopleTable(csvData);
       let newPeople = 0;
       let existingPeople = 0;
       let totalRows = 0;
       const unknownGatherings = new Set<string>();
 
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-
-        if (i === 0 && (line.toLowerCase().includes('first') || line.toLowerCase().includes('name'))) {
+        const columns = lines[i];
+        if (i === 0 && /^(first[ _]?name)$/i.test(columns[0])) {
           continue;
         }
 
-        const columns = line.split('\t');
         if (columns.length < 2) continue;
 
         const firstName = columns[0].trim();
@@ -276,28 +272,19 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         }
       }
 
-      setTsvAnalysis({
+      return {
         newPeople,
         existingPeople,
         unknownGatherings: Array.from(unknownGatherings),
         totalRows
-      });
+      };
     } catch (error) {
       console.error('Error analyzing TSV data:', error);
-      setTsvAnalysis(null);
+      return null;
     }
-  }, [people, gatheringTypes]);
+  }, [csvData, people, gatheringTypes]);
 
-  // Analyze TSV data when it changes
-  useEffect(() => {
-    if (csvData) {
-      analyzeTSVForDuplicates(csvData);
-      analyzeTSVData(csvData);
-    } else {
-      setPotentialDuplicates([]);
-      setTsvAnalysis(null);
-    }
-  }, [csvData, analyzeTSVForDuplicates, analyzeTSVData]);
+  const updateExistingOnly = !!tsvAnalysis?.existingPeople && tsvAnalysis.newPeople === 0;
 
   // Cleanup animation frames on unmount
   useEffect(() => {
@@ -308,6 +295,10 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) setPendingRefresh(null);
+  }, [isOpen]);
+
   // Sync individual mode state when modal opens
   useEffect(() => {
     if (!isOpen) return;
@@ -316,9 +307,11 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
     setIndividualCards([
       { id: Date.now().toString(), firstName: '', lastName: '', isChild: false, siblingGroupId: null }
     ]);
-    setIndividualSelectedGatherings({});
+    const selectedGatherings = initialGatheringId ? { [initialGatheringId]: true } : {};
+    setIndividualSelectedGatherings(selectedGatherings);
+    setAddPeopleForm(value => ({ ...value, selectedGatherings }));
     setShowSiblingPickerFor(null);
-  }, [isOpen, defaultMode, initialMethod, allowManual]);
+  }, [isOpen, defaultMode, initialMethod, allowManual, initialGatheringId]);
 
   // Modal tab slider functions
   const handleModalTabMouseDown = (e: React.MouseEvent) => {
@@ -495,6 +488,26 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
     });
   };
 
+  const finishAdding = async (summary?: PeopleImportSummary) => {
+    try {
+      if (summary) await onSuccess(summary);
+      else await onSuccess();
+      setPendingRefresh(null);
+      onClose();
+    } catch {
+      setPendingRefresh({ summary });
+      setError('People were saved, but the list could not be refreshed.');
+    }
+  };
+
+  const retryRefresh = async () => {
+    if (!pendingRefresh || isLoading) return;
+    setIsLoading(true);
+    setError('');
+    await finishAdding(pendingRefresh.summary);
+    setIsLoading(false);
+  };
+
   const handleAddPeople = async () => {
     let createdFamilyId: number | null = null;
     let createdIndividualIds: number[] = [];
@@ -575,8 +588,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         selectedGatherings: {}
       });
 
-      onClose();
-      await onSuccess();
+      await finishAdding();
 
     } catch (err: any) {
       console.error('Failed to add people:', err);
@@ -656,8 +668,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         await createGroup([card]);
       }
 
-      await onSuccess();
-      onClose();
+      await finishAdding();
     } catch (err: any) {
       console.error('Failed to add individuals:', err);
       // Roll back created individuals and families to avoid orphaned duplicates
@@ -678,36 +689,18 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       setIsLoading(true);
       setError('');
 
-      logger.log('TSV data:', csvData);
-      logger.log('TSV Analysis:', tsvAnalysis);
+      const importData = normalizePeopleTable(csvData);
 
-      let response;
-
-      if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
-        logger.log('Processing TSV for updates - found existing people');
-        response = await csvImportAPI.updateExisting(csvData);
-      } else {
-        const csvBlob = new Blob([csvData], { type: 'text/tsv' });
-        const formData = new FormData();
-        formData.append('file', csvBlob, 'people.tsv');
-
-        response = await csvImportAPI.copyPaste(csvData);
-      }
+      // The replacement endpoint skips unknown people and removes existing
+      // assignments. Mixed sheets use the create endpoint's duplicate checks.
+      const response = updateExistingOnly
+        ? await csvImportAPI.updateExisting(importData)
+        : await csvImportAPI.copyPaste(importData);
 
       logger.log('CSV upload response:', response);
 
-      if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
-        // Show success message for updates
-        // Note: Assuming showSuccess is handled by parent via onSuccess callback
-        // which will trigger a toast
-      }
-
       setCsvData('');
-      setPotentialDuplicates([]);
-      setTsvAnalysis(null);
-
-      onClose();
-      await onSuccess();
+      await finishAdding(importSummary(response.data));
 
     } catch (err: any) {
       console.error('TSV upload failed:', err);
@@ -722,16 +715,15 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       setIsLoading(true);
       setError('');
 
-      logger.log('Sending copy-paste data:', copyPasteData);
+      const importData = normalizePeopleTable(copyPasteData);
 
-      const response = await csvImportAPI.copyPaste(copyPasteData);
+      const response = await csvImportAPI.copyPaste(importData);
 
       logger.log('Copy-paste upload response:', response);
 
       setCopyPasteData('');
 
-      onClose();
-      await onSuccess();
+      await finishAdding(importSummary(response.data));
 
     } catch (err: any) {
       console.error('Copy-paste upload failed:', err);
@@ -743,14 +735,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
   if (!isOpen) return null;
 
-  return createPortal(
-    <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]">
-      <div className="flex items-center justify-center min-h-screen p-4">
-        <div role="dialog" aria-modal="true" aria-label="Add people" className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
+  const content = (
+    <div className={embedded ? '' : 'fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]'}>
+      <div className={embedded ? '' : 'flex items-center justify-center min-h-screen p-4'}>
+        <div role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="Add people" className={embedded ? 'w-full' : 'relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800'}>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
               {addModalMode === 'person' && 'Add New People'}
-              {addModalMode === 'csv' && 'Upload TSV File'}
+              {addModalMode === 'csv' && 'Upload TSV or CSV File'}
               {addModalMode === 'copy-paste' && 'Copy & Paste Data'}
               {addModalMode === 'provider' && 'Import or sync from a provider'}
             </h3>
@@ -763,7 +755,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
             </button>
           </div>
 
-          <div role="tablist" aria-label="Ways to add people" className="mb-6 flex flex-wrap gap-2 border-b border-gray-200 pb-2 dark:border-gray-700">
+          {!pendingRefresh && <div role="tablist" aria-label="Ways to add people" className="mb-6 flex flex-wrap gap-2 border-b border-gray-200 pb-2 dark:border-gray-700">
             {([
               ...(allowManual ? [{ id: 'person', label: 'Add People' }, { id: 'csv', label: 'TSV Upload' }, { id: 'copy-paste', label: 'Copy & Paste' }] : []),
               ...(providerContent ? [{ id: 'provider', label: 'Provider import / sync' }] : []),
@@ -772,17 +764,22 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               className={`rounded-md px-3 py-2 text-sm font-medium ${addModalMode === tab.id ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'}`}>
               {tab.label}
             </button>)}
-          </div>
-          {addModalMode === 'provider' && providerContent}
+          </div>}
+          {!pendingRefresh && addModalMode === 'provider' && providerContent}
 
           {error && (
-            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
+            <div role="alert" className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
               <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
             </div>
           )}
+          {pendingRefresh && (
+            <button type="button" disabled={isLoading} onClick={retryRefresh} className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+              {isLoading ? 'Refreshing…' : 'Retry refresh'}
+            </button>
+          )}
 
           {/* Add People Form */}
-          {addModalMode === 'person' && (
+          {!pendingRefresh && addModalMode === 'person' && (
             <>
             {showModeToggle && (
               <div className="mb-4 flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
@@ -1254,7 +1251,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           )}
 
           {/* TSV Upload Form */}
-          {addModalMode === 'csv' && (
+          {!pendingRefresh && addModalMode === 'csv' && (
             <div className="space-y-4">
               {/* TSV Analysis section - continuing from previous code */}
               {tsvAnalysis && (
@@ -1270,7 +1267,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         Upload Analysis
                       </h3>
                       <div className="mt-2 text-sm text-blue-700 dark:text-blue-300">
-                        <p>Found {tsvAnalysis.totalRows} rows in your TSV file:</p>
+                        <p>Found {tsvAnalysis.totalRows} rows in your spreadsheet:</p>
                         <ul className="mt-2 space-y-1">
                           {tsvAnalysis.newPeople > 0 && (
                             <li className="flex items-center">
@@ -1281,7 +1278,12 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                           {tsvAnalysis.existingPeople > 0 && (
                             <li className="flex items-center">
                               <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
-                              <span className="font-medium text-blue-800">{tsvAnalysis.existingPeople} existing people</span> will be updated
+                              <span>
+                                {tsvAnalysis.existingPeople} {tsvAnalysis.existingPeople === 1 ? 'person matches' : 'people match'} your existing roster.
+                                {' '}{updateExistingOnly
+                                  ? 'Existing gathering assignments will be replaced for rows with valid gatherings.'
+                                  : 'Existing rows will be skipped, including any gathering assignments listed for them.'}
+                              </span>
                             </li>
                           )}
                         </ul>
@@ -1377,18 +1379,21 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
               <div>
                 <label htmlFor="csvFile" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Select TSV File
+                  Select TSV or CSV File
                 </label>
                 <input
                   id="csvFile"
                   type="file"
                   accept=".tsv,.txt,.csv"
+                  disabled={isLoading}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
+                    const currentRead = ++fileRead.current;
+                    setCsvData('');
                     if (file) {
                       const reader = new FileReader();
                       reader.onload = (e) => {
-                        setCsvData(e.target?.result as string);
+                        if (fileRead.current === currentRead) setCsvData(e.target?.result as string);
                       };
                       reader.readAsText(file);
                     }
@@ -1405,6 +1410,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                   <textarea
                     value={csvData}
                     onChange={(e) => setCsvData(e.target.value)}
+                    disabled={isLoading}
                     rows={6}
                     className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="CSV data will appear here..."
@@ -1501,7 +1507,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           )}
 
           {/* Copy & Paste Form */}
-          {addModalMode === 'copy-paste' && (
+          {!pendingRefresh && addModalMode === 'copy-paste' && (
             <div className="space-y-4">
               <div>
                 <label htmlFor="copyPasteData" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -1608,9 +1614,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           )}
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
+  return embedded ? content : createPortal(content, document.body);
 };
 
 export default AddPeopleModal;

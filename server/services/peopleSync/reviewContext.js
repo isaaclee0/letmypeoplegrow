@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { desiredPeopleType } = require('./plan');
 const { canonicalLinkCorrections } = require('./linkCorrections');
+const { buildSinglePersonFamilyName, hasConfirmedNoHousehold } = require('./familyName');
 
 const DECISION_CONTRACT_VERSION = 2;
 
@@ -134,6 +135,16 @@ function createPerson(externalPerson, qualifyingBatches, plannedPeopleType) {
   };
 }
 
+function gatheringAssignments(qualifyingBatches) {
+  const byGathering = new Map();
+  // Match normal roster planning's stable ownership when lists overlap.
+  for (const batch of [...qualifyingBatches].sort((left, right) => left.id - right.id)) {
+    if (batch.enabled === false || !individualId(batch.gatheringTypeId) || byGathering.has(batch.gatheringTypeId)) continue;
+    byGathering.set(batch.gatheringTypeId, { batchId: batch.id, gatheringTypeId: batch.gatheringTypeId });
+  }
+  return [...byGathering.values()];
+}
+
 function establishedLinksForSource(personLinks, sourceExternalIds) {
   const sourceIds = sourceExternalIds instanceof Set
     ? sourceExternalIds
@@ -158,6 +169,8 @@ function buildReviewContext(input = {}) {
   const identities = {};
   for (const id of reviewableExternalIds(input.plan, input.decisionScopeExternalIds)) {
     const candidates = actionCandidates(input.plan, id);
+    const qualifyingBatches = batchesFor(id, input.batches, input.eligibleByBatch);
+    const heldGatherings = held.has(id) ? gatheringAssignments(qualifyingBatches) : [];
     const plannedAddition = (input.plan?.addPeople || [])
       .find((action) => externalId(action?.externalPersonId) === id);
     identities[id] = {
@@ -165,13 +178,25 @@ function buildReviewContext(input = {}) {
       candidateIndividualIds: candidates,
       excludedIndividualIds: excluded.get(id) || [],
       held: held.has(id),
+      // Holds suppress dependent plan actions. Sign their source eligibility
+      // separately so an explicit resolution can assign the roster atomically.
+      ...(heldGatherings.length ? { gatheringAssignments: heldGatherings } : {}),
       canCreate: true,
       createPerson: createPerson(
         externalPeople.get(id),
-        batchesFor(id, input.batches, input.eligibleByBatch),
+        qualifyingBatches,
         plannedAddition?.peopleType || input.createPeopleType,
       ),
     };
+    // A reviewer may choose Create from an ambiguous or previously deferred
+    // identity. Sign its default here so apply can place it in the same sync.
+    const singlePersonFamilyName = input.plan.provider === 'planning_center' && input.plan.authoritative &&
+      input.plan.snapshot?.mode === 'full' && input.completeSnapshot === true &&
+      hasConfirmedNoHousehold(externalPeople.get(id), input.externalFamilies)
+      ? buildSinglePersonFamilyName(externalPeople.get(id)) : '';
+    if (singlePersonFamilyName && identities[id].createPerson) {
+      identities[id].createPerson.singlePersonFamilyName = singlePersonFamilyName;
+    }
   }
   return {
     version: DECISION_CONTRACT_VERSION,

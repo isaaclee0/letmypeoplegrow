@@ -710,3 +710,31 @@ test('POST /people-authority/apply reports committed authority success when post
     assert.equal(body.message, 'Authority applied; refresh status.');
   });
 });
+
+// ─── Kept household / attendance-list differences ("Ask again") ─────────────
+
+test('DELETE /reconciliation-keeps forgets the admin\'s own church\'s keep', async () => {
+  const calls = [];
+  await withServer({ forgetReconciliationKeep: async (input) => { calls.push(input); return true; } },
+    { user: OTHER_CHURCH_ADMIN }, async (base) => {
+      const { status, body } = await requestJson(`${base}/reconciliation-keeps/planning_center/12`, { method: 'DELETE' });
+      assert.equal(status, 200);
+      assert.equal(body.success, true);
+      assert.deepEqual(calls, [{ churchId: OTHER_CHURCH_ADMIN.church_id, provider: 'planning_center', keepId: 12 }]);
+    });
+});
+
+test('DELETE /reconciliation-keeps rejects bad input, reports a missing keep, and is admin-only', async () => {
+  const calls = [];
+  const overrides = { forgetReconciliationKeep: async (input) => { calls.push(input); return false; } };
+  await withServer(overrides, {}, async (base) => {
+    for (const path of ['/reconciliation-keeps/churchsuite/1', '/reconciliation-keeps/elvanto/0', '/reconciliation-keeps/elvanto/abc']) {
+      assert.equal((await requestJson(`${base}${path}`, { method: 'DELETE' })).status, 400);
+    }
+    assert.equal((await requestJson(`${base}/reconciliation-keeps/elvanto/3`, { method: 'DELETE' })).status, 404);
+  });
+  await withServer(overrides, { user: NON_ADMIN_USER }, async (base) => {
+    assert.equal((await requestJson(`${base}/reconciliation-keeps/elvanto/3`, { method: 'DELETE' })).status, 403);
+  });
+  assert.deepEqual(calls, [{ churchId: ADMIN_USER.church_id, provider: 'elvanto', keepId: 3 }]);
+});

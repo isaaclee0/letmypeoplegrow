@@ -1,4 +1,5 @@
 import React from 'react';
+import { AxiosHeaders } from 'axios';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PeopleImportDialog from './PeopleImportDialog';
@@ -81,6 +82,41 @@ describe('PeopleImportDialog', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Connect Planning Center' }));
     await screen.findByRole('alert');
     expect(integrationsAPI.authorizePlanningCenter).toHaveBeenCalledWith('/app/people?import=planning_center&mode=sync');
+  });
+
+  it('returns to the saved onboarding flow after Planning Center OAuth', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterStatus).mockResolvedValue({ data: { connected: false } } as never);
+    vi.mocked(integrationsAPI.authorizePlanningCenter).mockRejectedValueOnce(new Error('Unavailable'));
+    render(<PeopleImportDialog embedded isOpen initialProvider="planning_center" initialMode="sync" returnTo="/app/onboarding" onClose={vi.fn()} onApplied={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Planning Center' }));
+    await screen.findByRole('alert');
+    expect(integrationsAPI.authorizePlanningCenter).toHaveBeenCalledWith('/app/onboarding');
+  });
+
+  it('keeps embedded onboarding open while an import is applying', async () => {
+    const pending = deferred<Awaited<ReturnType<typeof peopleImportAPI.apply>>>();
+    vi.mocked(peopleImportAPI.apply).mockReturnValueOnce(pending.promise);
+    const onClose = vi.fn();
+    render(<PeopleImportDialog embedded isOpen initialProvider="planning_center" returnTo="/app/onboarding" onClose={onClose} onApplied={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'Everyone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review import' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply import' }));
+    await waitFor(() => expect(peopleImportAPI.apply).toHaveBeenCalledOnce());
+    const back = screen.getByRole('button', { name: 'Back' });
+    expect(back).toBeDisabled();
+    fireEvent.click(back);
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => {
+      pending.resolve({
+        data: { runId: 1, status: 'applied', applied: {} as never, summary: review.summary },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+      });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('connects Elvanto inline and continues to source selection without importing', async () => {

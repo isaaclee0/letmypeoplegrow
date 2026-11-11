@@ -18,7 +18,7 @@ test('projectPerson maps attributes and first household id', () => {
   };
   assert.deepStrictEqual(projectPerson(raw), {
     id: '123', firstName: 'Sarah', lastName: 'Wierenga',
-    status: 'active', membership: 'Church Members', child: false, passedBackgroundCheck: null, householdId: 'h1', fieldValues: {},
+    status: 'active', membership: 'Church Members', child: false, passedBackgroundCheck: null, householdId: 'h1', householdIds: ['h1', 'h2'], fieldValues: {},
   });
 });
 
@@ -165,4 +165,46 @@ test('projectPcoHouseholds retains the provider household name in its lean famil
     memberExternalIds: ['p1', 'p2'],
     primaryContactExternalId: 'p1',
   }]);
+});
+
+test('reconciliation preserves explicit empty, unknown and multiple household membership', () => {
+  for (const [relationships, expected] of [
+    [{ households: { data: [] } }, []],
+    [{}, null],
+    [{ households: { data: [{ id: 'h1' }, { id: 'h2' }] } }, ['h1', 'h2']],
+    [{ households: { data: [{ type: 'Household' }] } }, null],
+  ]) {
+    const normalized = toNormalizedPcoPerson(projectPerson({ id: '1', relationships }));
+    assert.deepStrictEqual(normalized.householdIds, expected);
+  }
+});
+
+test('projectPcoHouseholds retains every explicit membership without falling back from unknown or empty membership', () => {
+  const families = projectPcoHouseholds([
+    { id: 'p1', householdId: 'h1', householdIds: ['h2', 'h1', 'h2'] },
+    { id: 'p2', householdId: 'h2', householdIds: [] },
+    { id: 'p3', householdId: 'h2', householdIds: null },
+    { id: 'p4', householdId: 'h1' },
+  ]);
+
+  assert.deepStrictEqual(families, [
+    { id: 'h1', memberExternalIds: ['p1', 'p4'], primaryContactExternalId: null },
+    { id: 'h2', memberExternalIds: ['p1'], primaryContactExternalId: null },
+  ]);
+});
+
+test('projectPcoHouseholds keeps same-name alternatives and display members separate from Person membership evidence', () => {
+  const families = projectPcoHouseholds(
+    [{ id: 'p1', householdId: 'h1', householdIds: ['h1'] }, { id: 'p2', householdIds: null }],
+    new Map([['h1', 'p1'], ['h2', 'p2'], ['h3', 'p3']]),
+    new Map([['h1', 'Lovelace Household'], ['h2', 'Lovelace Household']]),
+    new Map([['h1', ['p2', 'p1', 'p2']], ['h2', ['p2']], ['h4', []]])
+  );
+
+  assert.deepStrictEqual(families, [
+    { id: 'h1', name: 'Lovelace Household', memberExternalIds: ['p1'], householdMemberExternalIds: ['p1', 'p2'], primaryContactExternalId: 'p1' },
+    { id: 'h2', name: 'Lovelace Household', memberExternalIds: [], householdMemberExternalIds: ['p2'], primaryContactExternalId: 'p2' },
+    { id: 'h3', memberExternalIds: [], primaryContactExternalId: 'p3' },
+    { id: 'h4', memberExternalIds: [], householdMemberExternalIds: [], primaryContactExternalId: null },
+  ]);
 });

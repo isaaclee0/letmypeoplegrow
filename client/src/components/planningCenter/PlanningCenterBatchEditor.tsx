@@ -7,15 +7,16 @@ import { ordinalDay } from '../../utils/pcoSchedule';
 import { isRetiredLegacyBatchError, planningCenterBatchErrorMessage, RETIRED_LEGACY_BATCH_MESSAGE } from '../../utils/pcoBatchError';
 
 interface GatheringOption { id: number; name: string; }
-interface Props { batch: PeopleSyncBatch | null; onSaved: (batch: PeopleSyncBatch) => void; onCancel: () => void; defaultScheduleEnabled?: boolean; defaultGatheringAutoRemoveEnabled?: boolean; createLabel?: string; }
+interface Props { batch: PeopleSyncBatch | null; onSaved: (batch: PeopleSyncBatch) => void; onCancel: () => void; defaultScheduleEnabled?: boolean; defaultGatheringAutoRemoveEnabled?: boolean; defaultGatheringId?: number; createLabel?: string; }
 type CreatePayload = PlanningCenterSyncBatchInput & SourceSelection;
 
-export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved, onCancel, defaultScheduleEnabled = false, defaultGatheringAutoRemoveEnabled = false, createLabel = 'Create batch' }: Props) {
+export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved, onCancel, defaultScheduleEnabled = false, defaultGatheringAutoRemoveEnabled = false, defaultGatheringId, createLabel = 'Create batch' }: Props) {
   const [currentBatch, setCurrentBatch] = useState<PeopleSyncBatch | null>(initialBatch);
   const [defaultPeopleType, setDefaultPeopleType] = useState<PeopleType>(initialBatch?.defaultPeopleType ?? 'regular');
   const [gatherings, setGatherings] = useState<GatheringOption[]>([]);
-  const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(initialBatch?.gatheringTypeId ? 'existing' : 'none');
-  const [gatheringTypeId, setGatheringTypeId] = useState<number | null>(initialBatch?.gatheringTypeId ?? null);
+  const initialGatheringId = initialBatch ? initialBatch.gatheringTypeId : defaultGatheringId ?? null;
+  const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(initialGatheringId ? 'existing' : 'none');
+  const [gatheringTypeId, setGatheringTypeId] = useState(initialGatheringId);
   const [newGatheringName, setNewGatheringName] = useState('');
   const [createdGathering, setCreatedGathering] = useState<{ id: number; name: string } | null>(null);
   const [gatheringAutoRemoveEnabled, setGatheringAutoRemoveEnabled] = useState(initialBatch?.gatheringAutoRemoveEnabled ?? defaultGatheringAutoRemoveEnabled);
@@ -68,6 +69,6 @@ export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved
     {gatheringMode !== 'none' && <GatheringAutoRemoveControl checked={gatheringAutoRemoveEnabled} disabled={gatheringMode === 'existing' && gatheringTypeId === null} onChange={setGatheringAutoRemoveEnabled} />}
     <div><p className="mb-2 text-sm font-medium">Schedule</p><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} disabled={sourceReviewPending} onChange={e => setScheduleEnabled(e.target.checked)} />Runs automatically</label>{currentBatch?.operationalState === 'prepared' && <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">Scheduled runs start only after authority activation.</p>}{sourceReviewPending && <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">Scheduled runs are blocked until you complete a full review.</p>}{scheduleEnabled && <div className="mt-2 flex flex-wrap gap-2"><select aria-label="Schedule frequency" value={scheduleFrequency} disabled={sourceReviewPending} onChange={e => changeFrequency(e.target.value as 'daily' | 'weekly' | 'monthly')}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>{scheduleFrequency === 'weekly' && <select aria-label="Schedule day" value={scheduleDay} disabled={sourceReviewPending} onChange={e => setScheduleDay(Number(e.target.value))}>{['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((day, i) => <option key={day} value={i}>{day}</option>)}</select>}{scheduleFrequency === 'monthly' && <select aria-label="Schedule day" value={scheduleDay} disabled={sourceReviewPending} onChange={e => setScheduleDay(Number(e.target.value))}>{Array.from({ length: 31 }, (_, i) => i + 1).map(day => <option key={day} value={day}>{ordinalDay(day)}</option>)}</select>}</div>}</div>
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-    <div className="flex gap-3"><button type="button" onClick={() => void save()} disabled={saving} className="rounded bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? 'Saving…' : currentBatch ? 'Save batch' : createLabel}</button><button type="button" onClick={onCancel} className="text-sm underline">Cancel</button></div>
+    <div className="flex gap-3"><button type="button" onClick={() => void save()} disabled={saving} className="rounded bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? 'Saving…' : currentBatch ? 'Save batch' : createLabel}</button><button type="button" onClick={onCancel} disabled={saving} className="text-sm underline disabled:opacity-50">Cancel</button></div>
   </div>;
 }

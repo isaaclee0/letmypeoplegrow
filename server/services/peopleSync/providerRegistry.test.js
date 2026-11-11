@@ -109,3 +109,9 @@ test('validateAdapter rejects own symbol properties', () => {
     { message: 'Provider planning_center has unexpected symbol property' }
   );
 });
+
+test('the real PCO adapter registers its optional read-only reconciliation directory capability', () => {
+  const { createPcoAdapter } = require('./pcoAdapter');
+  assert.doesNotThrow(() => validateAdapter(createPcoAdapter()));
+  assert.throws(() => validateAdapter(adapter('planning_center', { fetchReconciliationSnapshot: true })), /fetchReconciliationSnapshot/);
+});

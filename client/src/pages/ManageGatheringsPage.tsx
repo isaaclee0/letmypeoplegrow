@@ -4,8 +4,9 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useChurchTime } from '../hooks/useChurchTime';
 import { addDateOnly } from '../utils/churchTime';
-import { useNavigate } from 'react-router-dom';
-import { gatheringsAPI, onboardingAPI, kioskAPI, settingsAPI } from '../services/api';
+import { getCustomGatheringDates } from '../utils/customGatheringDates';
+import { Link, useNavigate } from 'react-router-dom';
+import { gatheringsAPI, onboardingAPI, settingsAPI } from '../services/api';
 import logger from '../utils/logger';
 import SampleDataBanner from '../components/SampleDataBanner';
 import {
@@ -42,6 +43,7 @@ interface Gathering {
     };
   };
   kioskEnabled?: boolean;
+  kioskMessage?: string;
   leaderCheckinEnabled?: boolean;
   individualMode?: boolean;
   requiresBackgroundCheck?: boolean;
@@ -71,7 +73,6 @@ interface CreateGatheringData {
       customDates?: string[];
     };
   };
-  kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
   individualMode?: boolean;
   requiresBackgroundCheck?: boolean;
@@ -85,51 +86,22 @@ function weekdayForDateOnly(date: string): string {
     .format(new Date(`${date}T12:00:00Z`));
 }
 
-function dateOnlyForDayOfMonth(monthStart: string, dayOfMonth: number): string | null {
-  const nextMonthStart = addDateOnly(monthStart, { months: 1 });
-  const lastDay = Number(addDateOnly(nextMonthStart, { days: -1 }).slice(-2));
-  return dayOfMonth <= lastDay ? `${monthStart.slice(0, 8)}${String(dayOfMonth).padStart(2, '0')}` : null;
-}
-
 export function generateGatheringOccurrences(gathering: Gathering, churchToday: string): Array<{ date: string; canDelete: boolean }> {
   const occurrences: Array<{ date: string; canDelete: boolean }> = [];
   const futureDate = addDateOnly(churchToday, { months: 3 });
-  const include = (date: string) => date >= churchToday && date <= futureDate;
+  if (gathering.customSchedule) {
+    return getCustomGatheringDates(gathering.customSchedule, churchToday, futureDate)
+      .map(date => ({ date, canDelete: true }));
+  }
 
-  if (gathering.attendanceType === 'headcount' && gathering.customSchedule) {
-    const { customSchedule } = gathering;
-    if (customSchedule.type === 'one_off') {
-      if (include(customSchedule.startDate)) occurrences.push({ date: customSchedule.startDate, canDelete: true });
-    } else if (customSchedule.pattern) {
-      const endDate = customSchedule.endDate && customSchedule.endDate < futureDate ? customSchedule.endDate : futureDate;
-      const pattern = customSchedule.pattern;
-      if (pattern.frequency === 'monthly' && pattern.dayOfMonth) {
-        let monthStart = `${customSchedule.startDate.slice(0, 7)}-01`;
-        while (monthStart <= endDate) {
-          const candidate = dateOnlyForDayOfMonth(monthStart, pattern.dayOfMonth);
-          if (candidate && candidate >= customSchedule.startDate && include(candidate)) occurrences.push({ date: candidate, canDelete: true });
-          monthStart = addDateOnly(monthStart, { months: pattern.interval || 1 });
-        }
-      } else {
-        let currentDate = customSchedule.startDate;
-        while (currentDate <= endDate) {
-          const isIncluded = pattern.frequency === 'daily'
-            || (pattern.frequency === 'weekly' && !!pattern.daysOfWeek?.includes(weekdayForDateOnly(currentDate)));
-          if (isIncluded && include(currentDate)) occurrences.push({ date: currentDate, canDelete: true });
-          currentDate = addDateOnly(currentDate, { days: pattern.frequency === 'daily' ? (pattern.interval || 1) : 1 });
-        }
-      }
-    }
-  } else {
-    const targetDay = WEEKDAY_NAMES.indexOf(gathering.dayOfWeek || 'Sunday');
-    let currentDate = churchToday;
-    while (weekdayForDateOnly(currentDate) !== WEEKDAY_NAMES[targetDay]) currentDate = addDateOnly(currentDate, { days: 1 });
-    while (currentDate <= futureDate) {
-      occurrences.push({ date: currentDate, canDelete: true });
-      currentDate = gathering.frequency === 'monthly'
-        ? addDateOnly(currentDate, { months: 1 })
-        : addDateOnly(currentDate, { days: gathering.frequency === 'biweekly' ? 14 : 7 });
-    }
+  const targetDay = WEEKDAY_NAMES.indexOf(gathering.dayOfWeek || 'Sunday');
+  let currentDate = churchToday;
+  while (weekdayForDateOnly(currentDate) !== WEEKDAY_NAMES[targetDay]) currentDate = addDateOnly(currentDate, { days: 1 });
+  while (currentDate <= futureDate) {
+    occurrences.push({ date: currentDate, canDelete: true });
+    currentDate = gathering.frequency === 'monthly'
+      ? addDateOnly(currentDate, { months: 1 })
+      : addDateOnly(currentDate, { days: gathering.frequency === 'biweekly' ? 14 : 7 });
   }
 
   return occurrences;
@@ -163,7 +135,6 @@ const ManageGatheringsPage: React.FC = () => {
     frequency: 'weekly',
     attendanceType: 'standard' as 'standard' | 'headcount',
     customSchedule: undefined as any,
-    kioskEnabled: false,
     leaderCheckinEnabled: false,
     requiresBackgroundCheck: false,
     customDatesText: '' as string,
@@ -177,7 +148,6 @@ const ManageGatheringsPage: React.FC = () => {
     endTime: '11:00',
     frequency: 'weekly',
     attendanceType: 'standard',
-    kioskEnabled: false,
     leaderCheckinEnabled: false,
     individualMode: false,
     requiresBackgroundCheck: false,
@@ -210,18 +180,10 @@ const ManageGatheringsPage: React.FC = () => {
   // Selection state
   const [selectedGatherings, setSelectedGatherings] = useState<number[]>([]);
 
-  // Self check-in / kiosk mode is off unless KIOSK_MODE_ENABLED=true on the server
-  const [kioskModeEnabled, setKioskModeEnabled] = useState(false);
   const [backgroundCheckTrackingEnabled, setBackgroundCheckTrackingEnabled] = useState(false);
 
   useEffect(() => {
     loadGatherings();
-  }, []);
-
-  useEffect(() => {
-    kioskAPI.getStatus()
-      .then(response => setKioskModeEnabled(!!response.data.enabled))
-      .catch(() => setKioskModeEnabled(false));
   }, []);
 
   useEffect(() => {
@@ -246,11 +208,6 @@ const ManageGatheringsPage: React.FC = () => {
       const response = await gatheringsAPI.getAll();
       const gatherings = response.data.gatherings || [];
       setGatherings(gatherings);
-
-      // Auto-open the add wizard when there are no gatherings (new account / first run)
-      if (gatherings.length === 0) {
-        setShowAddGatheringWizard(true);
-      }
 
       // Check if user has gatherings but they have very few people (likely a new user) - show arrow prompt
       if (gatherings.length > 0) {
@@ -283,7 +240,6 @@ const ManageGatheringsPage: React.FC = () => {
       endTime: '11:00',
       frequency: 'weekly',
       attendanceType: 'standard',
-      kioskEnabled: false,
       leaderCheckinEnabled: false,
       individualMode: false,
       requiresBackgroundCheck: false,
@@ -335,10 +291,11 @@ const ManageGatheringsPage: React.FC = () => {
         description: createGatheringData.description,
         dayOfWeek: createGatheringData.dayOfWeek,
         startTime: formattedStartTime,
+        endTime: createGatheringData.endTime || undefined,
         frequency: createGatheringData.frequency,
         attendanceType: createGatheringData.attendanceType,
         customSchedule: createGatheringData.customSchedule,
-        kioskEnabled: createGatheringData.kioskEnabled,
+        kioskEnabled: false,
         leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled,
         individualMode: createGatheringData.individualMode,
         requiresBackgroundCheck: createGatheringData.requiresBackgroundCheck,
@@ -382,6 +339,7 @@ const ManageGatheringsPage: React.FC = () => {
         description: gatheringData.description,
         dayOfWeek: gatheringData.dayOfWeek,
         startTime: gatheringData.startTime,
+        endTime: gatheringData.endTime,
         frequency: gatheringData.frequency,
         attendanceType: gatheringData.attendanceType,
         customSchedule: gatheringData.customSchedule,
@@ -445,7 +403,6 @@ const ManageGatheringsPage: React.FC = () => {
       frequency: isCustomDates ? 'custom' : gathering.frequency,
       attendanceType: gathering.attendanceType,
       customSchedule: isCustomDates ? undefined : gathering.customSchedule,
-      kioskEnabled: gathering.kioskEnabled || false,
       leaderCheckinEnabled: gathering.leaderCheckinEnabled || false,
       requiresBackgroundCheck: gathering.requiresBackgroundCheck || false,
       customDatesText: isCustomDates
@@ -459,7 +416,11 @@ const ManageGatheringsPage: React.FC = () => {
     if (!editingGathering) return;
 
     try {
-      let updateData: any = { ...editFormData };
+      let updateData = {
+        ...editFormData,
+        kioskEnabled: editingGathering.kioskEnabled,
+        kioskMessage: editingGathering.kioskMessage,
+      };
       if (editFormData.attendanceType === 'standard' && editFormData.frequency === 'custom') {
         const dates = (editFormData.customDatesText || '')
           .split('\n')
@@ -727,9 +688,14 @@ const ManageGatheringsPage: React.FC = () => {
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Get started by creating your first gathering.
               </p>
-              {user?.role === 'admin' && (
-                <div className="mt-6">
-                  <p className="text-sm text-gray-400 dark:text-gray-500 mb-3">&mdash; or &mdash;</p>
+              {user?.role === 'admin' && user.isChurchApproved !== false && (
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                  <Link
+                    to="/app/onboarding?start=1"
+                    className="inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                  >
+                    Start setup
+                  </Link>
                   <button
                     onClick={async () => {
                       setIsLoadingSampleData(true);
@@ -750,14 +716,6 @@ const ManageGatheringsPage: React.FC = () => {
                   </button>
                 </div>
               )}
-              {/* Prominent guidance to add button */}
-              <div className="hidden sm:block">
-                <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">
-                  <div className="bg-white/90 dark:bg-gray-800/95 backdrop-blur rounded-lg shadow-lg dark:shadow-none border border-primary-200 dark:border-primary-700 px-4 h-14 flex items-center justify-center text-primary-800 dark:text-primary-200 animate-slide-right mr-2">
-                    <p className="text-base font-semibold whitespace-nowrap">Add Gathering Here</p>
-                  </div>
-                </div>
-              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3">
@@ -950,7 +908,7 @@ const ManageGatheringsPage: React.FC = () => {
                 </div>
 
                 {/* Frequency selector for standard gatherings */}
-                {editFormData.attendanceType === 'standard' && (
+                {editFormData.attendanceType === 'standard' && !editFormData.customSchedule && (
                   <div>
                     <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Schedule *
@@ -977,7 +935,7 @@ const ManageGatheringsPage: React.FC = () => {
                 )}
 
                 {/* Regular schedule fields for standard (non-custom) or headcount without custom schedule */}
-                {(editFormData.attendanceType === 'standard' ? editFormData.frequency !== 'custom' : !editFormData.customSchedule) && (
+                {!editFormData.customSchedule && editFormData.frequency !== 'custom' && (
                   <>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {editFormData.attendanceType === 'standard' && (
@@ -1129,24 +1087,6 @@ const ManageGatheringsPage: React.FC = () => {
                 {editFormData.attendanceType === 'standard' && (
                   <div className="space-y-3">
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Check-in Modes</label>
-                    {kioskModeEnabled && (
-                      <div>
-                        <label className="flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={editFormData.kioskEnabled || false}
-                            onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                          />
-                          <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                            Self Check-in
-                          </span>
-                        </label>
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
-                          Self-service / kiosk mode where individuals check themselves in.
-                        </p>
-                      </div>
-                    )}
                     <div>
                       <label className="flex items-center cursor-pointer">
                         <input
@@ -1181,17 +1121,16 @@ const ManageGatheringsPage: React.FC = () => {
                         </p>
                       </div>
                     )}
-                    {(editFormData.kioskEnabled || editFormData.leaderCheckinEnabled) && (
+                    {editFormData.leaderCheckinEnabled && (
                       <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">
                         Uses the gathering's end time to close sign-in.
-                        {editFormData.kioskEnabled && editFormData.leaderCheckinEnabled && ' Both modes will be available on the check-ins page.'}
                       </p>
                     )}
                   </div>
                 )}
 
-                {/* Custom Schedule Display for Headcount Gatherings */}
-                {editFormData.attendanceType === 'headcount' && editFormData.customSchedule && (
+                {/* Existing custom schedule */}
+                {editFormData.customSchedule && (
                   <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg border dark:border-blue-800">
                     <h4 className="text-sm font-medium text-blue-900 dark:text-blue-300 mb-2">Custom Schedule</h4>
                     <div className="text-sm text-blue-700 dark:text-blue-300">
@@ -1377,24 +1316,6 @@ const ManageGatheringsPage: React.FC = () => {
                   {createGatheringData.attendanceType === 'standard' && (
                     <div className="space-y-3">
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Check-in Modes</label>
-                      {kioskModeEnabled && (
-                        <div>
-                          <label className="flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={createGatheringData.kioskEnabled || false}
-                              onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                            />
-                            <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                              Self Check-in
-                            </span>
-                          </label>
-                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
-                            Self-service / kiosk mode where individuals check themselves in.
-                          </p>
-                        </div>
-                      )}
                       <div>
                         <label className="flex items-center cursor-pointer">
                           <input
@@ -1429,10 +1350,9 @@ const ManageGatheringsPage: React.FC = () => {
                           </p>
                         </div>
                       )}
-                      {(createGatheringData.kioskEnabled || createGatheringData.leaderCheckinEnabled) && (
+                      {createGatheringData.leaderCheckinEnabled && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">
                           Uses the gathering's end time to close sign-in.
-                          {createGatheringData.kioskEnabled && createGatheringData.leaderCheckinEnabled && ' Both modes will be available on the check-ins page.'}
                         </p>
                       )}
                     </div>

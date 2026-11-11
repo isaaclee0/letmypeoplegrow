@@ -35,4 +35,41 @@ describe('generateGatheringOccurrences', () => {
 
     expect(occurrences.map(({ date }) => date)).toEqual(['2026-01-31', '2026-03-31']);
   });
+
+  it('shows only the explicit custom dates as manageable occurrences', () => {
+    const occurrences = generateGatheringOccurrences({
+      id: 1,
+      name: 'Holiday club',
+      description: '',
+      attendanceType: 'headcount',
+      isActive: true,
+      customSchedule: {
+        type: 'recurring',
+        startDate: '2027-03-01',
+        pattern: { frequency: 'daily', interval: 1, customDates: ['2027-03-01', '2027-03-12'] },
+      },
+    }, '2027-03-02');
+
+    expect(occurrences).toEqual([{ date: '2027-03-12', canDelete: true }]);
+  });
+
+  it('honors both the interval and end date for a custom fortnightly schedule', () => {
+    const occurrences = generateGatheringOccurrences({
+      id: 1,
+      name: 'Holiday club',
+      description: '',
+      attendanceType: 'headcount',
+      isActive: true,
+      customSchedule: {
+        type: 'recurring',
+        startDate: '2027-03-01',
+        endDate: '2027-04-28',
+        pattern: { frequency: 'biweekly', interval: 2, daysOfWeek: ['Monday', 'Wednesday'] },
+      },
+    }, '2027-03-02');
+
+    expect(occurrences.map(({ date }) => date)).toEqual([
+      '2027-03-03', '2027-03-29', '2027-03-31', '2027-04-26', '2027-04-28',
+    ]);
+  });
 });

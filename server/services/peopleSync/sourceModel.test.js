@@ -186,3 +186,11 @@ test('authority source-set digest binds participating batch state, source identi
     ), baseline);
   }
 });
+
+test('snapshot digest binds known versus unknown and multiple household memberships and family member lists', () => {
+  const base = snapshot();
+  for (const householdIds of [[], ['house'], ['house', 'other']]) {
+    assert.notEqual(digestSourceSnapshot(base), digestSourceSnapshot({ ...base, people: [{ ...base.people[0], householdIds }, base.people[1]] }));
+  }
+  assert.notEqual(digestSourceSnapshot(base), digestSourceSnapshot({ ...base, families: [{ ...base.families[0], memberExternalIds: ['different'] }, base.families[1]] }));
+});

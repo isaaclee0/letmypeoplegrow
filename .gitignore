@@ -160,3 +160,6 @@ docker-compose.dev.yml
 
 # Agent-managed isolated worktrees
 .worktrees/
+
+# Local-only review fixtures built from gitignored backups (contain real names)
+client/src/dev/fixtures/*.local.json

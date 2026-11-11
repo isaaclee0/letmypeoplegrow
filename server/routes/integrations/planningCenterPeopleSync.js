@@ -13,6 +13,7 @@ const defaultDeps = {
   routeTimeoutMs: DEFAULT_ROUTE_TIMEOUT_MS,
   buildReview: orchestrator.buildReview,
   previewLinkCorrections: orchestrator.previewLinkCorrections,
+  previewHouseholdChoices: orchestrator.previewHouseholdChoices,
   applyReviewed: orchestrator.applyReviewed,
 };
 
@@ -48,9 +49,10 @@ function createPlanningCenterPeopleSyncRouter(overrides = {}) {
   router.use(requireRole(['admin']));
   router.use(ensureChurchIsolation);
 
-  router.get('/sync-batches/:id/plan', async (req, res) => {
-    const batchId = parseBatchId(req.params.id);
-    if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
+  router.get(['/sync/plan', '/sync-batches/:id/plan'], async (req, res) => {
+    const integrationScope = req.params.id === undefined;
+    const batchId = integrationScope ? null : parseBatchId(req.params.id);
+    if (!integrationScope && batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
     try {
       const review = await withTimeout(deps.buildReview({
         churchId: req.user.church_id,
@@ -64,12 +66,13 @@ function createPlanningCenterPeopleSyncRouter(overrides = {}) {
     }
   });
 
-  router.post('/sync-batches/:id/preview-link-corrections', async (req, res) => {
-    const batchId = parseBatchId(req.params.id);
+  router.post(['/sync/preview-link-corrections', '/sync-batches/:id/preview-link-corrections'], async (req, res) => {
+    const integrationScope = req.params.id === undefined;
+    const batchId = integrationScope ? null : parseBatchId(req.params.id);
     const baseReviewToken = typeof req.body?.baseReviewToken === 'string'
       ? req.body.baseReviewToken.trim()
       : '';
-    if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
+    if (!integrationScope && batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
     if (!baseReviewToken) {
       return res.status(400).json({
         error: 'A base review token is required.',
@@ -96,9 +99,30 @@ function createPlanningCenterPeopleSyncRouter(overrides = {}) {
     }
   });
 
-  router.post('/sync-batches/:id/apply', async (req, res) => {
-    const batchId = parseBatchId(req.params.id);
-    if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
+  router.post(['/sync/preview-household-choices', '/sync-batches/:id/preview-household-choices'], async (req, res) => {
+    const integrationScope = req.params.id === undefined;
+    const batchId = integrationScope ? null : parseBatchId(req.params.id);
+    const baseReviewToken = typeof req.body?.baseReviewToken === 'string' ? req.body.baseReviewToken.trim() : '';
+    if (!integrationScope && batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
+    if (!baseReviewToken) return res.status(400).json({ error: 'A base review token is required.', code: 'SYNC_REVIEW_TOKEN_REQUIRED' });
+    if (!isPlainObject(req.body?.householdChoices)) {
+      return res.status(400).json({ error: 'Household choices must be an object.', code: 'SYNC_SELECTIONS_INVALID' });
+    }
+    try {
+      const result = await withTimeout(deps.previewHouseholdChoices({
+        churchId: req.user.church_id, provider: PROVIDER, batchId,
+        baseReviewToken, householdChoices: req.body.householdChoices,
+      }), deps.routeTimeoutMs);
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      return respondWithError(res, error, 'planning-center POST household choice preview');
+    }
+  });
+
+  router.post(['/sync/apply', '/sync-batches/:id/apply'], async (req, res) => {
+    const integrationScope = req.params.id === undefined;
+    const batchId = integrationScope ? null : parseBatchId(req.params.id);
+    if (!integrationScope && batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
     const reviewToken = typeof req.body?.reviewToken === 'string' ? req.body.reviewToken.trim() : '';
     if (!reviewToken) {
       return res.status(400).json({
@@ -111,6 +135,7 @@ function createPlanningCenterPeopleSyncRouter(overrides = {}) {
         churchId: req.user.church_id,
         provider: PROVIDER,
         batchId,
+        ...(integrationScope ? { operationKind: 'people_sync' } : {}),
         reviewToken,
         selections: req.body?.selections || {},
         userId: req.user.id,

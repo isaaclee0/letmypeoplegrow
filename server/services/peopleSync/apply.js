@@ -7,8 +7,10 @@ const batchRepository = require('./batchRepository');
 const { replacePendingIdentityObservationsWithConnection } = require('./pendingIdentityProjection');
 const { digestSourceIdentity } = require('./sourceModel');
 const { BUCKETS } = require('./plan');
+const { assertReconciliationAuthority, applyReviewedFamilies, removeReviewedLegacyMembership, persistReconciliationKeeps } = require('./reconciliationApply');
 const { buildLocalIdentityDigest } = require('./reviewContext');
 const { digestPlan, digestReviewToken } = require('./planDigest');
+const { validateHouseholdChoiceSelections, assertHouseholdChoicesWithConnection, persistHouseholdChoicesWithConnection } = require('./householdChoiceApply');
 const {
   validateDestructiveSelections,
   validateIdentityDecisions,
@@ -159,8 +161,9 @@ async function assertLocalIdentityContextWithConnection(conn, churchId, provider
 // The returned result object shares summarizePlan's bucket KEYS, but each
 // count means "actions actually applied this call", not "plan bucket size" —
 // the two can and do diverge. Review-only buckets (ambiguousPeople,
-// familyConflicts, unmatchedLocalRegulars, skipped) always stay 0 here since
-// apply never mutates anything directly off them; their resolutions surface
+// unmatchedLocalRegulars, skipped) always stay 0 here since
+// apply never mutates anything directly off them. Selected familyConflicts
+// resolutions count here and also in moveFamily/addFamilies/linkFamilies. Other resolutions surface
 // through other counters instead (e.g. an accepted ambiguousPeople selection
 // increments linkPeople, not ambiguousPeople). linkPeople itself can be
 // LARGER than plan.linkPeople.length (accepted ambiguous/visitor selections
@@ -260,6 +263,8 @@ function validateLegacySelections(plan, selections = {}) {
 }
 
 function validateSelections(plan, selections = {}) {
+  if (!plan || typeof plan !== 'object') throw new Error('A plan is required to validate selections against');
+  validateHouseholdChoiceSelections(plan, selections);
   if (plan?.reviewContext?.version === 2) {
     if (selections?.decisionContractVersion !== 2) {
       throw new Error('A signed version 2 plan requires decision contract version 2 selections');
@@ -327,6 +332,65 @@ function planWithReviewedArchiveSelections(plan, accepted) {
       accepted.acceptedArchiveIndividualIds.has(action.individualId)
     ),
   };
+}
+
+async function outsideSourceLinksWithConnection(conn, { churchId, provider, plan, accepted, reviewedApply, allowedMutationBuckets }) {
+  const actions = asArray(plan.archive).filter((action) => action.reason === 'outside_all_sync_sources' &&
+    accepted.acceptedArchiveIndividualIds.has(action.individualId));
+  if (!actions.length) return [];
+  if (provider !== 'planning_center' || !plan.authoritative || accepted.contractVersion !== 2 ||
+      reviewedApply?.operationKind !== 'people_sync' || allowedMutationBuckets !== null) {
+    throw reviewedApplyError('SYNC_REVIEW_INVALID', 'Linking and archiving outside-list people requires a full signed sync review.', 400);
+  }
+  const links = [];
+  const claimedExternal = new Set();
+  const claimedLocal = new Set();
+  for (const action of actions) {
+    const { individualId, externalPersonId, linkRequired } = action;
+    if (!Number.isSafeInteger(individualId) || individualId <= 0 || typeof externalPersonId !== 'string' ||
+        !externalPersonId || typeof linkRequired !== 'boolean' || claimedExternal.has(externalPersonId) || claimedLocal.has(individualId) ||
+        accepted.linkActions.some((link) => link.externalPersonId === externalPersonId || link.individualId === individualId)) {
+      throw reviewedApplyError('SYNC_REVIEW_INVALID', 'The outside-list identity decision conflicts with another action.', 400);
+    }
+    claimedExternal.add(externalPersonId); claimedLocal.add(individualId);
+    const [person] = await conn.query('SELECT is_active, people_type, planning_center_id FROM individuals WHERE church_id = ? AND id = ?', [churchId, individualId]);
+    const existing = await conn.query(`SELECT external_person_id, individual_id FROM external_person_links
+      WHERE church_id = ? AND provider = ? AND (external_person_id = ? OR individual_id = ?)`,
+    [churchId, provider, externalPersonId, individualId]);
+    const expectedLink = existing.length === 1 && existing[0].external_person_id === externalPersonId && existing[0].individual_id === individualId;
+    if (!person || !person.is_active || person.people_type !== 'regular' ||
+        (linkRequired ? existing.length !== 0 || !!person.planning_center_id
+          : !expectedLink || !!person.planning_center_id && person.planning_center_id !== externalPersonId)) {
+      throw reviewedApplyError('SYNC_PLAN_STALE', 'The outside-list person or their PCO identity link changed.');
+    }
+    if (linkRequired) links.push({ externalPersonId, individualId, linkSource: 'manual' });
+  }
+  return links;
+}
+
+function planWithResolvedHeldGatherings(plan, accepted) {
+  if (accepted.contractVersion !== 2) return plan;
+  const resolved = new Map(accepted.linkActions.map((action) => [action.externalPersonId, action.individualId]));
+  for (const externalPersonId of accepted.createExternalIds) resolved.set(externalPersonId, null);
+  const additions = [...asArray(plan.addToGathering)];
+  const seen = new Set(additions.map((action) => `${action.externalPersonId}\u0000${action.gatheringTypeId}`));
+  for (const [externalPersonId, individualId] of resolved) {
+    const identity = plan.reviewContext.identities[externalPersonId];
+    if (!identity?.held) continue;
+    for (const assignment of asArray(identity.gatheringAssignments)) {
+      const batchId = toPositiveInt(assignment.batchId, 'Held identity batch ID');
+      const gatheringTypeId = toPositiveInt(assignment.gatheringTypeId, 'Held identity gathering ID');
+      const key = `${externalPersonId}\u0000${gatheringTypeId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      additions.push({
+        id: `addToGathering:${batchId}:${gatheringTypeId}:${encodeURIComponent(externalPersonId)}:resolved`,
+        batchId, gatheringTypeId, externalPersonId, individualId,
+        reason: 'resolved_deferred_identity',
+      });
+    }
+  }
+  return { ...plan, addToGathering: additions };
 }
 
 function assertAllowedMutationBuckets(plan, allowed) {
@@ -478,13 +542,13 @@ async function applyPeopleSyncPlan({
     if (sourceExpectations) {
       await batchRepository.assertSourceExpectationsWithConnection(conn, {
         churchId, provider, expectations: sourceExpectations,
-        requireExactSet: activateAuthority === true,
+        requireExactSet: activateAuthority === true || plan.sourceContext?.requireExactBatchSet === true,
       });
     }
     if (batchConfigurationExpectation) {
       const signedConfigurationDigest = plan.sourceContext?.batchConfigurationDigest;
       if (signedConfigurationDigest !== batchConfigurationExpectation.configurationDigest ||
-          batchConfigurationExpectation.requireExactSet !== (activateAuthority === true)) {
+          batchConfigurationExpectation.requireExactSet !== (activateAuthority === true || plan.sourceContext?.requireExactBatchSet === true)) {
         throw reviewedApplyError(
           'SYNC_PLAN_STALE',
           'The reviewed sync batch configuration changed before apply.'
@@ -569,12 +633,16 @@ async function applyPeopleSyncPlan({
       });
       await assertLocalIdentityContextWithConnection(conn, churchId, provider, plan.reviewContext);
     }
-    const applicablePlan = planWithReviewedArchiveSelections(
-      planWithSuppressedSuggestions(plan, accepted),
+    const applicablePlan = planWithResolvedHeldGatherings(
+      planWithReviewedArchiveSelections(planWithSuppressedSuggestions(plan, accepted), accepted),
       accepted
     );
+    assertAllowedMutationBuckets(applicablePlan, allowedMutationBuckets);
     await enforceAuthorityLock(conn, churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
 
+    await assertReconciliationAuthority(conn, { churchId, provider, plan, accepted, reviewedApply, activateAuthority });
+    await assertHouseholdChoicesWithConnection(conn, { churchId, provider, plan, selections, reviewedApply, allowedMutationBuckets, accepted });
+    const outsideSourceLinks = await outsideSourceLinksWithConnection(conn, { churchId, provider, plan: applicablePlan, accepted, reviewedApply, allowedMutationBuckets });
     const result = emptyResult();
 
     if (accepted.contractVersion === 2) {
@@ -596,9 +664,10 @@ async function applyPeopleSyncPlan({
     // auto-linked-then-archived person (see plan.js's carried-forward note)
     // ends up linked, then archived — not archived against a link that
     // doesn't exist yet.
-    const linkActions = accepted.contractVersion === 2
+    const identityLinks = accepted.contractVersion === 2
       ? accepted.linkActions
       : [...asArray(plan.linkPeople).filter((a) => !a.reviewRequired), ...accepted.acceptedLinks];
+    const linkActions = [...identityLinks, ...outsideSourceLinks];
     for (const action of linkActions) {
       await linkRepository.upsertPersonLinkWithConnection(conn, {
         churchId, provider, externalPersonId: action.externalPersonId,
@@ -612,6 +681,8 @@ async function applyPeopleSyncPlan({
       }
       result.linkPeople++;
     }
+
+    await applyReviewedFamilies(conn, { churchId, provider, plan, accepted, userId, result, markLinksSeen });
 
     // 2. Family links established by reviewed household reconciliation.
     for (const action of asArray(plan.linkFamilies)) {
@@ -643,14 +714,21 @@ async function applyPeopleSyncPlan({
       return memberExternalIds.length === 0 ||
         memberExternalIds.some((externalPersonId) => acceptedCreateExternalIds.has(externalPersonId));
     });
+    const singlePersonFamilyIds = new Map();
     for (const action of addFamilyActions) {
       const familyName = typeof action.familyName === 'string' ? action.familyName.trim() : '';
       if (!familyName) throw new Error(`addFamilies action ${action.id} is missing a reviewed family name`);
+      if (action.singlePersonExternalId != null && (provider !== 'planning_center' || action.externalFamilyId != null ||
+          !acceptedCreateExternalIds.has(action.singlePersonExternalId) || singlePersonFamilyIds.has(action.singlePersonExternalId) ||
+          action.memberExternalIds?.length !== 1 || action.memberExternalIds[0] !== action.singlePersonExternalId)) {
+        throw new Error('The personal family proposal is invalid');
+      }
       const insertResult = await conn.query(
         `INSERT INTO families (church_id, family_name, created_by, created_at) VALUES (?, ?, ?, datetime('now'))`,
         [churchId, familyName, userId || null]
       );
       const familyId = insertResult.insertId;
+      if (action.singlePersonExternalId != null) singlePersonFamilyIds.set(action.singlePersonExternalId, familyId);
       if (action.externalFamilyId) {
         await linkRepository.upsertFamilyLinkWithConnection(conn, {
           churchId, provider, externalFamilyId: action.externalFamilyId, familyId, linkSource: 'created',
@@ -672,9 +750,10 @@ async function applyPeopleSyncPlan({
     // matcher.js treats as an external-side key throughout), NOT a local
     // families.id. Resolve it through external_family_links, scoped to this
     // church and provider; if that household hasn't been linked to a local
-    // family, leave the new person family-less. Apply never invents a
-    // family (or a name for one) on this path — that stays reserved for an
-    // explicit addFamilies action carrying a reviewed name.
+    // family, leave the new person family-less. Confirmed no-household PCO
+    // people instead use the personal family from addFamilies, or the signed
+    // createPerson fallback for an explicit late Create identity decision.
+    // Names are always signed data; apply never derives them.
     const newIndividualIdByExternal = new Map();
     let addPeopleActions;
     if (accepted.contractVersion === 2) {
@@ -688,6 +767,7 @@ async function applyPeopleSyncPlan({
           lastName: createPerson.lastName,
           isChild: createPerson.isChild,
           familyId: createPerson.externalFamilyId,
+          singlePersonFamilyName: createPerson.singlePersonFamilyName,
           peopleType: createPerson.peopleType,
         };
       };
@@ -713,6 +793,20 @@ async function applyPeopleSyncPlan({
       let familyId = null;
       if (action.familyId !== null && action.familyId !== undefined) {
         familyId = await linkRepository.findFamilyIdByExternalId(conn, churchId, provider, action.familyId);
+      }
+      if (singlePersonFamilyIds.has(action.externalPersonId)) {
+        if (action.familyId != null) throw new Error('A personal family cannot replace a provider household');
+        familyId = singlePersonFamilyIds.get(action.externalPersonId);
+      } else if (action.singlePersonFamilyName !== undefined) {
+        const familyName = typeof action.singlePersonFamilyName === 'string' ? action.singlePersonFamilyName.trim() : '';
+        if (provider !== 'planning_center' || !plan.authoritative || plan.snapshot?.mode !== 'full' ||
+            action.familyId != null || !familyName) throw new Error('The signed personal family name is invalid');
+        const insertedFamily = await conn.query(
+          `INSERT INTO families (church_id, family_name, created_by) VALUES (?, ?, ?)`,
+          [churchId, familyName, userId || null]
+        );
+        familyId = insertedFamily.insertId;
+        result.addFamilies++;
       }
       const insertResult = await conn.query(
         `INSERT INTO individuals
@@ -868,10 +962,9 @@ async function applyPeopleSyncPlan({
       if (insertResult.affectedRows > 0) result.gatheringAssigned++;
     }
 
-    // 12. Gathering roster removals. A sync batch may only ever remove a
-    // roster row that carries its OWN provenance (added_by_sync_batch_id =
-    // this action's batchId) — manual rows (NULL) and other batches' rows
-    // never match that WHERE clause.
+    // 12. Automatic gathering removals require the owning batch's provenance.
+    // Unowned legacy rows use the separate explicitly selected review branch,
+    // which rechecks their identity, source coverage and unchanged provenance.
     //
     // The actual correctness guarantee that "another enabled batch still
     // qualifying this person keeps them on the roster" comes from plan.js's
@@ -890,7 +983,17 @@ async function applyPeopleSyncPlan({
       return `${a.gatheringTypeId}:${individualId}`;
     }));
     for (const action of asArray(applicablePlan.removeFromGathering)) {
+      if (action.reviewRequired && !accepted.acceptedGatheringRemovalIds.has(action.id)) continue;
       if (staying.has(`${action.gatheringTypeId}:${action.individualId}`)) continue;
+      if (action.reviewRequired) {
+        if (action.reason !== 'legacy_roster_not_in_source' || action.batchId !== null) {
+          throw reviewedApplyError('SYNC_REVIEW_INVALID', 'Invalid reviewed attendance-list removal.', 400);
+        }
+        await removeReviewedLegacyMembership(conn, { churchId, provider, action });
+        result.removeFromGathering++;
+        result.gatheringRemoved++;
+        continue;
+      }
       const deleteResult = await conn.query(
         `DELETE FROM gathering_lists
           WHERE gathering_type_id = ? AND individual_id = ? AND added_by_sync_batch_id = ? AND church_id = ?`,
@@ -899,6 +1002,9 @@ async function applyPeopleSyncPlan({
       result.removeFromGathering++;
       if (deleteResult.affectedRows > 0) result.gatheringRemoved++;
     }
+
+    await persistHouseholdChoicesWithConnection(conn, { churchId, provider, plan, userId, result, accepted });
+    await persistReconciliationKeeps(conn, { churchId, provider, plan, accepted, reviewedApply, userId });
 
     if (accepted.contractVersion === 2) {
       for (const [externalPersonId, reason] of accepted.deferredReasons) {

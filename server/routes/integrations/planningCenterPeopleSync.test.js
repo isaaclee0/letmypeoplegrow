@@ -69,6 +69,35 @@ test('POST correction preview delegates the signed correction request in church 
   }]);
 });
 
+test('POST household preview uses authenticated church scope and returns the signed preview', async () => {
+  const choices = { card: { destination: { kind: 'existing', familyId: 20 }, displayName: 'Local family' } };
+  await withServer({ previewHouseholdChoices: async (input) => {
+    assert.deepEqual(input, { churchId: ADMIN.church_id, provider: 'planning_center', batchId: 12,
+      baseReviewToken: 'base', householdChoices: choices });
+    return { reviewToken: 'household-preview', plan: { householdChoices: { edits: choices } } };
+  } }, async (base) => {
+    const result = await requestJson(`${base}/sync-batches/12/preview-household-choices`, {
+      method: 'POST', body: { churchId: 'another-church', baseReviewToken: 'base', householdChoices: choices },
+    });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.reviewToken, 'household-preview');
+  });
+});
+
+test('POST household preview rejects malformed requests and non-admins before orchestration', async () => {
+  const deps = { previewHouseholdChoices: async () => { assert.fail('invalid request reached orchestration'); } };
+  await withServer(deps, async (base) => {
+    for (const body of [{ householdChoices: {} }, { baseReviewToken: 'base', householdChoices: [] }, { baseReviewToken: 'base', householdChoices: null }]) {
+      assert.equal((await requestJson(`${base}/sync-batches/12/preview-household-choices`, { method: 'POST', body })).status, 400);
+    }
+  });
+  await withServer(deps, async (base) => {
+    assert.equal((await requestJson(`${base}/sync-batches/12/preview-household-choices`, {
+      method: 'POST', body: { baseReviewToken: 'base', householdChoices: {} },
+    })).status, 403);
+  }, { ...ADMIN, role: 'coordinator' });
+});
+
 test('POST correction preview rejects missing base tokens before orchestration', async () => {
   let calls = 0;
   await withServer({ previewLinkCorrections: async () => { calls += 1; return {}; } }, async (base) => {
@@ -277,4 +306,46 @@ test('plan and apply reject unsafe batch identifiers before invoking orchestrati
     }
   });
   assert.equal(calls, 0);
+});
+
+test('integration review endpoints use null scope and force people-sync apply in authenticated church scope', async () => {
+  const calls = [];
+  const deps = Object.fromEntries(['buildReview', 'previewLinkCorrections', 'previewHouseholdChoices', 'applyReviewed'].map((method) => [method, async (input) => {
+    calls.push({ method, input });
+    return { reviewToken: 'combined', decisionContractVersion: 2, plan: {} };
+  }]));
+  await withServer(deps, async (base) => {
+    assert.equal((await requestJson(`${base}/sync/plan`)).status, 200);
+    assert.equal((await requestJson(`${base}/sync/preview-link-corrections`, { method: 'POST', body: { baseReviewToken: 'base', linkCorrections: {}, churchId: 'foreign', batchId: 99 } })).status, 200);
+    assert.equal((await requestJson(`${base}/sync/preview-household-choices`, { method: 'POST', body: { baseReviewToken: 'base', householdChoices: {} } })).status, 200);
+    assert.equal((await requestJson(`${base}/sync/apply`, { method: 'POST', body: { reviewToken: 'combined', selections: { decisionContractVersion: 2, identityDecisions: {} }, operationKind: 'authority_switch', batchId: 99 } })).status, 200);
+  });
+  const scope = { churchId: ADMIN.church_id, provider: 'planning_center', batchId: null };
+  assert.deepEqual(calls, [
+    { method: 'buildReview', input: { ...scope, trigger: 'manual' } },
+    { method: 'previewLinkCorrections', input: { ...scope, baseReviewToken: 'base', linkCorrections: {} } },
+    { method: 'previewHouseholdChoices', input: { ...scope, baseReviewToken: 'base', householdChoices: {} } },
+    { method: 'applyReviewed', input: { ...scope, operationKind: 'people_sync', reviewToken: 'combined', selections: { decisionContractVersion: 2, identityDecisions: {} }, userId: ADMIN.id } },
+  ]);
+});
+
+test('integration preview/apply reject missing tokens and malformed edits before orchestration', async () => {
+  const fail = async () => assert.fail('invalid request reached orchestration');
+  await withServer({ previewLinkCorrections: fail, previewHouseholdChoices: fail, applyReviewed: fail }, async (base) => {
+    for (const [path, body] of [
+      ['apply', {}], ['preview-link-corrections', { linkCorrections: {} }], ['preview-household-choices', { householdChoices: {} }],
+      ['preview-link-corrections', { baseReviewToken: 'base', linkCorrections: [] }], ['preview-household-choices', { baseReviewToken: 'base', householdChoices: null }],
+    ]) assert.equal((await requestJson(`${base}/sync/${path}`, { method: 'POST', body })).status, 400);
+  });
+});
+
+test('all integration endpoints retain admin and church-isolation middleware', async () => {
+  const fail = async () => assert.fail('unauthorized request reached orchestration');
+  const deps = { buildReview: fail, previewLinkCorrections: fail, previewHouseholdChoices: fail, applyReviewed: fail };
+  for (const [user, status] of [[{ ...ADMIN, role: 'coordinator' }, 403], [{ id: 9, role: 'admin' }, 401]]) {
+    await withServer(deps, async (base) => {
+      assert.equal((await requestJson(`${base}/sync/plan`)).status, status);
+      for (const path of ['preview-link-corrections', 'preview-household-choices', 'apply']) assert.equal((await requestJson(`${base}/sync/${path}`, { method: 'POST', body: { baseReviewToken: 'base', reviewToken: 'token', linkCorrections: {}, householdChoices: {} } })).status, status);
+    }, user);
+  }
 });

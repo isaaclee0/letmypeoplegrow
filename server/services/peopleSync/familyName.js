@@ -19,4 +19,16 @@ function buildFamilyName(members = []) {
   return firstNames.length ? `${lastName}, ${firstNames.join(' and ')}` : lastName;
 }
 
-module.exports = { buildFamilyName };
+function buildSinglePersonFamilyName(person) {
+  const firstName = String(person?.firstName || '').trim();
+  const lastName = String(person?.lastName || '').trim().toUpperCase();
+  return lastName && firstName ? `${lastName}, ${firstName}` : lastName || firstName;
+}
+
+function hasConfirmedNoHousehold(person, families = []) {
+  return Array.isArray(person?.householdIds) && person.householdIds.length === 0 && person.familyId == null &&
+    !families.some(family => [...(family.memberExternalIds || []), ...(family.householdMemberExternalIds || [])]
+      .some(id => String(id) === String(person.id)));
+}
+
+module.exports = { buildFamilyName, buildSinglePersonFamilyName, hasConfirmedNoHousehold };

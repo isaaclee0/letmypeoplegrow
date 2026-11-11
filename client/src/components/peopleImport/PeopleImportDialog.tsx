@@ -17,6 +17,10 @@ interface PeopleImportDialogProps {
   initialMode?: PeopleTransferMode;
   allowImport?: boolean;
   embedded?: boolean;
+  returnTo?: string;
+  onSyncComplete?: () => void | Promise<void>;
+  defaultGatheringId?: number;
+  resumeSetup?: boolean;
 }
 
 const secondaryButtonClass = 'rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700';
@@ -42,7 +46,10 @@ function sourceType(source: ProviderSource): string {
   return source.kind === 'elvanto_category' ? 'Category' : 'Group';
 }
 
-export default function PeopleImportDialog({ isOpen, onClose, onApplied, initialProvider, initialMode = 'import', allowImport = true, embedded = false }: PeopleImportDialogProps) {
+export default function PeopleImportDialog({
+  isOpen, onClose, onApplied, initialProvider, initialMode = 'import', allowImport = true, embedded = false,
+  returnTo, onSyncComplete, defaultGatheringId, resumeSetup,
+}: PeopleImportDialogProps) {
   const [mode, setMode] = useState<PeopleTransferMode>(initialMode);
   const [state, setState] = useState<ImportState>('provider');
   const [provider, setProvider] = useState<SyncProvider | null>(null);
@@ -56,8 +63,10 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [refreshingAfterApply, setRefreshingAfterApply] = useState(false);
   const generationRef = useRef(0);
   const applyInFlightRef = useRef(false);
+  const onboarding = embedded && returnTo !== undefined;
 
   const nextGeneration = () => {
     generationRef.current += 1;
@@ -78,6 +87,7 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
     setRefreshError(null);
     setApiKey('');
     setConnecting(false);
+    setRefreshingAfterApply(false);
   }, []);
 
   useEffect(() => {
@@ -136,7 +146,7 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
     setError(null);
     try {
       if (provider === 'planning_center') {
-        const response = await integrationsAPI.authorizePlanningCenter(`/app/people?import=planning_center${mode === 'sync' ? '&mode=sync' : ''}`);
+        const response = await integrationsAPI.authorizePlanningCenter(returnTo ?? `/app/people?import=planning_center${mode === 'sync' ? '&mode=sync' : ''}`);
         if (generation !== generationRef.current) return;
         window.location.href = response.data.authUrl;
       } else {
@@ -183,10 +193,17 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
       applyInFlightRef.current = false;
       setResult(response.data);
       setState('applied');
+      if (onboarding) setRefreshingAfterApply(true);
       try {
         await onApplied(response.data);
       } catch (cause) {
-        if (generation === generationRef.current) setRefreshError(displayError(cause, 'The import was applied, but the People page could not refresh.'));
+        if (generation === generationRef.current) {
+          setRefreshError(displayError(cause, onboarding
+            ? 'Setup could not refresh after the import.'
+            : 'The import was applied, but the People page could not refresh.'));
+        }
+      } finally {
+        if (onboarding && generation === generationRef.current) setRefreshingAfterApply(false);
       }
     } catch (cause) {
       if (generation !== generationRef.current) return;
@@ -195,15 +212,20 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
     } finally {
       if (generation === generationRef.current) applyInFlightRef.current = false;
     }
-  }, [onApplied, provider, selection]);
+  }, [onApplied, onboarding, provider, selection]);
 
+  const onboardingBackDisabled = connecting || state === 'applying' || refreshingAfterApply;
   const close = () => {
-    if (state === 'applying' || applyInFlightRef.current) return;
-    reset();
+    if (state === 'applying' || applyInFlightRef.current || (onboarding && onboardingBackDisabled)) return;
+    if (!onboarding) reset();
     onClose();
   };
 
   const backToProviders = () => {
+    if (onboarding) {
+      close();
+      return;
+    }
     if (state === 'applying') return;
     nextGeneration();
     setState('provider');
@@ -225,6 +247,9 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
           </div>
           <button type="button" className={secondaryButtonClass} onClick={close} disabled={state === 'applying'}>Close</button>
         </header>}
+        {onboarding && state !== 'sync' && <button
+          type="button" className={`${secondaryButtonClass} mb-4`} onClick={close} disabled={onboardingBackDisabled}
+        >Back</button>}
 
         {state === 'provider' && (
           <div className="space-y-4">
@@ -252,7 +277,7 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
           <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void connect(); }}>
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-medium text-gray-900 dark:text-gray-100">Connect {provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}</h3>
-              <button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button>
+              {!onboarding && <button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button>}
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-300">{mode === 'sync' ? 'Connect your account to choose which lists feed your gatherings. You’ll review changes before activating sync.' : 'Connect your account to choose who to import. You’ll review the people before importing them.'}</p>
             {provider === 'elvanto' ? (
@@ -269,11 +294,17 @@ export default function PeopleImportDialog({ isOpen, onClose, onApplied, initial
           </form>
         )}
 
-        {state === 'sync' && provider && <PeopleSyncSetup provider={provider} onCancel={backToProviders} />}
+        {state === 'sync' && provider && <PeopleSyncSetup
+          provider={provider}
+          onCancel={backToProviders}
+          onComplete={onSyncComplete}
+          defaultGatheringId={defaultGatheringId}
+          resumeSetup={resumeSetup}
+        />}
 
         {state === 'sources' && provider && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3"><p className="text-sm text-gray-700 dark:text-gray-200">{mode === 'sync' ? 'Set up sync with ' : 'Choose who to import from '}{provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}</p><button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button></div>
+            <div className="flex items-center justify-between gap-3"><p className="text-sm text-gray-700 dark:text-gray-200">{mode === 'sync' ? 'Set up sync with ' : 'Choose who to import from '}{provider === 'planning_center' ? 'Planning Center' : 'Elvanto'}</p>{!onboarding && <button type="button" className={secondaryButtonClass} onClick={backToProviders}>Back</button>}</div>
             {loadingSources && !error ? <p role="status" className="text-sm text-gray-500">Loading people sources…</p> : null}
             {error ? <div role="alert" className="space-y-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><p>{error}</p><button type="button" className={secondaryButtonClass} onClick={() => void loadSources(provider, mode)}>Try again</button></div> : null}
             {mode === 'import' && !loadingSources && !error && (

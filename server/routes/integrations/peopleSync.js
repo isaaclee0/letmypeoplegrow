@@ -26,6 +26,7 @@ const { ensureChurchIsolation } = require('../../middleware/churchIsolation');
 const authority = require('../../services/peopleSync/authority');
 const orchestrator = require('../../services/peopleSync/orchestrator');
 const runRepository = require('../../services/peopleSync/runRepository');
+const reconciliationKeepRepository = require('../../services/peopleSync/reconciliationKeepRepository');
 const { ElvantoError, ELVANTO_AUTH } = require('../../services/elvanto/httpClient');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
@@ -297,6 +298,7 @@ const defaultDeps = {
   previewAuthoritySwitch: orchestrator.previewAuthoritySwitch,
   applyReviewed: orchestrator.applyReviewed,
   listAllRecentRuns: defaultListAllRecentRuns,
+  forgetReconciliationKeep: reconciliationKeepRepository.deleteKeep,
 };
 
 // ─── Safe error mapping ──────────────────────────────────────────────────────
@@ -545,6 +547,23 @@ function createPeopleSyncRouter(overrides = {}) {
       res.json({ success: true, runs: runs.map(sanitizeRunForResponse) });
     } catch (err) {
       respondWithError(res, err, 'people-sync GET /runs');
+    }
+  });
+
+  // "Ask again" for a household or attendance-list difference an admin
+  // previously kept. It reappears as a normal decision on the next review.
+  router.delete('/reconciliation-keeps/:provider/:keepId', async (req, res) => {
+    try {
+      const { provider } = req.params;
+      const keepId = Number(req.params.keepId);
+      if (!RUN_PROVIDERS.includes(provider) || !Number.isSafeInteger(keepId) || keepId <= 0) {
+        return res.status(400).json({ error: 'Invalid kept difference.' });
+      }
+      const removed = await deps.forgetReconciliationKeep({ churchId: req.user.church_id, provider, keepId });
+      if (!removed) return res.status(404).json({ error: 'That kept difference no longer exists.' });
+      return res.json({ success: true });
+    } catch (err) {
+      return respondWithError(res, err, 'people-sync DELETE /reconciliation-keeps');
     }
   });
 

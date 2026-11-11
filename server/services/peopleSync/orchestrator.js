@@ -44,6 +44,8 @@ const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
 const { DECISION_CONTRACT_VERSION, buildReviewContext, buildReviewDirectory } = require('./reviewContext');
 const { validateAndProjectLinkCorrections } = require('./linkCorrections');
+const { projectHouseholdChoices, decorateHouseholdChoicePlan, canonicalHouseholdChoices } = require('./householdChoices');
+const { addOutsideSourceArchiveProposals } = require('./outsideSourceReview');
 const { applyPeopleSyncPlan, validateSelections, isReviewTokenApplied } = require('./apply');
 const {
   digestPlan, digestReviewToken, createReviewToken, verifyReviewToken, verifyReviewTokenLineage,
@@ -182,6 +184,38 @@ function effectiveReviewBatches(batches, batchId) {
   return reviewed.filter((batch) => batch.effectiveSource || String(batch.id) === String(batchId));
 }
 
+function isIntegrationReview(provider, batchId) {
+  return provider === 'planning_center' && batchId === null;
+}
+
+function effectiveManualReviewBatches(batches, provider, batchId) {
+  if (!isIntegrationReview(provider, batchId)) return effectiveReviewBatches(batches, batchId);
+  if (batches.some((batch) => batch.enabled && isRetiredPlanningCenterBatch(batch))) {
+    throw new OrchestratorError(LEGACY_BATCH_RETIRED, LEGACY_BATCH_RETIRED_MESSAGE, 409);
+  }
+  // Integration review owns every enabled source draft. Keep duplicate source
+  // batches distinct: each can legitimately target a different gathering.
+  return batches.filter((batch) => batch.enabled).map((batch) => ({
+    ...batch, effectiveSource: batch.draftSource || batch.source,
+    effectiveSourceIsDraft: Boolean(batch.draftSource),
+  })).sort((left, right) => Number(left.id) - Number(right.id));
+}
+
+function canReviewOutsideSources({ provider, authoritative, adapter, batches, allBatches }) {
+  const enabled = (allBatches || batches).filter((batch) => batch.enabled);
+  return provider === 'planning_center' && authoritative === true &&
+    typeof adapter.fetchReconciliationSnapshot === 'function' && enabled.length > 0 &&
+    enabled.length === batches.length && enabled.every((batch) => batch.source && !batch.draftSource) &&
+    batches.every((batch) => !batch.effectiveSourceIsDraft && batch.effectiveSource);
+}
+
+function reviewBatchConfiguration(pre, provider, batches, batchId) {
+  return batchRepository.buildPlanAffectingBatchConfigurationExpectation(batches, {
+    requireExactSet: isIntegrationReview(provider, batchId) || canReviewOutsideSources({ provider, authoritative: pre.authorityState.active === provider,
+      adapter: pre.adapter, batches, allBatches: pre.allBatches }),
+  });
+}
+
 function connectionExpectationFor(provider, connectionGeneration) {
   void provider;
   return { generation: connectionGeneration };
@@ -212,9 +246,11 @@ function reviewedSourceContext(
     ...(authoritySourceSet ? {
       promotions: authoritySourceSet.promotions,
       participatingBatchSourceDigest: authoritySourceSet.participatingBatchSourceDigest,
+      ...(authoritySourceSet.reviewedLists ? { reviewedLists: authoritySourceSet.reviewedLists } : {}),
     } : {}),
     ...(batchConfigurationExpectation ? {
       batchConfigurationDigest: batchConfigurationExpectation.configurationDigest,
+      ...(batchConfigurationExpectation.requireExactSet ? { requireExactBatchSet: true } : {}),
     } : {}),
   };
 }
@@ -235,6 +271,23 @@ function authoritySourceSetFor(batches) {
   return {
     promotions,
     participatingBatchSourceDigest: digestAuthorityReviewSourceSet(batches, promotions),
+  };
+}
+
+function integrationSourceSetFor(batches) {
+  const sourceDescription = (source) => source
+    ? { kind: source.kind, externalId: source.externalId, name: source.name }
+    : null;
+  return {
+    ...authoritySourceSetFor(batches),
+    reviewedLists: batches.map((batch) => ({
+      batchId: batch.id,
+      name: batch.name,
+      gatheringTypeId: batch.gatheringTypeId ?? null,
+      activeSource: sourceDescription(batch.source),
+      selectedSource: sourceDescription(batch.effectiveSource),
+      isDraft: Boolean(batch.effectiveSourceIsDraft),
+    })),
   };
 }
 
@@ -269,33 +322,27 @@ function countsFromPlan(plan) {
   return counts;
 }
 
-// Merges apply.js's actually-applied counts with the PLAN's own review-only
-// bucket sizes (apply.js always reports ambiguousPeople/familyConflicts/
-// unmatchedLocalRegulars/skipped as 0 — see its own emptyResult() comment —
-// since it never mutates anything off them directly), so the audit trail
-// and any notification reflect "how many items are pending review", not
-// just "how many mutations ran". renameFamily is included in this same
-// override for consistency with the other three held-review buckets
-// (plan.js does not populate renameFamily yet, so this is currently a
-// no-op, but keeps the run's audit counts from under-reporting a pending
-// rename once a producer exists) — this does NOT lose the "how many
-// renames were actually applied" fact: apply.js increments
-// familyNamesUpdated in lockstep with renameFamily for every accepted
-// rename it actually applies (see apply.js step 10), and that field is
-// left untouched here.
+// Audit counts keep unresolved review items visible. Accepted household
+// proposals are subtracted; their mutations also remain in moveFamily,
+// addFamilies, and linkFamilies. Other review buckets retain existing counts.
 function mergeAppliedCounts(applyResult, plan) {
   return {
     ...applyResult,
     ambiguousPeople: plan.ambiguousPeople.length,
-    familyConflicts: plan.familyConflicts.length,
+    familyConflicts: Math.max(0, plan.familyConflicts.length - (applyResult.familyConflicts || 0)),
     unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
     renameFamily: plan.renameFamily.length,
     skipped: plan.skipped.length,
   };
 }
 
+function pendingGatheringRemovals(plan) {
+  return (plan.removeFromGathering || []).filter((action) => action.reviewRequired).length;
+}
+
 function heldCountsFromPlan(plan) {
   return {
+    ...(pendingGatheringRemovals(plan) ? { gatheringRemovals: pendingGatheringRemovals(plan) } : {}),
     archive: plan.archive.length,
     ambiguousPeople: plan.ambiguousPeople.length,
     familyConflicts: plan.familyConflicts.length,
@@ -305,7 +352,7 @@ function heldCountsFromPlan(plan) {
 }
 
 function hasHeldItems(plan) {
-  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].length > 0);
+  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].length > 0) || pendingGatheringRemovals(plan) > 0;
 }
 
 function stripRawFields(action) {
@@ -333,6 +380,11 @@ function sanitizePlanForReview(plan, externalPeople = [], localPeople = [], exte
   for (const bucket of BUCKETS) {
     sanitized[bucket] = (plan[bucket] || []).map(stripRawFields);
   }
+  if (plan.keptReconciliations?.length) {
+    sanitized.keptReconciliations = plan.keptReconciliations.map((entry) => ({ ...entry, action: stripRawFields(entry.action) }));
+  }
+  if (plan.householdChoices) sanitized.householdChoices = plan.householdChoices;
+  if (plan.sourceContext) sanitized.sourceContext = plan.sourceContext;
   return sanitized;
 }
 
@@ -517,7 +569,7 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const settings = await deps.getSyncSettings(churchId);
   const authorityState = await deps.getAuthority(churchId);
 
-  return { connection, connectionGeneration, credentials, adapter, batches, settings, authorityState, deps };
+  return { connection, connectionGeneration, credentials, adapter, batches, allBatches: providerBatches, settings, authorityState, deps };
 }
 
 function pipelineInputFromPreconditions(pre, input = {}) {
@@ -533,6 +585,7 @@ function pipelineInputFromPreconditions(pre, input = {}) {
       ? input.activeAuthority
       : pre.authorityState.active,
     batches: input.batches || effectiveReviewBatches(pre.batches, batchId),
+    allBatches: pre.allBatches || pre.batches,
     settings: pre.settings,
     credentials: pre.credentials,
     adapter: pre.adapter,
@@ -554,6 +607,32 @@ function sourceIncomplete(provider) {
 
 function sourceUnavailable(provider) {
   return new OrchestratorError('SYNC_SOURCE_UNAVAILABLE', `${provider} source is unavailable`, 502);
+}
+
+const PROVIDER_LABELS = { planning_center: 'Planning Center', elvanto: 'Elvanto' };
+const SOURCE_KIND_LABELS = { planning_center_list: 'List', elvanto_category: 'category', elvanto_group: 'group' };
+
+// A failed source read names the List/category/group and its batch, because
+// every enabled batch's source is read for any review: a problem with one
+// batch otherwise surfaces as an unexplained failure on another. The code is
+// preserved so source health, run history and callers behave exactly as
+// before; only the message (curated, never provider response text) changes.
+function describedSourceFailure(provider, batch, selectedSource, failure) {
+  const providerLabel = PROVIDER_LABELS[provider] || 'The provider';
+  const kindLabel = SOURCE_KIND_LABELS[selectedSource?.kind] || 'source';
+  const sourceName = typeof selectedSource?.name === 'string' && selectedSource.name.trim()
+    ? selectedSource.name.trim().slice(0, 200) : null;
+  const what = sourceName ? `the ${kindLabel} “${sourceName}”` : `one of its ${kindLabel}s`;
+  const batchName = typeof batch?.name === 'string' && batch.name.trim() ? batch.name.trim().slice(0, 200) : null;
+  const usedBy = batchName ? ` (used by the “${batchName}” batch)` : '';
+  const messages = {
+    SYNC_SOURCE_UNAVAILABLE: `${providerLabel} couldn’t find ${what}${usedBy}. It may have been deleted, or the connected ${providerLabel} account isn’t allowed to see it. Every enabled batch’s source is read for a review, so fix the source or disable that batch to continue.`,
+    SYNC_SOURCE_AUTH: `${providerLabel} rejected the stored connection while reading ${what}${usedBy}. Reconnect ${providerLabel} to continue.`,
+    SYNC_SOURCE_RATE_LIMIT: `${providerLabel} is limiting requests, so ${what}${usedBy} couldn’t be read. Try again in a few minutes.`,
+  };
+  const code = typeof failure?.code === 'string' && failure.code.startsWith('SYNC_SOURCE_') ? failure.code : 'SYNC_SOURCE_INCOMPLETE';
+  const message = messages[code] || `${providerLabel} didn’t return a complete copy of ${what}${usedBy}. Try again shortly.`;
+  return new OrchestratorError(code, message, failure instanceof OrchestratorError && failure.status ? failure.status : 502);
 }
 
 function staleConnectionGeneration() {
@@ -656,6 +735,7 @@ async function acquireCompleteProviderSources({
   connectionExpectation = null, signal = null,
 }) {
   const eligibleByBatch = new Map();
+  const memberIdsByBatch = new Map();
   const seenMemberExternalIds = new Set();
   const memberPeopleById = new Map();
   const ineligibleMemberPeopleById = new Map();
@@ -663,6 +743,8 @@ async function acquireCompleteProviderSources({
   const contextPeopleById = new Map();
   const familiesById = new Map();
   const sourceProvenance = [];
+  const observedHouseholds = new Map();
+  const conflictingHouseholdIds = new Set();
 
   for (const batch of batches) {
     assertAuthorityPreviewActive(signal);
@@ -709,6 +791,16 @@ async function acquireCompleteProviderSources({
         if (!id || sourcePeopleById.has(id)) throw sourceIncomplete(provider);
         if (!sourceContextPeopleById.has(id)) sourceContextPeopleById.set(id, candidate);
       }
+      for (const candidate of [...sourcePeopleById.values(), ...sourceContextPeopleById.values()]) {
+        // Related-person copies can omit this relationship. Unknown is not
+        // evidence against a complete observation; an explicit [] still is.
+        if (!Array.isArray(candidate.householdIds)) continue;
+        const id = personId(candidate);
+        const householdIds = [...new Set(candidate.householdIds.map(String))].sort();
+        const previous = observedHouseholds.get(id);
+        if (previous && JSON.stringify(previous.householdIds) !== JSON.stringify(householdIds)) conflictingHouseholdIds.add(id);
+        if (!previous) observedHouseholds.set(id, { householdIds, familyId: candidate.familyId });
+      }
       const memberIds = new Set();
       const eligible = new Set();
       for (const rawId of sourceSnapshot.memberExternalIds) {
@@ -754,9 +846,22 @@ async function acquireCompleteProviderSources({
         const id = family?.id === null || family?.id === undefined ? '' : String(family.id);
         if (!id) throw sourceIncomplete(provider);
         if (!familiesById.has(id)) familiesById.set(id, family);
+        else {
+          const previous = familiesById.get(id);
+          familiesById.set(id, { ...previous, memberExternalIds: [...new Set([
+            ...(previous.memberExternalIds || []), ...(family.memberExternalIds || []),
+          ].map(String))].sort(),
+          ...((previous.householdMemberExternalIds || family.householdMemberExternalIds) ? {
+            householdMemberExternalIds: [...new Set([
+              ...(previous.householdMemberExternalIds || []), ...(family.householdMemberExternalIds || []),
+            ].map(String))].sort(),
+          } : {}),
+          });
+        }
       }
 
       eligibleByBatch.set(batch.id, eligible);
+      memberIdsByBatch.set(batch.id, memberIds);
 
       const provenanceEntry = {
         batchId: batch.id,
@@ -796,10 +901,26 @@ async function acquireCompleteProviderSources({
           connectionExpectation, signal,
         });
       }
+      if (typeof failure.code === 'string' && failure.code.startsWith('SYNC_SOURCE_')) {
+        throw describedSourceFailure(provider, batch, selectedSource, failure);
+      }
       throw failure;
     }
   }
 
+  // Preserve complete household evidence even if the preferred person copy
+  // omitted it. Keep all other member/context and lifecycle precedence intact.
+  // Two explicit observations can race with a provider edit: those still fail
+  // closed rather than authorizing whichever household arrived first.
+  for (const map of [memberPeopleById, ineligibleMemberPeopleById, matchingPeopleById, contextPeopleById]) {
+    for (const [id, person] of map) {
+      if (conflictingHouseholdIds.has(id)) {
+        map.set(id, { ...person, householdIds: null });
+      } else if (!Array.isArray(person.householdIds) && observedHouseholds.has(id)) {
+        map.set(id, { ...person, ...observedHouseholds.get(id) });
+      }
+    }
+  }
   const fetchedAt = sourceProvenance.map((entry) => entry.fetchedAt).sort().at(-1) || new Date().toISOString();
   return {
     snapshot: {
@@ -815,6 +936,7 @@ async function acquireCompleteProviderSources({
     matchingPeople: [...matchingPeopleById.values()],
     ineligibleMemberPeople: [...ineligibleMemberPeopleById.values()],
     eligibleByBatch,
+    memberIdsByBatch,
     seenMemberExternalIds,
     sourceProvenance,
   };
@@ -839,18 +961,28 @@ async function acquirePipelineState(input) {
   assertAuthorityPreviewActive(input.signal);
 
   // 5. Load church-scoped local state only after the complete provider read.
-  const { individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState } =
+  const { individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState, reconciliationKeeps, householdPreferences } =
     await input.deps.loadLocalProjectionState(input.churchId, input.provider);
   assertAuthorityPreviewActive(input.signal);
+
+  let directorySnapshot = null;
+  if (input.trigger !== 'scheduled' && input.trigger !== 'authority_switch' && canReviewOutsideSources(input)) {
+    directorySnapshot = await input.adapter.fetchReconciliationSnapshot({ churchId: input.churchId });
+    if (!isCompleteSourceSnapshot(directorySnapshot, input.provider)) throw sourceIncomplete(input.provider);
+    assertAuthorityPreviewActive(input.signal);
+  }
 
   return {
     ...input,
     ...providerState,
+    directorySnapshot,
     individuals,
     families,
     personLinks,
     familyLinks,
     matchReviewState,
+    reconciliationKeeps: reconciliationKeeps || [],
+    householdPreferences: householdPreferences || [],
     gatheringMemberships,
     pendingIdentityObservations: input.deps.buildPendingIdentityObservations({
       batches: input.batches,
@@ -949,7 +1081,7 @@ function appendDeferredCorrectionRows(plan, unlinkedExternalIds) {
 
 function computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState) {
   const planningPeople = [...acquired.snapshot.people, ...acquired.ineligibleMemberPeople];
-  const plan = acquired.deps.computePeopleSyncPlan({
+  let plan = acquired.deps.computePeopleSyncPlan({
     provider: acquired.provider,
     externalPeople: planningPeople,
     externalFamilies: acquired.snapshot.families,
@@ -958,7 +1090,9 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     localFamilies: acquired.families,
     matcher: matcherResult,
     batches: acquired.batches,
+    allBatches: acquired.allBatches,
     eligibleByBatch: acquired.eligibleByBatch,
+    memberIdsByBatch: acquired.memberIdsByBatch,
     settings: acquired.settings,
     authoritative: acquired.authoritative,
     activeAuthority: acquired.activeAuthority,
@@ -976,10 +1110,26 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     },
     familyConflicts: [],
     gatheringMemberships: acquired.gatheringMemberships,
+    reconciliationKeeps: acquired.reconciliationKeeps || [],
+    localHouseholdExternalIds: acquired.localHouseholdExternalIds || new Set(),
   });
   appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
 
+  if (acquired.directorySnapshot) {
+    plan = addOutsideSourceArchiveProposals(plan, {
+      directorySnapshot: acquired.directorySnapshot, individuals: acquired.individuals,
+      personLinks: correction.projectedLinks, matchReviewState: effectiveReviewState,
+      memberExternalIds: acquired.seenMemberExternalIds,
+      sourceNames: acquired.batches.map((batch) => batch.effectiveSource.name),
+    });
+  }
+
   const externalPeople = [...planningPeople, ...acquired.contextPeople];
+  const displayedIds = new Set(externalPeople.map((person) => String(person.id)));
+  const outsideIds = new Set(plan.archive.filter((action) => action.reason === 'outside_all_sync_sources').map((action) => action.externalPersonId));
+  for (const person of acquired.directorySnapshot?.people || []) {
+    if (outsideIds.has(String(person.id)) && !displayedIds.has(String(person.id))) externalPeople.push(person);
+  }
   const sourceExternalIds = decisionScopeExternalIds(acquired.eligibleByBatch, {
     batchId: acquired.batchId,
     authoritySwitch: acquired.trigger === 'authority_switch',
@@ -987,6 +1137,8 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   plan.reviewContext = buildReviewContext({
     plan,
     externalPeople,
+    externalFamilies: acquired.snapshot.families,
+    completeSnapshot: acquired.snapshot.complete === true,
     localPeople: acquired.individuals,
     localFamilies: acquired.families,
     basePersonLinks: acquired.personLinks,
@@ -1016,12 +1168,21 @@ function projectPipelineLinkCorrections(acquired, linkCorrections = {}) {
   });
 }
 
-function computePipelineProjection(acquired, { linkCorrections = {} } = {}) {
+function computePipelineProjection(acquired, { linkCorrections = {}, householdChoices = {} } = {}) {
+  const edits = canonicalHouseholdChoices(householdChoices);
+  if (Object.keys(edits).length && Object.keys(linkCorrections || {}).length) {
+    throw new Error('Review person-link corrections and household choices separately.');
+  }
   const correction = projectPipelineLinkCorrections(acquired, linkCorrections);
   const effectiveReviewState = applyCorrectionReviewState(acquired.matchReviewState, correction);
-  const matcherResult = matchProjectedPeople(acquired, correction, effectiveReviewState);
-  const { plan, externalPeople } = computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState);
-  return { ...acquired, externalPeople, correction, effectiveReviewState, matcherResult, plan };
+  const projected = projectHouseholdChoices({ ...acquired, personLinks: correction.projectedLinks }, edits);
+  // Household validation follows the projected identity, while the local
+  // identity digest must still describe the actual pre-apply identity links.
+  projected.personLinks = acquired.personLinks;
+  const matcherResult = matchProjectedPeople(projected, correction, effectiveReviewState);
+  const { plan, externalPeople } = computeProjectedPlan(projected, correction, matcherResult, effectiveReviewState);
+  return { ...projected, externalPeople, correction, effectiveReviewState, matcherResult,
+    plan: decorateHouseholdChoicePlan(plan, projected) };
 }
 
 async function runPipelineBody(input, { linkCorrections = {} } = {}) {
@@ -1053,8 +1214,9 @@ async function buildReview({
     : pre.batches[0];
   assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
-  const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
-  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(reviewBatches);
+  const reviewBatches = effectiveManualReviewBatches(pre.batches, provider, batchId);
+  const reviewSourceSet = isIntegrationReview(provider, batchId) ? integrationSourceSetFor(reviewBatches) : null;
+  const batchConfigurationExpectation = reviewBatchConfiguration(pre, provider, reviewBatches, batchId);
   const authoritative = true;
   const activeAuthority = provider;
 
@@ -1067,7 +1229,7 @@ async function buildReview({
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration,
-      null, batchConfigurationExpectation,
+      reviewSourceSet, batchConfigurationExpectation,
     );
     await deps.replacePendingIdentityObservations(churchId, provider, body.pendingIdentityObservations);
     const planDigest = deps.digestPlan(body.plan);
@@ -1101,7 +1263,7 @@ async function buildReview({
 // before any submitted correction is validated or signed. Unlike buildReview,
 // this interactive edit preview deliberately creates no audit run.
 async function previewLinkCorrections({
-  churchId, provider, batchId, baseReviewToken, linkCorrections,
+  churchId, provider, batchId = null, baseReviewToken, linkCorrections, householdChoices = {},
 } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -1109,15 +1271,18 @@ async function previewLinkCorrections({
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   assertPeopleSyncEnabled(pre.settings);
-  const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  const reviewedBatch = batchId === null ? pre.batches[0]
+    : pre.batches.find((candidate) => String(candidate.id) === String(batchId));
   assertOperationalBatch(assertBatchReviewable, reviewedBatch, pre.authorityState.active);
+  const reviewBatches = effectiveManualReviewBatches(pre.batches, provider, batchId);
+  const reviewSourceSet = isIntegrationReview(provider, batchId) ? integrationSourceSetFor(reviewBatches) : null;
   const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
     churchId, provider, batchId, trigger: 'manual', mode: 'full', watermark: undefined,
-    authoritative: true, activeAuthority: provider,
+    authoritative: true, activeAuthority: provider, batches: reviewBatches,
   }));
   const sourceContext = reviewedSourceContext(
     provider, pre.batches, batchId, acquired.sourceProvenance, pre.connectionGeneration,
-    null, batchRepository.buildPlanAffectingBatchConfigurationExpectation(acquired.batches),
+    reviewSourceSet, reviewBatchConfiguration(pre, provider, acquired.batches, batchId),
   );
 
   const base = computePipelineProjection(acquired, { linkCorrections: {} });
@@ -1146,12 +1311,12 @@ async function previewLinkCorrections({
     );
   }
 
+  let corrected;
   try {
-    projectPipelineLinkCorrections(acquired, linkCorrections);
+    corrected = computePipelineProjection(acquired, { linkCorrections, householdChoices });
   } catch (selectionErr) {
     throw new OrchestratorError('SYNC_SELECTIONS_INVALID', selectionErr.message, 400);
   }
-  const corrected = computePipelineProjection(acquired, { linkCorrections });
   corrected.plan.sourceContext = sourceContext;
   const correctedDigest = deps.digestPlan(corrected.plan);
   const reviewToken = deps.createReviewToken({
@@ -1172,6 +1337,13 @@ async function previewLinkCorrections({
     ),
     snapshot: { fetchedAt: corrected.plan.snapshot.fetchedAt, mode: corrected.plan.snapshot.mode },
   };
+}
+
+async function previewHouseholdChoices(input = {}, overrides = {}) {
+  if (input.provider !== 'planning_center') {
+    throw new OrchestratorError('SYNC_SELECTIONS_INVALID', 'Household choices are available for Planning Center only.', 400);
+  }
+  return previewLinkCorrections({ ...input, linkCorrections: {} }, overrides);
 }
 
 // ─── previewAuthoritySwitch ──────────────────────────────────────────────────
@@ -1315,25 +1487,34 @@ function reviewTokenErrorMessage(code) {
 // apply transaction; only finishRun remains after it returns.
 async function applyReviewed({
   churchId, provider, batchId = null, reviewToken, selections = {}, userId, onCriticalCommit = null,
+  operationKind: requestedOperationKind,
 } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
   assertProvider(provider);
+  if (requestedOperationKind !== undefined && !['people_sync', 'authority_switch'].includes(requestedOperationKind)) {
+    throw new OrchestratorError('SYNC_REVIEW_INVALID', 'This sync operation is invalid.', 400);
+  }
   if (typeof reviewToken !== 'string' || reviewToken.length === 0) {
     throw new OrchestratorError('SYNC_REVIEW_INVALID', 'A review token is required', 400);
   }
   const linkCorrections = selections?.linkCorrections === undefined
     ? {}
     : selections.linkCorrections;
+  const householdChoices = selections?.householdChoices === undefined ? {} : selections.householdChoices;
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
-  const isAuthoritySwitch = batchId === null && pre.authorityState.pending === provider;
+  const isAuthoritySwitch = requestedOperationKind !== 'people_sync' && batchId === null && pre.authorityState.pending === provider;
+  if (requestedOperationKind === 'authority_switch' && !isAuthoritySwitch) {
+    throw new OrchestratorError('SYNC_REVIEW_INVALID', 'There is no matching pending authority switch.', 400);
+  }
   if (!isAuthoritySwitch) assertPeopleSyncEnabled(pre.settings);
   const reviewBatches = isAuthoritySwitch
     ? effectiveAuthorityReviewBatches(pre.batches)
-    : effectiveReviewBatches(pre.batches, batchId);
-  const authoritySourceSet = isAuthoritySwitch ? authoritySourceSetFor(reviewBatches) : null;
+    : effectiveManualReviewBatches(pre.batches, provider, batchId);
+  const authoritySourceSet = isAuthoritySwitch ? authoritySourceSetFor(reviewBatches)
+    : isIntegrationReview(provider, batchId) ? integrationSourceSetFor(reviewBatches) : null;
   const sourcePromotions = isAuthoritySwitch
     ? authoritySourceSet.promotions
     : reviewBatches.filter((batch) => batch.effectiveSourceIsDraft).map(toSourcePromotion);
@@ -1359,10 +1540,9 @@ async function applyReviewed({
     ...(isAuthoritySwitch ? { authorityPreviewId } : {}),
   };
   const sourceExpectations = sourceExpectationsFor(reviewBatches);
-  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(
-    reviewBatches,
-    { requireExactSet: isAuthoritySwitch }
-  );
+  const batchConfigurationExpectation = isAuthoritySwitch
+    ? batchRepository.buildPlanAffectingBatchConfigurationExpectation(reviewBatches, { requireExactSet: true })
+    : reviewBatchConfiguration(pre, provider, reviewBatches, batchId);
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
 
   // Everything that can still legitimately fail THIS run (fetch,
@@ -1381,6 +1561,10 @@ async function applyReviewed({
 
     try {
       projectPipelineLinkCorrections(acquired, linkCorrections);
+      projectHouseholdChoices(acquired, canonicalHouseholdChoices(householdChoices));
+      if (Object.keys(householdChoices || {}).length && Object.keys(linkCorrections || {}).length) {
+        throw new Error('Review person-link corrections and household choices separately.');
+      }
     } catch (selectionErr) {
       const base = computePipelineProjection(acquired, { linkCorrections: {} });
       base.plan.sourceContext = reviewedSourceContext(
@@ -1405,7 +1589,7 @@ async function applyReviewed({
       throw new OrchestratorError('SYNC_SELECTIONS_INVALID', selectionErr.message, 400);
     }
 
-    body = computePipelineProjection(acquired, { linkCorrections });
+    body = computePipelineProjection(acquired, { linkCorrections, householdChoices });
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, reviewBatches, batchId, body.sourceProvenance, pre.connectionGeneration,
@@ -1507,11 +1691,9 @@ async function applyReviewed({
 // Applies deterministic links, additions, managed updates, reactivations,
 // and provenance-safe gathering changes. It accepts only deterministic
 // identity suggestions and signed creations; ambiguous or previously held
-// identities are explicitly deferred. Archive proposals, familyConflicts/
-// renameFamily/unmatchedLocalRegulars are never mutated by apply.js regardless of
-// selections, so holding them is a matter of how this run's outcome is
-// CLASSIFIED and reported, not of altering what apply.js does: whenever any
-// held-review bucket is non-empty, the run is marked review_required
+// identities are explicitly deferred. Archive, household, family rename and
+// legacy gathering-removal proposals are never selected on this path.
+// Whenever any held-review bucket is non-empty, the run is marked review_required
 // (with its pending counts) instead of applied, and notifyReviewRequired is
 // called so admins learn about it later (a scheduled run has nobody
 // watching in real time — unlike buildReview/applyReviewed, which are
@@ -1647,6 +1829,7 @@ module.exports = {
   runUnattended,
   previewAuthoritySwitch,
   previewLinkCorrections,
+  previewHouseholdChoices,
   sanitizePlanForReview,
   reviewCoverage,
   isCompleteSourceSnapshot,

@@ -18,6 +18,7 @@ import type {
   PeopleSyncRun,
   PeopleSyncSelections,
   EstablishedLinkCorrection,
+  HouseholdChoiceEdits,
   ExternalLinks,
   ElvantoStatus,
   ElvantoConnection,
@@ -371,6 +372,25 @@ export interface ChurchLocationResult {
   source?: 'open-meteo' | 'geoapify';
 }
 
+export interface GuidedOnboardingState {
+  step: 'gathering' | 'gathering-created' | 'people' | 'invite';
+  provider?: 'elvanto' | 'planning_center' | null;
+  mode?: 'sync' | 'import';
+  peopleMethod?: 'person' | 'csv' | 'copy-paste';
+  lastGatheringId?: number;
+  inviteDeferred?: boolean;
+}
+
+export interface GuidedOnboardingStatus {
+  version: number;
+  required: boolean;
+  state: GuidedOnboardingState;
+  gatheringCount: number;
+  standardGatheringCount: number;
+  populatedFamilyCount: number;
+  canFinish: boolean;
+}
+
 export interface GatheringType {
   syncSources?: import('../components/peopleSync/GatheringSourceBadge').GatheringSyncSource[];
   id: number;
@@ -484,12 +504,20 @@ export const authAPI = {
     
 
   register: (data: {
+    churchName?: string;
     email: string;
     firstName: string;
     lastName: string;
     role?: 'admin' | 'attendance_taker' | 'coordinator';
+    locationName?: string;
+    locationLat?: number;
+    locationLng?: number;
+    countryCode?: string;
   }) => 
     api.post('/auth/register', data),
+
+  searchLocations: (q: string) =>
+    api.get<{ results: ChurchLocationResult[] }>('/auth/location-search', { params: { q } }),
     
   getCurrentUser: () => 
     api.get('/auth/me'),
@@ -540,6 +568,7 @@ export const gatheringsAPI = {
     description?: string;
     dayOfWeek?: string;
     startTime?: string;
+    endTime?: string;
     frequency?: string;
     attendanceType: 'standard' | 'headcount';
     customSchedule?: {
@@ -567,6 +596,7 @@ export const gatheringsAPI = {
     description?: string;
     dayOfWeek?: string;
     startTime?: string;
+    endTime?: string;
     frequency?: string;
     attendanceType: 'standard' | 'headcount';
     customSchedule?: {
@@ -961,6 +991,11 @@ export const notificationsAPI = {
 export const onboardingAPI = {
   getStatus: () => 
     api.get('/onboarding/status'),
+
+  startGuided: () => api.post<{ guided: GuidedOnboardingStatus }>('/onboarding/guided-start'),
+
+  saveGuidedProgress: (state: GuidedOnboardingState) =>
+    api.put<{ guided: GuidedOnboardingStatus }>('/onboarding/guided-progress', { state }),
     
   getCountries: () =>
     api.get('/onboarding/countries'),
@@ -1161,6 +1196,20 @@ export const integrationsAPI = {
     api.put(`/integrations/planning-center/sync-batches/${id}`, data, { timeout: 120000 }),
   deletePlanningCenterSyncBatch: (id: number) =>
     api.delete(`/integrations/planning-center/sync-batches/${id}`),
+  getPlanningCenterSyncPlan: () =>
+    api.get<{ success: true } & PeopleSyncReview>('/integrations/planning-center/sync/plan', { timeout: 120000 }),
+  previewPlanningCenterSyncLinkCorrections: (
+    data: { baseReviewToken: PeopleReviewToken<'people_sync'>; linkCorrections: Record<string, EstablishedLinkCorrection> },
+  ) => api.post<{ success: true } & PeopleSyncCorrectionPreview>(
+    '/integrations/planning-center/sync/preview-link-corrections', data, { timeout: 120000 },
+  ),
+  previewPlanningCenterSyncHouseholdChoices: (
+    data: { baseReviewToken: PeopleReviewToken<'people_sync'>; householdChoices: HouseholdChoiceEdits },
+  ) => api.post<{ success: true } & PeopleSyncCorrectionPreview>(
+    '/integrations/planning-center/sync/preview-household-choices', data, { timeout: 120000 },
+  ),
+  applyPlanningCenterSync: (data: PeopleSyncApplyRequest<'people_sync'>) =>
+    api.post<{ success: true } & PeopleSyncApplyResult>('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
   getPlanningCenterBatchPlan: (id: number, opts?: { force?: boolean }) =>
     api.get<{ success: true } & PeopleSyncReview>(`/integrations/planning-center/sync-batches/${id}/plan`, {
       params: opts?.force ? { refresh: 1 } : undefined,
@@ -1172,6 +1221,15 @@ export const integrationsAPI = {
   ) =>
     api.post<{ success: true } & PeopleSyncCorrectionPreview>(
       `/integrations/planning-center/sync-batches/${id}/preview-link-corrections`,
+      data,
+      { timeout: 120000 },
+    ),
+  previewPlanningCenterHouseholdChoices: (
+    id: number,
+    data: { baseReviewToken: PeopleReviewToken<'people_sync'>; householdChoices: HouseholdChoiceEdits },
+  ) =>
+    api.post<{ success: true } & PeopleSyncCorrectionPreview>(
+      `/integrations/planning-center/sync-batches/${id}/preview-household-choices`,
       data,
       { timeout: 120000 },
     ),
@@ -1265,6 +1323,11 @@ export const peopleSyncAPI = {
     api.get<{ success: true; runs: PeopleSyncRun[] }>('/integrations/people-sync/runs', {
       params: limit ? { limit } : {},
     }),
+
+  // "Ask again" for a household or attendance-list difference an admin chose
+  // to keep as LMPG has it. It returns as a normal decision on the next review.
+  forgetReconciliationKeep: (provider: SyncProvider, keepId: number) =>
+    api.delete<{ success: true }>(`/integrations/people-sync/reconciliation-keeps/${provider}/${keepId}`),
 
   listSources: (provider: SyncProvider) =>
     api.get<{ success: true; sources: ProviderSource[] }>(

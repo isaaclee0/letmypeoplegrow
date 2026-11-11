@@ -20,8 +20,8 @@ const defaultDeps = {
   async fetchSourceSnapshot({ accessToken, sourceKind, sourceExternalId, signal }) {
     return fetchPlanningCenterSourceSnapshot({ accessToken, sourceKind, sourceExternalId, signal });
   },
-  async fetchAllSnapshot({ accessToken, signal }) {
-    return fetchPlanningCenterAllSnapshot({ accessToken, signal });
+  async fetchAllSnapshot({ accessToken, signal, includeFieldData }) {
+    return fetchPlanningCenterAllSnapshot({ accessToken, signal, includeFieldData });
   },
 };
 
@@ -54,6 +54,10 @@ function createPcoAdapter(deps = {}) {
           signal,
         });
       });
+    },
+    async fetchReconciliationSnapshot({ churchId } = {}) {
+      return resolved.withPlanningCenterSourceToken(churchId, (accessToken) =>
+        resolved.fetchAllSnapshot({ accessToken, includeFieldData: false }));
     },
     isLifecycleEligible(person) {
       return !!person && (person.state === 'active' || person.status === 'active');

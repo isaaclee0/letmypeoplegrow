@@ -1,0 +1,351 @@
+{
+  "review": {
+    "operationKind": "people_sync",
+    "runId": 1,
+    "reviewToken": "synthetic-review-preview",
+    "decisionContractVersion": 2,
+    "summary": {
+      "linkPeople": 0,
+      "linkFamilies": 0,
+      "addPeople": 0,
+      "addFamilies": 0,
+      "updateManagedFields": 0,
+      "promoteToRegular": 0,
+      "demoteToLocalVisitor": 0,
+      "archive": 0,
+      "reactivate": 0,
+      "moveFamily": 0,
+      "renameFamily": 0,
+      "addToGathering": 0,
+      "removeFromGathering": 1,
+      "ambiguousPeople": 1,
+      "familyConflicts": 2,
+      "unmatchedLocalRegulars": 0,
+      "skipped": 0
+    },
+    "plan": {
+      "provider": "planning_center",
+      "authoritative": true,
+      "snapshot": {
+        "fetchedAt": "2025-01-13T00:00:00.000Z",
+        "watermark": "offline-rehearsal",
+        "mode": "full"
+      },
+      "linkPeople": [],
+      "linkFamilies": [],
+      "addPeople": [],
+      "addFamilies": [],
+      "updateManagedFields": [],
+      "promoteToRegular": [],
+      "demoteToLocalVisitor": [],
+      "archive": [],
+      "reactivate": [],
+      "moveFamily": [],
+      "renameFamily": [],
+      "addToGathering": [],
+      "removeFromGathering": [
+        {
+          "id": "removeFromGathering:legacy:1:101",
+          "batchId": null,
+          "gatheringTypeId": 1,
+          "individualId": 101,
+          "externalPersonId": "demo-roster",
+          "sourceBatchIds": [
+            10
+          ],
+          "sourceIdentities": [
+            {
+              "batchId": 10,
+              "kind": "planning_center_list",
+              "externalId": "demo-morning-list"
+            }
+          ],
+          "gatheringName": "Morning gathering",
+          "sourceNames": [
+            "Morning list"
+          ],
+          "reviewRequired": true,
+          "reason": "legacy_roster_not_in_source"
+        }
+      ],
+      "ambiguousPeople": [
+        {
+          "id": "ambiguousPeople:demo-held-person:review_deferred",
+          "externalPersonId": "demo-held-person",
+          "candidateIndividualIds": [],
+          "reason": "review_deferred"
+        }
+      ],
+      "familyConflicts": [
+        {
+          "id": "familyConflicts:demo-shared-household:multiple_local_families",
+          "externalFamilyId": "demo-shared-household",
+          "externalFamilyName": "Sample household",
+          "memberExternalIds": [
+            "demo-lane",
+            "demo-robin"
+          ],
+          "candidateFamilyIds": [
+            12,
+            13
+          ],
+          "unresolvedExternalPersonIds": [],
+          "reason": "multiple_local_families",
+          "resolution": {
+            "kind": "household",
+            "destination": {
+              "kind": "create",
+              "familyName": "Sample household"
+            },
+            "moves": [
+              {
+                "externalPersonId": "demo-lane",
+                "individualId": 103,
+                "fromFamilyId": 12
+              },
+              {
+                "externalPersonId": "demo-robin",
+                "individualId": 104,
+                "fromFamilyId": 13
+              }
+            ]
+          }
+        },
+        {
+          "id": "familyConflicts:detach:demo-detach",
+          "externalFamilyId": null,
+          "memberExternalIds": [
+            "demo-detach"
+          ],
+          "candidateFamilyIds": [
+            11
+          ],
+          "unresolvedExternalPersonIds": [],
+          "reason": "provider_has_no_household",
+          "resolution": {
+            "kind": "detach",
+            "destination": {
+              "kind": "none"
+            },
+            "moves": [
+              {
+                "externalPersonId": "demo-detach",
+                "individualId": 102,
+                "fromFamilyId": 11
+              }
+            ]
+          }
+        }
+      ],
+      "unmatchedLocalRegulars": [],
+      "skipped": [],
+      "presenceProjection": {
+        "completeFullSnapshot": false,
+        "updates": []
+      },
+      "operationKind": "people_sync",
+      "reviewContext": {
+        "version": 2,
+        "correctionContractVersion": 1,
+        "manualCandidateIndividualIds": [
+          201,
+          204
+        ],
+        "establishedLinks": {
+          "demo-detach": {
+            "individualId": 102
+          },
+          "demo-lane": {
+            "individualId": 103
+          },
+          "demo-robin": {
+            "individualId": 104
+          }
+        },
+        "projectedEstablishedLinks": {
+          "demo-detach": {
+            "individualId": 102
+          },
+          "demo-lane": {
+            "individualId": 103
+          },
+          "demo-robin": {
+            "individualId": 104
+          }
+        },
+        "linkCorrections": [],
+        "unreviewedSuggestedLinks": [],
+        "identities": {
+          "demo-held-person": {
+            "suggestedIndividualId": null,
+            "candidateIndividualIds": [],
+            "excludedIndividualIds": [],
+            "held": true,
+            "canCreate": true,
+            "createPerson": {
+              "firstName": "Casey",
+              "lastName": "Sample",
+              "isChild": false,
+              "externalFamilyId": null,
+              "peopleType": "regular"
+            }
+          }
+        }
+      },
+      "people": {
+        "external": {
+          "demo-detach": {
+            "firstName": "Taylor",
+            "lastName": "Sample",
+            "family": {
+              "state": "none"
+            }
+          },
+          "demo-held-person": {
+            "firstName": "Casey",
+            "lastName": "Sample",
+            "family": {
+              "state": "none"
+            }
+          },
+          "demo-lane": {
+            "firstName": "Lane",
+            "lastName": "Sample",
+            "family": {
+              "state": "known",
+              "name": "Sample household",
+              "members": [
+                {
+                  "firstName": "Robin",
+                  "lastName": "Sample"
+                }
+              ],
+              "totalOtherMembers": 1
+            }
+          },
+          "demo-robin": {
+            "firstName": "Robin",
+            "lastName": "Sample",
+            "family": {
+              "state": "known",
+              "name": "Sample household",
+              "members": [
+                {
+                  "firstName": "Lane",
+                  "lastName": "Sample"
+                }
+              ],
+              "totalOtherMembers": 1
+            }
+          }
+        },
+        "local": {
+          "101": {
+            "firstName": "Quinn",
+            "lastName": "Sample",
+            "family": {
+              "state": "none"
+            },
+            "matchEligible": false
+          },
+          "102": {
+            "firstName": "Taylor",
+            "lastName": "Sample",
+            "family": {
+              "state": "known",
+              "name": "Alder",
+              "members": [],
+              "totalOtherMembers": 0
+            },
+            "matchEligible": false
+          },
+          "103": {
+            "firstName": "Lane",
+            "lastName": "Sample",
+            "family": {
+              "state": "known",
+              "name": "Birch",
+              "members": [
+                {
+                  "firstName": "Sam",
+                  "lastName": "Example"
+                }
+              ],
+              "totalOtherMembers": 1
+            },
+            "matchEligible": false
+          },
+          "104": {
+            "firstName": "Robin",
+            "lastName": "Sample",
+            "family": {
+              "state": "known",
+              "name": "Cedar",
+              "members": [
+                {
+                  "firstName": "Alex",
+                  "lastName": "Example"
+                }
+              ],
+              "totalOtherMembers": 1
+            },
+            "matchEligible": false
+          },
+          "201": {
+            "firstName": "Sam",
+            "lastName": "Example",
+            "family": {
+              "state": "known",
+              "name": "Birch",
+              "members": [
+                {
+                  "firstName": "Lane",
+                  "lastName": "Sample"
+                }
+              ],
+              "totalOtherMembers": 1
+            },
+            "matchEligible": true
+          },
+          "202": {
+            "firstName": "Sam",
+            "lastName": "Example",
+            "family": {
+              "state": "none"
+            },
+            "matchEligible": false
+          },
+          "203": {
+            "firstName": "Alex",
+            "lastName": "Example",
+            "family": {
+              "state": "known",
+              "name": "Cedar",
+              "members": [
+                {
+                  "firstName": "Robin",
+                  "lastName": "Sample"
+                }
+              ],
+              "totalOtherMembers": 1
+            },
+            "matchEligible": false
+          },
+          "204": {
+            "firstName": "Alexis",
+            "lastName": "Example",
+            "family": {
+              "state": "none"
+            },
+            "matchEligible": true
+          }
+        }
+      }
+    },
+    "snapshot": {
+      "fetchedAt": "2025-01-13T00:00:00.000Z",
+      "watermark": "offline-rehearsal",
+      "mode": "full"
+    }
+  }
+}

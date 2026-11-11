@@ -103,6 +103,7 @@ function normalizedPerson(person) {
     state: person?.state ?? person?.status ?? null,
     child: person?.child ?? person?.isChild ?? null,
     familyId: person?.familyId ?? person?.householdId ?? null,
+    householdIds: Array.isArray(person?.householdIds) ? [...new Set(person.householdIds.map(String))].sort() : null,
   };
 }
 
@@ -111,6 +112,7 @@ function normalizedFamily(family) {
     id: family?.id ?? family?.externalId ?? null,
     name: family?.name ?? null,
     primaryContactId: family?.primaryContactId ?? null,
+    memberExternalIds: [...new Set((family?.memberExternalIds || []).map(String))].sort(),
   };
 }
 

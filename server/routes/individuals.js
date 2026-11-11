@@ -14,6 +14,7 @@ const {
 } = require('../services/peopleSync/authority');
 const { listPersonLinks } = require('../services/peopleSync/linkRepository');
 const { getMedicalNotesVisibility } = require('../services/planningCenter/medicalNotesPolicy');
+const { mergeIndividualReferencesWithConnection } = require('../services/mergeIndividuals');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -634,12 +635,8 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
     const participants = normalizeDeduplicationParticipants(req.body.keepId, req.body.deleteIds);
     const { keepId, deleteIds, involvedIds } = participants;
 
-    const lock = await getPersonAuthorityLock(req.user.church_id, involvedIds);
-    if (involvedIds.some(lock.isLocked)) {
-      return res.status(403).json(lockedResponse(lock.active, 'deduplicate'));
-    }
-
-    // Start a transaction
+    // A deliberate admin duplicate correction may retain one compatible provider
+    // identity. Normal editing/archiving locks still apply to the retained person.
     await Database.transaction(async (conn) => {
       await assertDeduplicationParticipantsExist(conn, req.user.church_id, involvedIds);
       await assertNoCrossChurchTierReferences(
@@ -647,42 +644,18 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
         req.user.church_id,
         involvedIds,
       );
+      await mergeIndividualReferencesWithConnection(conn, {
+        churchId: req.user.church_id,
+        keepId,
+        deleteIds,
+        mergeAssignments: Boolean(mergeAssignments),
+      });
       await rehomeEngagementHistoryWithConnection(conn, {
         churchId: req.user.church_id,
         keepId,
         deleteIds,
       });
-      // If merging assignments, move assignments from deleted IDs to kept ID
-      if (mergeAssignments) {
-        for (const deleteId of deleteIds) {
-          // Get assignments from the duplicate to be deleted
-          const assignments = await conn.query(`
-            SELECT gathering_type_id
-            FROM gathering_lists
-            WHERE individual_id = ? AND church_id = ?
-          `, [deleteId, req.user.church_id]);
-          
-          // Add assignments to the kept individual (if not already assigned)
-          for (const assignment of assignments) {
-            await conn.query(`
-              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
-              VALUES (?, ?, ?, ?)
-              ON CONFLICT(gathering_type_id, individual_id) DO UPDATE SET added_by = excluded.added_by
-            `, [assignment.gathering_type_id, keepId, req.user.id, req.user.church_id]);
-          }
-        }
-      }
-      
-      // Permanently delete duplicate individuals (data preserved via merge)
-      // Remove gathering assignments first to satisfy FK constraints
-      await conn.query(`
-        DELETE FROM gathering_lists WHERE individual_id IN (?) AND church_id = ?
-      `, [deleteIds, req.user.church_id]);
-
-      await conn.query(`
-        DELETE FROM attendance_records WHERE individual_id IN (?) AND church_id = ?
-      `, [deleteIds, req.user.church_id]);
-
+      // All historical references and compatible links now belong to the survivor.
       await conn.query(`
         DELETE FROM individuals WHERE id IN (?) AND church_id = ?
       `, [deleteIds, req.user.church_id]);

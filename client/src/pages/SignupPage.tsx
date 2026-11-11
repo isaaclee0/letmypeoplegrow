@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { authAPI } from '../services/api';
+import { authAPI, type ChurchLocationResult } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import LocationPicker from '../components/LocationPicker';
 
 interface SignupFormData {
   churchName: string;
@@ -18,6 +19,7 @@ const SignupPage: React.FC = () => {
   const [contact, setContact] = useState('');
   const [step, setStep] = useState<'signup' | 'code'>('signup');
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const [location, setLocation] = useState<ChurchLocationResult | null>();
 
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -38,7 +40,15 @@ const SignupPage: React.FC = () => {
     setError('');
 
     try {
-      const response = await authAPI.register(data);
+      const response = await authAPI.register({
+        ...data,
+        ...(location && {
+          locationName: location.displayName,
+          locationLat: location.lat,
+          locationLng: location.lng,
+          countryCode: location.countryCode ?? undefined,
+        }),
+      });
       setContact(data.email);
       setStep('code');
       setSuccess(response.data.message);
@@ -70,10 +80,7 @@ const SignupPage: React.FC = () => {
       const response = await authAPI.verifyCode(contact, data.code);
       await login(response.data.token, response.data.user);
 
-      // Check if user has any gathering assignments and redirect accordingly
-      const hasGatherings = response.data.user.gatheringAssignments && response.data.user.gatheringAssignments.length > 0;
-      const defaultRoute = hasGatherings ? '/app/attendance' : '/app/gatherings';
-      navigate(defaultRoute);
+      navigate('/app');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to verify code');
     } finally {
@@ -137,8 +144,13 @@ const SignupPage: React.FC = () => {
                 Organisation Name *
               </label>
               <input
-                {...signupForm.register('churchName', { required: 'Organisation name is required' })}
+                id="churchName"
+                {...signupForm.register('churchName', {
+                  required: 'Organisation name is required',
+                  validate: (value) => !!value.trim() || 'Organisation name is required',
+                })}
                 type="text"
+                maxLength={255}
                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-gray-100 dark:bg-gray-700 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder="Your Organisation Name"
               />
@@ -146,11 +158,13 @@ const SignupPage: React.FC = () => {
                 <p className="mt-1 text-sm text-red-600">{signupForm.formState.errors.churchName.message as string}</p>
               )}
             </div>
+            <LocationPicker value={location} onChange={setLocation} disabled={isLoading} />
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Admin Email *
               </label>
               <input
+                id="email"
                 {...signupForm.register('email', {
                   required: 'Email is required',
                   pattern: {
@@ -173,6 +187,7 @@ const SignupPage: React.FC = () => {
                   Admin First Name *
                 </label>
                 <input
+                  id="firstName"
                   {...signupForm.register('firstName', { required: 'First name is required' })}
                   type="text"
                   className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-gray-100 dark:bg-gray-700 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
@@ -188,6 +203,7 @@ const SignupPage: React.FC = () => {
                   Admin Last Name *
                 </label>
                 <input
+                  id="lastName"
                   {...signupForm.register('lastName', { required: 'Last name is required' })}
                   type="text"
                   className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-gray-100 dark:bg-gray-700 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
@@ -225,6 +241,7 @@ const SignupPage: React.FC = () => {
                 Verification Code
               </label>
               <input
+                id="code"
                 {...codeForm.register('code', {
                   required: 'Verification code is required',
                   pattern: {

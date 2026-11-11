@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { individualsAPI, familiesAPI } from '../../services/api';
@@ -8,6 +8,8 @@ interface Person {
   firstName: string;
   lastName: string;
   familyName?: string;
+  planningCenterId?: string;
+  externalLinks?: { planning_center?: string; elvanto?: string };
 }
 
 interface Family {
@@ -53,6 +55,26 @@ const MergeModal: React.FC<MergeModalProps> = ({
     keepFamilyId: null,
     mergeFamilyIds: []
   });
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDedupeKeepId(null);
+      setError('');
+    }
+  }, [isOpen]);
+
+  const selectedRecords = people.filter(person => selectedPeople.includes(person.id));
+  const retainedPerson = selectedRecords.find(person => person.id === dedupeKeepId);
+  const providerConflict = (['planning_center', 'elvanto'] as const).find(provider => {
+    const identities = new Set(selectedRecords.flatMap(person => [
+      person.externalLinks?.[provider],
+      ...(provider === 'planning_center' ? [person.planningCenterId] : []),
+    ]).filter(Boolean));
+    return identities.size > 1;
+  });
+  const conflictMessage = providerConflict
+    ? `These records link to different ${providerConflict === 'planning_center' ? 'Planning Center' : 'Elvanto'} people. Correct the provider links in sync review before merging.`
+    : '';
 
   const handleMergeIndividuals = async () => {
     try {
@@ -121,7 +143,11 @@ const MergeModal: React.FC<MergeModalProps> = ({
         return;
       }
 
-      const keepId = dedupeKeepId ?? selectedPeople[0];
+      if (!retainedPerson || conflictMessage) {
+        setError(conflictMessage || 'Choose the record to keep before merging.');
+        return;
+      }
+      const keepId = retainedPerson.id;
       const deleteIds = selectedPeople.filter(id => id !== keepId);
 
       await individualsAPI.deduplicate({
@@ -130,7 +156,7 @@ const MergeModal: React.FC<MergeModalProps> = ({
         mergeAssignments: mergeData.mergeAssignments
       });
 
-      await onSuccess(`Successfully deduplicated ${deleteIds.length} individuals`);
+      await onSuccess(`Kept ${retainedPerson.firstName} ${retainedPerson.lastName} (ID: ${keepId}) and merged ${deleteIds.length} duplicate record(s), preserving attendance history.`);
       onClose();
       setDedupeKeepId(null);
     } catch (err: any) {
@@ -149,7 +175,7 @@ const MergeModal: React.FC<MergeModalProps> = ({
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
               {mergeMode === 'individuals' ? 'Merge Individuals into Family' :
-               mergeMode === 'families' ? 'Merge Families' : 'Deduplicate Individuals'}
+               mergeMode === 'families' ? 'Merge Families' : 'Merge duplicate people'}
             </h3>
             <button
               onClick={onClose}
@@ -159,9 +185,9 @@ const MergeModal: React.FC<MergeModalProps> = ({
             </button>
           </div>
 
-          {error && (
-            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
-              <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
+          {(error || (mergeMode === 'deduplicate' && conflictMessage)) && (
+            <div role="alert" className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
+              <div className="text-sm text-red-700 dark:text-red-400">{error || conflictMessage}</div>
             </div>
           )}
 
@@ -277,19 +303,24 @@ const MergeModal: React.FC<MergeModalProps> = ({
               <>
                 <div>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                    Deduplicate {selectedPeople.length} selected individuals. Choose which record to keep as the master. The rest will be removed. Use this only for true duplicates, not different people.
+                    Merge {selectedPeople.length} records for the same person. Choose the record whose name, family and person ID you want to keep.
+                  </p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                    All attendance history is preserved. If records overlap on a date and gathering, present wins and the person is counted once. Engagement history and compatible provider links are kept too.
                   </p>
 
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Master record to keep</label>
+                      <label htmlFor="deduplicate-keep-record" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Record to keep</label>
                       <select
+                        id="deduplicate-keep-record"
                         value={dedupeKeepId || ''}
                         onChange={(e) => setDedupeKeepId(e.target.value ? parseInt(e.target.value) : null)}
+                        disabled={isLoading}
                         className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       >
                         <option value="">Select record to keep</option>
-                        {people.filter(p => selectedPeople.includes(p.id)).map(p => (
+                        {selectedRecords.map(p => (
                           <option key={p.id} value={p.id}>
                             {p.firstName} {p.lastName}{p.familyName ? ` — Family: ${p.familyName}` : ''} (ID: {p.id})
                           </option>
@@ -297,25 +328,32 @@ const MergeModal: React.FC<MergeModalProps> = ({
                       </select>
                     </div>
 
+                    {retainedPerson && <div className="rounded-md border border-primary-200 bg-primary-50 p-4 text-sm text-primary-900 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-200">
+                      <p className="font-medium">Keep {retainedPerson.firstName} {retainedPerson.lastName} (ID: {retainedPerson.id})</p>
+                      <p className="mt-1">{retainedPerson.familyName ? `${retainedPerson.familyName} will stay as their family.` : 'They will stay without a family assignment.'}</p>
+                      <p className="mt-2">Merge into this record: {selectedRecords.filter(person => person.id !== retainedPerson.id).map(person => `${person.firstName} ${person.lastName} (ID: ${person.id})`).join(', ')}.</p>
+                    </div>}
+
                     <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-4">
                       <div className="flex">
                         <div className="text-sm text-yellow-700 dark:text-yellow-300">
-                          <strong>Warning:</strong> This will permanently delete {selectedPeople.length - 1} individual(s). Ensure you selected the correct master record above.
+                          <strong>Permanent merge:</strong> The {selectedPeople.length - 1} other record(s) will be deleted after their history is transferred. Use this only for records of the same person.
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <label className="flex items-center space-x-2">
                       <input
                         type="checkbox"
                         checked={mergeData.mergeAssignments}
                         onChange={(e) => setMergeData({...mergeData, mergeAssignments: e.target.checked})}
+                        disabled={isLoading}
                         className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
                       />
                       <span className="text-sm text-gray-700 dark:text-gray-300">
-                        Merge gathering assignments from deleted individuals to the kept individual
+                        Also combine gathering assignments. Attendance history is kept either way.
                       </span>
-                    </div>
+                    </label>
                   </div>
                 </div>
               </>
@@ -333,12 +371,13 @@ const MergeModal: React.FC<MergeModalProps> = ({
               <button
                 onClick={mergeMode === 'individuals' ? handleMergeIndividuals :
                          mergeMode === 'families' ? handleMergeFamilies : handleDeduplicateIndividuals}
-                disabled={(mergeMode === 'individuals' && !mergeData.familyName.trim()) || isLoading}
+                disabled={(mergeMode === 'individuals' && !mergeData.familyName.trim())
+                  || (mergeMode === 'deduplicate' && (!retainedPerson || selectedPeople.length < 2 || Boolean(conflictMessage))) || isLoading}
                 className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
               >
                 {isLoading ? 'Processing...' :
                  mergeMode === 'individuals' ? 'Merge Individuals' :
-                 mergeMode === 'families' ? 'Merge Families' : 'Deduplicate Individuals'}
+                 mergeMode === 'families' ? 'Merge Families' : 'Merge duplicate people'}
               </button>
             </div>
           </div>

@@ -56,6 +56,7 @@ vi.mock('../services/userPreferences', () => ({ userPreferences: {} }));
 vi.mock('./SettingsPage', () => ({ default: () => <div>Integration settings destination</div> }));
 vi.mock('./AttendancePage', () => ({ default: () => <div>Attendance destination</div> }));
 vi.mock('../services/api', () => ({
+  onboardingAPI: { getStatus: vi.fn().mockResolvedValue({ data: { guided: { required: false } } }) },
   aiAPI: { getStatus: vi.fn().mockResolvedValue({ data: { configured: false } }) },
   gatheringsAPI: { getAll: vi.fn().mockResolvedValue({ data: { gatherings: [] } }) },
   notificationsAPI: { getAll: vi.fn(), markAsRead: vi.fn() },

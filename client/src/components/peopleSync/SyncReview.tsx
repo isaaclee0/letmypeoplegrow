@@ -4,6 +4,10 @@ import IdentityReviewTable, {
   type IdentityReviewTableHandle,
 } from './IdentityReviewTable';
 import SyncPlanSections, { deriveSyncPlanView } from './SyncPlanSections';
+import ReconciliationDecisions, { reconciliationCounts } from './ReconciliationDecisions';
+import { withoutCoveredHouseholdWarnings } from './HouseholdChoiceEditor';
+import OutsideSourceArchiveDecisions from './OutsideSourceArchiveDecisions';
+import GatheringReviewFilter, { filterGatheringReview, reviewGatherings, type ReviewGathering } from './GatheringReviewFilter';
 import {
   isRefreshOnlyReviewError,
   peopleSyncErrorCode,
@@ -53,11 +57,13 @@ export interface CandidateSearchRenderProps {
 interface SyncReviewCommonProps {
   provider: SyncProvider;
   batchName?: string;
+  gatherings?: ReviewGathering[];
   sourceName?: string;
   onRefresh: () => void | Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   applying: boolean;
   interactionDisabled?: boolean;
+  applyBlocked?: boolean;
   renderCandidateSearch?: (props: CandidateSearchRenderProps) => React.ReactNode;
   renderCandidateLabel?: (action: AmbiguousPersonAction, candidateId: number) => React.ReactNode;
   resolveAmbiguousArchiveIndividualId?: (action: AmbiguousPersonAction) => number | undefined;
@@ -220,6 +226,8 @@ function stateForReview(
     visitorChoices: {},
     acceptedArchiveIds: new Set(),
     acceptedFamilyRenameIds: new Set(),
+    acceptedFamilyResolutionIds: new Set(),
+    acceptedGatheringRemovalIds: new Set(),
   };
 }
 
@@ -273,7 +281,6 @@ function LegacyIdentityDecisions({
     visitorChoices: { ...previous.visitorChoices, [externalId]: choice },
   }));
   const count = plan.ambiguousPeople.length
-    + plan.familyConflicts.length
     + plan.promoteToRegular.filter((action) => action.reviewRequired).length;
 
   return (
@@ -339,11 +346,6 @@ function LegacyIdentityDecisions({
             </li>
           );
         })}
-        {plan.familyConflicts.map((conflict, index) => (
-          <li key={conflict.id || index} className="rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-700">
-            Family conflict requires review
-          </li>
-        ))}
         {plan.promoteToRegular.filter((action) => action.reviewRequired).map((action) => (
           <li key={action.id} className="rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-700">
             <p className="mb-2 font-medium">{localPerson(action.individualId)}</p>
@@ -481,12 +483,14 @@ function SafeSyncReview({
   review,
   batchName,
   sourceName,
+  gatherings,
   onRefresh,
   onPreviewCorrections,
   onApply,
   onDirtyChange,
   applying,
   interactionDisabled = false,
+  applyBlocked = false,
   renderCandidateSearch,
   renderCandidateLabel,
   resolveAmbiguousArchiveIndividualId,
@@ -500,6 +504,7 @@ function SafeSyncReview({
   const [confirmedDestructiveChanges, setConfirmedDestructiveChanges] = useState(false);
   const [applyError, setApplyError] = useState<unknown>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [gatheringFilter, setGatheringFilter] = useState('all');
   const [baselineVersion, setBaselineVersion] = useState(0);
   const baseReviewRef = useRef(review);
   const externalReviewKeyRef = useRef(`${review.runId}:${review.reviewToken}`);
@@ -564,7 +569,10 @@ function SafeSyncReview({
       },
     }
     : effectiveReview;
-  const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
+  const externalPerson = (id: string) => {
+    const outside = plan.archive.find((action) => action.reason === 'outside_all_sync_sources' && action.externalPersonId === id);
+    return displayName(directory.external[id]) || displayName(outside ? { firstName: outside.externalFirstName || '', lastName: outside.externalLastName || '' } : undefined) || 'External person';
+  };
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
 
   const decisionTarget = (externalId: string, decision: IdentityDecision | null | undefined): number | null => {
@@ -590,12 +598,21 @@ function SafeSyncReview({
           : established.individualId;
       claim(target, externalId);
     }
+    for (const action of plan.archive) {
+      if (action.reason === 'outside_all_sync_sources' && action.linkRequired && state.acceptedArchiveIds.has(action.individualId)) {
+        claim(action.individualId, action.externalPersonId);
+      }
+    }
     return byIndividual;
-  }, [reviewContext, state.identityDecisions, state.linkCorrections]);
+  }, [reviewContext, state.identityDecisions, state.linkCorrections, state.acceptedArchiveIds, plan.archive]);
   const collisions = [...claims.entries()].filter(([, externalIds]) => externalIds.length > 1);
   const incompleteExternalIds = incompleteIdentityExternalIds(state, reviewContext);
   const affectedExternalId = incompleteExternalIds[0] || collisions[0]?.[1][0];
   const planView = deriveSyncPlanView(effectiveReview, state);
+  const reconciliationReview = { ...effectiveReview, plan: withoutCoveredHouseholdWarnings(effectiveReview.plan) };
+  const displayedReview = filterGatheringReview(effectiveReview, gatheringFilter);
+  const gatheringOptions = reviewGatherings(effectiveReview, gatherings);
+  const reconciliation = reconciliationCounts(reconciliationReview, state);
   const acceptAllArchives = () => setState((current) => ({
     ...current,
     acceptedArchiveIds: new Set([
@@ -609,7 +626,7 @@ function SafeSyncReview({
   const correctionsReady = recordsMatch(state.linkCorrections, signedCorrections);
   const requiresConfirmation = !isPeopleImport && (
     planView.archive.length > 0
-    || planView.removeFromGathering.length > 0
+    || planView.removeFromGathering.some((action) => !action.reviewRequired)
     || state.acceptedFamilyRenameIds.size > 0
     || state.acceptedArchiveIds.size > 0
   );
@@ -621,6 +638,7 @@ function SafeSyncReview({
   const reviewExpired = refreshOnlyCode === 'SYNC_REVIEW_EXPIRED';
   const reviewAlreadyApplied = refreshOnlyCode === 'SYNC_REVIEW_ALREADY_APPLIED';
   const applyDisabled = applying
+    || applyBlocked
     || interactionDisabled
     || previewing
     || refreshOnlyError
@@ -629,7 +647,9 @@ function SafeSyncReview({
     || collisions.length > 0
     || !allPlannedArchivesAccepted
     || (requiresConfirmation && !confirmedDestructiveChanges);
-  const selectedCount = selectedChangeCount(effectiveReview, state);
+  const householdChoiceCount = Object.keys(plan.householdChoices?.edits || {}).length;
+  const sourceChangeCount = plan.sourceContext?.promotions?.length || 0;
+  const selectedCount = selectedChangeCount(effectiveReview, state) + householdChoiceCount + sourceChangeCount;
   const applyLabel = applying
     ? 'Applying…'
     : isPeopleImport
@@ -644,6 +664,7 @@ function SafeSyncReview({
     try {
       const selections = buildSyncSelections(state);
       if (operationKind === 'people_sync') {
+        if (plan.householdChoices) selections.householdChoices = plan.householdChoices.edits;
         await (onApply as Extract<SyncReviewProps, { operationKind: 'people_sync' }>['onApply'])(
           effectiveReview.reviewToken as PeopleReviewToken<'people_sync'>,
           selections,
@@ -721,16 +742,18 @@ function SafeSyncReview({
   const familyCount = planView.linkFamilies.length
     + planView.addFamilies.length
     + planView.moveFamily.length
-    + planView.renameFamily.length;
+    + planView.renameFamily.length
+    + reconciliation.selectedFamilies;
   const gatheringCount = planView.addToGathering.length + planView.removeFromGathering.length;
-  const destructiveCount = planView.archive.length
+  const outsideSourceArchives = plan.archive.filter((action) => action.reason === 'outside_all_sync_sources');
+  const destructiveCount = outsideSourceArchives.filter((action) => state.acceptedArchiveIds.has(action.individualId)).length + planView.archive.length
     + planView.removeFromGathering.length
     + planView.renameFamily.length;
   const fetchedAt = effectiveReview.snapshot?.fetchedAt || plan.snapshot?.fetchedAt || null;
-  const allClear = Object.keys(reviewContext?.identities || {}).length === 0
+  const allClear = sourceChangeCount === 0 && householdChoiceCount === 0 && Object.keys(reviewContext?.identities || {}).length === 0
     && Object.keys(reviewContext?.establishedLinks || {}).length === 0
     && Object.entries(plan).every(([key, value]) => [
-      'provider', 'authoritative', 'snapshot', 'people', 'reviewContext',
+      'provider', 'authoritative', 'snapshot', 'people', 'reviewContext', 'keptReconciliations',
     ].includes(key) || !Array.isArray(value) || value.length === 0);
 
   const focusVisibleIdentityRow = (externalId: string) => {
@@ -743,7 +766,7 @@ function SafeSyncReview({
     const row = [...root.querySelectorAll<HTMLElement>('[data-testid]')]
       .find((element) => targetTestIds.has(element.dataset.testid || '')
         && !element.closest('[aria-hidden="true"]'));
-    row?.querySelector<HTMLButtonElement>('button[aria-label]')?.focus();
+    row?.querySelector<HTMLButtonElement>('button[data-identity-picker]')?.focus();
   };
 
   const focusAffected = (externalId = affectedExternalId) => {
@@ -779,6 +802,9 @@ function SafeSyncReview({
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 Source snapshot: {fetchedAt ? <time dateTime={fetchedAt}>{formatInstant(fetchedAt, { dateStyle: 'medium', timeStyle: 'short' }) || 'Unavailable'}</time> : 'Unavailable'}
               </p>
+              {!isPeopleImport && <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
+                Match people, review household differences, then tidy attendance lists. Choose what to apply; anything left undecided stays unchanged.
+              </p>}
             </div>
             <button
               type="button"
@@ -790,19 +816,24 @@ function SafeSyncReview({
             </button>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <SummaryChip label="Identity decisions" count={Object.keys(reviewContext?.identities || {}).length} />
+            {Object.keys(reviewContext?.identities || {}).length > 0 && <SummaryChip label="Identity decisions" count={Object.keys(reviewContext?.identities || {}).length} />}
             <SummaryChip
               label="Needs attention"
-              count={incompleteExternalIds.length + collisions.length}
-              tone={affectedExternalId ? 'amber' : 'neutral'}
+              count={incompleteExternalIds.length + collisions.length + (isPeopleImport ? 0 : reconciliation.pending)}
+              tone={affectedExternalId || (!isPeopleImport && reconciliation.pending) ? 'amber' : 'neutral'}
               onClick={affectedExternalId ? () => focusAffected() : undefined}
             />
-            {!isPeopleImport && <SummaryChip label="Managed updates" count={managedCount} />}
-            {!isPeopleImport && <SummaryChip label="Family changes" count={familyCount} />}
-            {!isPeopleImport && <SummaryChip label="Gathering changes" count={gatheringCount} />}
-            {!isPeopleImport && <SummaryChip label="Destructive changes" count={destructiveCount} tone={destructiveCount > 0 ? 'amber' : 'neutral'} />}
+            {!isPeopleImport && managedCount > 0 && <SummaryChip label="Managed updates" count={managedCount} />}
+            {!isPeopleImport && familyCount > 0 && <SummaryChip label="Family changes" count={familyCount} />}
+            {!isPeopleImport && reconciliationReview.plan.familyConflicts.length > 0 && <SummaryChip label="Households to review" count={reconciliationReview.plan.familyConflicts.length} tone="amber" />}
+            {!isPeopleImport && householdChoiceCount > 0 && <SummaryChip label="Household choices to save" count={householdChoiceCount} />}
+            {!isPeopleImport && gatheringCount > 0 && <SummaryChip label="Gathering changes" count={gatheringCount} />}
+            {!isPeopleImport && destructiveCount > 0 && <SummaryChip label="Destructive changes" count={destructiveCount} tone="amber" />}
           </div>
         </header>
+
+        {gatherings && <GatheringReviewFilter gatherings={gatheringOptions} value={gatheringFilter}
+          onChange={setGatheringFilter} disabled={applying || previewing} />}
 
         {allClear && (
           <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-200">
@@ -869,9 +900,27 @@ function SafeSyncReview({
           </>
         )}
 
+        {!isPeopleImport && !unsafeReview && <ReconciliationDecisions
+          review={filterGatheringReview(reconciliationReview, gatheringFilter)}
+          state={state}
+          onStateChange={setState}
+        />}
+
+        {!isPeopleImport && !unsafeReview && <OutsideSourceArchiveDecisions
+          actions={outsideSourceArchives}
+          people={directory}
+          acceptedIds={state.acceptedArchiveIds}
+          onChange={(individualId, accepted) => setState((current) => {
+            const acceptedArchiveIds = new Set(current.acceptedArchiveIds);
+            if (accepted) acceptedArchiveIds.add(individualId); else acceptedArchiveIds.delete(individualId);
+            return { ...current, acceptedArchiveIds };
+          })}
+        />}
+
         <SyncPlanSections
           operationKind={operationKind}
-          review={effectiveReview}
+          review={displayedReview}
+          gatherings={gatheringOptions}
           state={state}
           archiveActions={planView.archive}
           onStateChange={setState}
@@ -944,7 +993,15 @@ function SafeSyncReview({
         )}
 
         <footer className="flex flex-col gap-3 border-t border-gray-200 pt-5 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-gray-500 dark:text-gray-400">Nothing is changed until you apply this review.</p>
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            <p>Nothing is changed until you apply this review.</p>
+            {sourceChangeCount > 0 && <p className="mt-1">Save {sourceChangeCount} list source {sourceChangeCount === 1 ? 'change' : 'changes'} reviewed above.</p>}
+            {householdChoiceCount > 0 && <p className="mt-1">Save {householdChoiceCount} household {householdChoiceCount === 1 ? 'choice' : 'choices'} and any reviewed display names.</p>}
+            {applyBlocked && <p className="mt-1 font-medium text-amber-800 dark:text-amber-200">Preview the latest household choices before applying.</p>}
+            {!isPeopleImport && reconciliation.pending > 0 && <p className="mt-1 font-medium text-amber-800 dark:text-amber-200">
+              {reconciliation.pending} household or attendance-list {reconciliation.pending === 1 ? 'decision remains' : 'decisions remain'} for later.
+            </p>}
+          </div>
           <button
             type="button"
             onClick={() => void submit()}

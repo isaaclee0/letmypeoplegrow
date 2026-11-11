@@ -67,7 +67,7 @@ const batch = {
 
 function renderPanel({
   status = {},
-  peopleSyncSettings = settings,
+  peopleSyncSettings = { ...settings, authorityProvider: 'planning_center' },
 }: {
   status?: Record<string, unknown>;
   peopleSyncSettings?: PeopleSyncSettings;
@@ -91,6 +91,26 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockReturnValue(new Promise(() => {}));
   });
 
+  it('shows one integration review action for multiple lists and keeps configuration separate', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({ data: { batches: [batch, { ...batch, id: 13, name: 'Youth' }] } });
+    renderPanel();
+    await screen.findByText('Youth');
+    expect(screen.getAllByRole('button', { name: 'Review & sync' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(2);
+    expect(screen.getByText('Synced lists')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Review & sync' }));
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/review');
+  });
+
+  it.each([
+    { ...settings, authorityProvider: 'planning_center', pendingAuthorityProvider: 'elvanto' },
+    settings,
+  ] as PeopleSyncSettings[])('does not offer ordinary sync while the people authority is unsettled', async (peopleSyncSettings) => {
+    renderPanel({ peopleSyncSettings });
+    await screen.findByText('Members');
+    expect(screen.queryByRole('button', { name: 'Review & sync' })).not.toBeInTheDocument();
+  });
+
   it('shows a pending List change and discards that draft without removing the batch', async () => {
     vi.mocked(peopleSyncAPI.discardSourceDraft).mockResolvedValue({ data: { batch } });
     renderPanel();
@@ -100,18 +120,34 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     await waitFor(() => expect(peopleSyncAPI.discardSourceDraft).toHaveBeenCalledWith('planning_center', 12));
   });
 
-  it('opens the dedicated batch review without fetching or rendering a review inline when automatic sync is off', async () => {
+  it('can reauthenticate the active source without disconnecting and can retry an authorization error', async () => {
+    vi.mocked(integrationsAPI.authorizePlanningCenter).mockRejectedValueOnce({
+      response: { data: { error: 'Authorization temporarily unavailable.' } },
+    }).mockReturnValueOnce(new Promise(() => {}));
+    renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' } });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Reconnect Planning Center' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Authorization temporarily unavailable.');
+    expect(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' })).toBeChecked();
+    expect(integrationsAPI.disconnectPlanningCenter).not.toHaveBeenCalled();
+    expect(peopleSyncAPI.disableAuthority).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Reconnect Planning Center' }));
+    expect(screen.getByRole('button', { name: 'Reconnecting…' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('opens the combined review without fetching or rendering a review inline when automatic sync is off', async () => {
     const user = userEvent.setup();
     vi.mocked(settingsAPI.getIntegrationSettings).mockResolvedValue({
       data: { planningCenterSyncEnabled: false, planningCenterTrackBackgroundChecks: false },
     });
     renderPanel();
-    const reviewButton = await screen.findByRole('button', { name: 'Review source & sync Members' });
+    const reviewButton = await screen.findByRole('button', { name: 'Review & sync' });
     expect(reviewButton).toHaveClass('rounded-md', 'bg-green-600', 'text-white');
 
     await user.click(reviewButton);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/12/review');
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/review');
     expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Planning Center batch sync review' })).not.toBeInTheDocument();
   });
@@ -123,7 +159,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     renderPanel();
 
     expect(await screen.findByText('Active')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Review & sync Members' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review & sync' })).toBeInTheDocument();
   });
 
   it('keeps prepared batches editable while waiting for an authority switch', async () => {
@@ -137,7 +173,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Discard source draft' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Review & sync Members' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review & sync' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
   });
 
@@ -228,7 +264,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     renderPanel();
 
     expect(await screen.findByText('Source review required')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Review source & sync Members' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review & sync' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
   });
 
@@ -239,7 +275,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     renderPanel();
 
     expect(await screen.findByText('Disabled')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Review & sync Members' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review & sync' })).not.toBeInTheDocument();
   });
 
   it('keeps a disabled batch draft actionable without presenting it as a source review', async () => {
@@ -254,46 +290,45 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
   });
 
   it('opens one combined authority review after creating the first batch with no source of truth', async () => {
-    renderPanel();
+    renderPanel({ peopleSyncSettings: settings });
     await screen.findByText('Members');
 
-    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add list' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
     expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
   });
 
-  it('opens ordinary batch review after creating another batch for the active authority', async () => {
+  it('opens combined review after creating another batch for the active authority', async () => {
     renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' } });
     await screen.findByText('Members');
 
-    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add list' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
-    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/48/review');
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/review');
   });
 
   it('opens the reviewed switch flow when another provider is authoritative', async () => {
     renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'elvanto' } });
     await screen.findByText('Members');
 
-    fireEvent.click(screen.getByRole('button', { name: 'New batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add list' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/authority-review?reason=first-batch');
     expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
   });
 
-  it('keeps the existing reload behavior after editing a batch', async () => {
+  it('opens combined review after saving an existing list draft', async () => {
     renderPanel();
     await screen.findByText('Members');
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
-    expect(mockNavigate).not.toHaveBeenCalled();
-    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/review');
   });
 
   it('retains modern batch edit and delete mutations beside dedicated review navigation', async () => {
@@ -368,13 +403,13 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
 
     renderPanel();
 
-    expect(await screen.findByText('Sync batches')).toBeInTheDocument();
+    expect(await screen.findByText('Synced lists')).toBeInTheDocument();
     expect(screen.getByText('Retired legacy batches')).toBeInTheDocument();
     expect(screen.getByText('Old membership filters')).toBeInTheDocument();
     expect(screen.getByText(/no longer runs/i)).toBeInTheDocument();
     expect(screen.getByText(/Prior settings: scheduled monthly \(day 15\)/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
-    expect(screen.getAllByRole('button', { name: 'Review source & sync Members' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Review & sync' })).toHaveLength(1);
 
     const legacyCard = screen.getByText('Old membership filters').closest('li');
     expect(legacyCard).not.toBeNull();

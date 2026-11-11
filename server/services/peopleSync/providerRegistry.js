@@ -2,7 +2,8 @@ const REQUIRED = [
   'validateConnection', 'listSources', 'fetchSourceSnapshot', 'fetchImportSnapshot', 'isLifecycleEligible',
 ];
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
-const ALLOWED_KEYS = new Set(['provider', ...REQUIRED]);
+const OPTIONAL = ['fetchReconciliationSnapshot'];
+const ALLOWED_KEYS = new Set(['provider', ...REQUIRED, ...OPTIONAL]);
 const adapters = new Map();
 
 function validateAdapter(adapter) {
@@ -14,6 +15,11 @@ function validateAdapter(adapter) {
   for (const method of REQUIRED) {
     if (!Object.prototype.hasOwnProperty.call(adapter, method) || typeof adapter[method] !== 'function') {
       throw new Error(`Provider ${provider} missing ${method}`);
+    }
+  }
+  for (const method of OPTIONAL) {
+    if (Object.prototype.hasOwnProperty.call(adapter, method) && typeof adapter[method] !== 'function') {
+      throw new Error(`Provider ${provider} has invalid ${method}`);
     }
   }
   for (const key of Object.getOwnPropertyNames(adapter)) {

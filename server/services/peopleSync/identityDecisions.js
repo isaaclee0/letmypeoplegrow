@@ -55,7 +55,37 @@ function validateDestructiveSelections(plan, selections, claimedIndividualIds = 
     acceptedFamilyRenameIds.add(actionId);
   }
 
-  return { acceptedArchiveIndividualIds, acceptedFamilyRenameIds };
+  const acceptProposalIds = (field, offered, verb = 'accept') => {
+    if (selections[field] !== undefined && !Array.isArray(selections[field])) {
+      throw new Error(`${field} must be an array of proposal IDs`);
+    }
+    const accepted = new Set();
+    for (const id of selections[field] || []) {
+      if (typeof id !== 'string' || !offered.has(id)) throw new Error(`Cannot ${verb} a reconciliation not offered in this plan: ${id}`);
+      accepted.add(id);
+    }
+    return accepted;
+  };
+  const offeredFamilyResolutionIds = new Set(
+    asArray(plan.familyConflicts).filter((action) => action.resolution && plan.authoritative && plan.operationKind !== 'people_import').map((action) => action.id)
+  );
+  const offeredGatheringRemovalIds = new Set(
+    asArray(plan.removeFromGathering).filter((action) => action.reviewRequired === true && plan.authoritative && plan.operationKind !== 'people_import').map((action) => action.id)
+  );
+  const acceptedFamilyResolutionIds = acceptProposalIds('acceptFamilyResolutionIds', offeredFamilyResolutionIds);
+  const acceptedGatheringRemovalIds = acceptProposalIds('acceptGatheringRemovalIds', offeredGatheringRemovalIds);
+  // "Keep LMPG as it is": the same signed proposals, remembered as declined.
+  const keptReconciliationIds = acceptProposalIds('keepReconciliationIds',
+    new Set([...offeredFamilyResolutionIds, ...offeredGatheringRemovalIds]), 'keep');
+  for (const id of keptReconciliationIds) {
+    if (acceptedFamilyResolutionIds.has(id) || acceptedGatheringRemovalIds.has(id)) {
+      throw new Error(`A reconciliation cannot be both accepted and kept: ${id}`);
+    }
+  }
+  return {
+    acceptedArchiveIndividualIds, acceptedFamilyRenameIds, acceptedFamilyResolutionIds, acceptedGatheringRemovalIds,
+    keptReconciliationIds,
+  };
 }
 
 function validateDecisionFields(externalPersonId, decision) {

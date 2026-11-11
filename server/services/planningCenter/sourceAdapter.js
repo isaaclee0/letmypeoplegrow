@@ -64,7 +64,7 @@ function assertResolvableList(resource, expectedExternalId) {
   return dto;
 }
 
-function mapIncluded(included, fieldDataById, primaryContacts, householdNames, contextById, memberIds) {
+function mapIncluded(included, fieldDataById, primaryContacts, householdNames, householdMembers, contextById, memberIds) {
   for (const resource of Array.isArray(included) ? included : []) {
     if (!resource || typeof resource !== 'object') continue;
     if (resource.type === 'FieldDatum' && resource.id) {
@@ -72,8 +72,15 @@ function mapIncluded(included, fieldDataById, primaryContacts, householdNames, c
     } else if (resource.type === 'Household' && resource.id) {
       const attributes = resource.attributes || {};
       const name = String(attributes.name ?? '').trim();
-      if (name) householdNames.set(resource.id, name);
+      if (name || !householdNames.has(resource.id)) householdNames.set(resource.id, name);
       if (attributes.primary_contact_id) primaryContacts.set(resource.id, attributes.primary_contact_id);
+      const people = resource.relationships?.people?.data;
+      if (Array.isArray(people)) {
+        const ids = people.map((person) => String(person?.id ?? '').trim()).filter(Boolean);
+        // Retain only identity references for the review display. Do not fill in
+        // an included Person's unknown household membership from this relation.
+        householdMembers.set(resource.id, [...new Set([...(householdMembers.get(resource.id) || []), ...ids])]);
+      }
     }
   }
   for (const resource of Array.isArray(included) ? included : []) {
@@ -100,6 +107,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
   const memberIds = new Set();
   const primaryContacts = new Map();
   const householdNames = new Map();
+  const householdMembers = new Map();
   const memberUrl = `${API}/lists/${encodeURIComponent(sourceExternalId)}/people?per_page=100&include=households.people,field_data`;
 
   await client.getAll(memberUrl, async (envelope) => {
@@ -112,7 +120,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
       }
       memberIds.add(id);
     }
-    mapIncluded(envelope.included, fieldDataById, primaryContacts, householdNames, contextById, memberIds);
+    mapIncluded(envelope.included, fieldDataById, primaryContacts, householdNames, householdMembers, contextById, memberIds);
     for (const resource of pageMembers) {
       const id = String(resource.id).trim();
       membersById.set(id, projectPerson(resource, fieldDataById));
@@ -137,7 +145,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
     memberExternalIds: [...memberIds].sort(),
     people,
     contextPeople,
-    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts, householdNames),
+    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts, householdNames, householdMembers),
   };
 }
 
@@ -148,8 +156,10 @@ async function fetchPlanningCenterAllSnapshot(options = {}) {
   const memberIds = new Set();
   const primaryContacts = new Map();
   const householdNames = new Map();
+  const householdMembers = new Map();
 
-  await client.getAll(`${API}/people?per_page=100&include=households.people,field_data`, async (envelope) => {
+  const include = options.includeFieldData === false ? 'households.people' : 'households.people,field_data';
+  await client.getAll(`${API}/people?per_page=100&include=${include}`, async (envelope) => {
     const fieldDataById = new Map();
     const pageMembers = Array.isArray(envelope.data) ? envelope.data : [];
     for (const resource of pageMembers) {
@@ -159,7 +169,7 @@ async function fetchPlanningCenterAllSnapshot(options = {}) {
       }
       memberIds.add(id);
     }
-    mapIncluded(envelope.included, fieldDataById, primaryContacts, householdNames, contextById, memberIds);
+    mapIncluded(envelope.included, fieldDataById, primaryContacts, householdNames, householdMembers, contextById, memberIds);
     for (const resource of pageMembers) {
       const id = String(resource.id).trim();
       membersById.set(id, projectPerson(resource, fieldDataById));
@@ -180,7 +190,7 @@ async function fetchPlanningCenterAllSnapshot(options = {}) {
     memberExternalIds: [...memberIds].sort(),
     people: memberRawPeople.map(toNormalizedPcoPerson),
     contextPeople: contextRawPeople.map(toNormalizedPcoPerson),
-    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts, householdNames),
+    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts, householdNames, householdMembers),
   };
 }
 

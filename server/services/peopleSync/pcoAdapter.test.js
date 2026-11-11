@@ -28,7 +28,7 @@ function adapter(deps = {}) {
 test('createPcoAdapter exposes the complete-provider import contract', () => {
   const value = adapter();
   assert.deepEqual(Object.getOwnPropertyNames(value).sort(), [
-    'fetchImportSnapshot', 'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
+    'fetchImportSnapshot', 'fetchReconciliationSnapshot', 'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
   ]);
   assert.equal(value.provider, 'planning_center');
 });
@@ -193,4 +193,13 @@ test('validateConnection delegates to the injected validator with the access tok
   const value = adapter({ validateToken: async (accessToken) => { seen.push(accessToken); return { connected: true }; } });
   assert.deepEqual(await value.validateConnection({ credentials: { accessToken: 'secret' } }), { connected: true });
   assert.deepEqual(seen, ['secret']);
+});
+
+test('reconciliation directory reads basic identities without custom field data', async () => {
+  let received;
+  const snapshot = { complete: true, people: [] };
+  const value = adapter({fetchAllSnapshot:async options=>{received=options;return snapshot;}});
+  assert.equal(typeof value.fetchReconciliationSnapshot,'function');
+  assert.equal(await value.fetchReconciliationSnapshot({churchId:'church-a'}),snapshot);
+  assert.deepEqual(received,{accessToken:'fresh-token',includeFieldData:false});
 });

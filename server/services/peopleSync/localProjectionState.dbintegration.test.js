@@ -137,6 +137,7 @@ test('local projection state stays within its requested church when provider IDs
       lastSeenAt: '2026-08-04 00:00:03',
     }]);
     assert.deepEqual(state.gatheringMemberships, [{
+      gatheringName: 'Lovelace Gathering', hasOtherProviderSources: false, addedByPcoBatchId: null,
       gatheringTypeId: projectionA.gatheringTypeId, individualId: projectionA.individualId, addedBySyncBatchId: projectionA.syncBatchId,
     }]);
     assert.deepEqual(state.matchReviewState, {

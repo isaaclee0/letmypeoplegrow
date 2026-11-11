@@ -10,6 +10,7 @@ const batchRepository = require('./batchRepository');
 const runRepository = require('./runRepository');
 const authority = require('./authority');
 const pcoCredentialMigration = require('./pcoCredentialMigration');
+const matchReviewRepository = require('./matchReviewRepository');
 const { digestSourceIdentity } = require('./sourceModel');
 
 process.env.SYNC_REVIEW_SECRET = process.env.SYNC_REVIEW_SECRET || 'test-secret-for-source-orchestrator';
@@ -224,6 +225,77 @@ function selectionsForReview(review) {
     identityDecisions,
     ...(Object.keys(linkCorrections).length > 0 ? { linkCorrections } : {}),
   };
+}
+
+for (const provider of ['planning_center', 'elvanto']) {
+  for (const outcome of ['create', 'link', 'defer', 'omitted']) {
+    test(`${provider} resolves a previously deferred person and gathering in one apply: ${outcome}`, async () => {
+      // A held identity is absent from addPeople/addToGathering in the base
+      // plan. Resolving it must not require another sync to join its roster.
+      await withTestChurchDb(async (churchId) => {
+        await connectionStore.upsertConnection({
+          churchId, provider, authType: provider === 'planning_center' ? 'oauth' : 'api_key',
+          credentials: provider === 'planning_center' ? { accessToken: 'test-token' } : { apiKey: 'test-key' },
+          connectedBy: null, metadata: {},
+        });
+        await setAuthority(churchId, provider);
+        const gathering = await Database.query(
+          'INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Sunday']
+        );
+        const gatheringTypeId = Number(gathering.insertId);
+        const selected = provider === 'planning_center' ? pcoSource('deferred') : source('deferred');
+        const created = await batchRepository.createBatch({
+          churchId, provider, name: 'Sunday', gatheringTypeId, initialDraftSource: selected,
+        });
+        const batch = await batchRepository.promoteSourceDraftWithConnection(Database.getChurchDb(churchId), {
+          churchId, provider, batchId: created.id,
+          expectedBaseRevision: created.draftSourceBaseRevision,
+          expectedDraftDigest: digestSourceIdentity(created.draftSource),
+        });
+        const localId = await seedIndividual(churchId, { firstName: 'Different', lastName: 'Name' });
+        const data = { people: [person('deferred-person')] };
+        if (provider === 'planning_center') pcoScenarios = new Map([['deferred', pcoSnapshot(selected, data)]]);
+        else scenarios = new Map([['deferred', snapshot(selected, data)]]);
+        const input = { churchId, provider, batchId: batch.id, trigger: 'manual' };
+        const first = await orchestrator.buildReview(input);
+        await orchestrator.applyReviewed({
+          ...input, reviewToken: first.reviewToken,
+          selections: { decisionContractVersion: 2, identityDecisions: { 'deferred-person': { outcome: 'defer' } } },
+        });
+        assert.equal(await countPeople(churchId), 1);
+        assert.deepEqual(await Database.query('SELECT * FROM gathering_lists WHERE church_id = ?', [churchId]), []);
+
+        const review = await orchestrator.buildReview(input);
+        assert.equal(review.plan.reviewContext.identities['deferred-person'].held, true);
+        const decision = outcome === 'link' ? { outcome, individualId: localId } : { outcome };
+        const result = await orchestrator.applyReviewed({
+          ...input, reviewToken: review.reviewToken,
+          selections: { decisionContractVersion: 2, identityDecisions: outcome === 'omitted' ? {} : { 'deferred-person': decision } },
+        });
+        const resolved = outcome === 'create' || outcome === 'link';
+        const memberships = await Database.query(
+          'SELECT individual_id, gathering_type_id, added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?', [churchId]
+        );
+        assert.equal(memberships.length, resolved ? 1 : 0, 'the resolved identity must join Sunday in this apply');
+        assert.equal(result.applied.gatheringAssigned, resolved ? 1 : 0);
+        assert.equal(await countPeople(churchId), outcome === 'create' ? 2 : 1);
+        const state = await matchReviewRepository.listMatchReviewState(churchId, provider);
+        assert.equal(state.holds.length, resolved ? 0 : 1);
+        if (resolved) {
+          const [link] = await Database.query(
+            'SELECT individual_id FROM external_person_links WHERE church_id = ? AND provider = ? AND external_person_id = ?',
+            [churchId, provider, 'deferred-person']
+          );
+          assert.deepEqual(memberships, [{
+            individual_id: link.individual_id, gathering_type_id: gatheringTypeId, added_by_sync_batch_id: batch.id,
+          }]);
+          if (outcome === 'link') assert.equal(link.individual_id, localId);
+          const next = await orchestrator.buildReview(input);
+          assert.deepEqual(next.plan.addToGathering, [], 'no follow-up gathering assignment remains');
+        }
+      });
+    });
+  }
 }
 
 async function replaceElvantoConnectionGeneration(churchId, generation, apiKey) {

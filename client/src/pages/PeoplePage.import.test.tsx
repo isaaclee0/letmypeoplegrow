@@ -156,7 +156,7 @@ describe('PeoplePage provider import', () => {
   });
   it.each([
     ['Add People', 'Add New People'],
-    ['TSV Upload', 'Upload TSV File'],
+    ['TSV Upload', 'Upload TSV or CSV File'],
     ['Copy & Paste', 'Copy & Paste Data'],
   ])('opens %s in the add modal', async (choice, heading) => {
     renderPeoplePage({ people: [person(1)] });

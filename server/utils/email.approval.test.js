@@ -12,7 +12,7 @@ for (const [label, env, expected] of [
     const sent = [];
     const context = { module: { exports: {} }, process: { env }, console,
       require(name) {
-        assert.equal(name, '@getbrevo/brevo');
+        if (name !== '@getbrevo/brevo') return require(name);
         return { BrevoClient: class { transactionalEmails = { sendTransacEmail: async (payload) => { sent.push(payload); return { messageId: 'test' }; } }; } };
       },
     };

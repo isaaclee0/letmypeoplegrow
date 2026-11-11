@@ -84,13 +84,13 @@ for (const environment of ['development', 'production', undefined]) {
           assert.equal((await request(router, '/verify-code', { contact, churchId, code: '000000' })).status, 401);
         }
         if (contactType === 'email') {
-          const generator = require('../utils/churchIdGenerator');
-          t.mock.method(generator, 'getOrCreateChurchId', async () => churchId);
           const registered = await request(router, '/register', {
             email: 'new@example.com', firstName: 'New', lastName: 'Admin', churchName: 'Test Church',
           });
           assert.equal(registered.status, 201);
-          const [registrationCode] = await Database.query("SELECT code FROM otc_codes WHERE contact_identifier = 'new@example.com'");
+          const { church_id: registeredChurchId } = Database.lookupChurchByEmail('new@example.com');
+          const [registrationCode] = await Database.queryForChurch(registeredChurchId,
+            'SELECT code FROM otc_codes WHERE contact_identifier = ? AND church_id = ?', ['new@example.com', registeredChurchId]);
           if (dev) assert.equal(registrationCode.code, '000000');
           else assert.match(registrationCode.code, /^[1-9]\d{5}$/);
           assert.equal(emailSend.mock.callCount(), dev ? 0 : 2);

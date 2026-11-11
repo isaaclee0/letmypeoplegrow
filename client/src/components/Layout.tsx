@@ -52,6 +52,15 @@ const Layout: React.FC = () => {
   const isOffline = isOfflineMode || connectionStatus === 'offline';
   const location = useLocation();
   const navigate = useNavigate();
+  const inviteHintKey = `invite_hint:${user?.church_id}:${user?.id}`;
+  const [inviteHint, setInviteHint] = useState(false);
+  useEffect(() => {
+    setInviteHint(user?.role === 'admin' && localStorage.getItem(inviteHintKey) === 'show');
+  }, [inviteHintKey, user?.role, location.state]);
+  const dismissInviteHint = () => {
+    localStorage.removeItem(inviteHintKey);
+    setInviteHint(false);
+  };
   const notificationsRef = useRef<HTMLDivElement>(null);
 
   // Load AI configuration status
@@ -180,6 +189,13 @@ const Layout: React.FC = () => {
 
   // Check-in locked mode: hide sidebar and top bar entirely
   // Uses fixed positioning to prevent iOS Safari from scrolling the body when inputs are focused
+  if (location.pathname === '/app/onboarding') {
+    return <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-900 dark:to-gray-900">
+      <header className="mx-auto flex max-w-3xl items-center justify-between px-4 pt-6 sm:px-6"><img src="/logo.svg" alt="Let My People Grow" className="h-10 w-auto" /><button type="button" onClick={handleLogout} className="text-sm text-gray-600 underline dark:text-gray-300">Sign out</button></header>
+      <Outlet />
+    </div>;
+  }
+
   if (checkInsCtx.isLocked) {
     return (
       <div className="fixed inset-0 bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-900 dark:to-gray-900 overflow-hidden">
@@ -234,8 +250,8 @@ const Layout: React.FC = () => {
                     location.pathname === item.href
                       ? 'bg-secondary-500 text-white shadow-md'
                       : 'text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white'
-                  } group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200`}
-                  onClick={() => setSidebarOpen(false)}
+                  } ${inviteHint && item.name === 'Users' ? 'ring-2 ring-yellow-300 bg-primary-700' : ''} group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200`}
+                  onClick={() => { setSidebarOpen(false); if (item.name === 'Users') dismissInviteHint(); }}
                 >
                   <item.icon className="mr-4 h-6 w-6" />
                   {item.name}
@@ -298,7 +314,8 @@ const Layout: React.FC = () => {
                       location.pathname === item.href
                         ? 'bg-secondary-500 text-white shadow-md'
                         : 'text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white'
-                    } group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200`}
+                    } ${inviteHint && item.name === 'Users' ? 'ring-2 ring-yellow-300 bg-primary-700' : ''} group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200`}
+                    onClick={() => { if (item.name === 'Users') dismissInviteHint(); }}
                   >
                     <item.icon className="mr-3 h-6 w-6" />
                     {item.name}
@@ -477,6 +494,10 @@ const Layout: React.FC = () => {
 
         {/* Page content */}
         <main className="flex-1 relative overflow-y-auto scrollbar-thin focus:outline-none">
+          {inviteHint && <aside aria-label="Invite your team later" className="mx-4 mt-4 flex items-start justify-between gap-4 rounded-lg border border-primary-200 bg-primary-50 p-4 text-sm text-primary-900 dark:border-primary-700 dark:bg-gray-800 dark:text-primary-200">
+            <p><span aria-hidden="true" className="mr-2 hidden lg:inline">←</span>You can invite your team in <Link to="/app/users" onClick={dismissInviteHint} className="font-semibold underline">Users</Link> whenever you're ready.</p>
+            <button type="button" onClick={dismissInviteHint} aria-label="Dismiss invitation tip" className="shrink-0 underline">Got it</button>
+          </aside>}
           <div className="py-6">
             <div className="max-w-7xl mx-auto px-2 sm:px-6 md:px-8">
               <Outlet />
