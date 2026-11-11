@@ -37,7 +37,9 @@ export type PlanningCenterConnectionErrorCode =
 
 /** Response returned by GET /integrations/planning-center/status. */
 export interface PlanningCenterStatus {
+  /** Whether the installation enables Planning Center. */
   enabled: boolean;
+  /** Whether this church has a stored connection; false before its first OAuth connection. */
   configured?: boolean;
   connected: boolean;
   planningCenterAccount: string | null;

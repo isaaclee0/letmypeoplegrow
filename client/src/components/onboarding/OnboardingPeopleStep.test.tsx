@@ -5,6 +5,12 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import OnboardingPeopleStep from './OnboardingPeopleStep';
 import type { GuidedOnboardingState } from '../../services/api';
 import type { PeopleImportSummary } from '../people/AddPeopleModal';
+import type { PlanningCenterStatus } from '../peopleSync/types';
+// A new church has no saved connection, even when the integration is enabled.
+const unconnectedPcoStatus: PlanningCenterStatus = {
+  enabled: true, configured: false, connected: false, planningCenterAccount: null,
+  reconnectRequired: false, connectionErrorCode: null,
+};
 const { api, rollback } = vi.hoisted(() => ({
   api: { people: vi.fn(), settings: vi.fn(), pco: vi.fn(), sources: vi.fn(), milestone: vi.fn() },
   rollback: vi.fn(),
@@ -25,7 +31,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.people.mockResolvedValue({ data: { people: [] } });
   api.settings.mockResolvedValue({ data: { settings: { authorityProvider: 'none', peopleEditingLocked: true } } });
-  api.pco.mockResolvedValue({ data: { enabled: true, configured: true, connected: false } });
+  api.pco.mockResolvedValue({ data: unconnectedPcoStatus });
   api.sources.mockResolvedValue({ data: { sources: [], allOption: { kind: 'all', name: 'Everyone' } } });
   api.milestone.mockResolvedValue(undefined);
 });
@@ -51,10 +57,33 @@ it('offers all three local methods after choosing no provider', async () => {
   expect(screen.getByRole('button', { name: /Download template/ })).toBeInTheDocument();
 });
 it('does not offer a disabled Planning Center integration as a working connection', async () => {
-  api.pco.mockResolvedValue({ data: { enabled: false, configured: false, connected: false } });
+  api.pco.mockResolvedValue({ data: { ...unconnectedPcoStatus, enabled: false } });
   render(<Harness />);
   expect(await screen.findByRole('button', { name: 'Planning Center' })).toBeDisabled();
   expect(screen.getByText(/Planning Center isn't available/)).toBeInTheDocument();
+});
+
+it.each(['sync', 'import'] as const)('lets a new church connect Planning Center for %s before it has stored credentials', async (mode) => {
+  if (mode === 'import') api.sources.mockRejectedValueOnce({ response: { data: { code: 'SYNC_NOT_CONNECTED' } } });
+  render(<Harness />);
+  const planningCenter = await screen.findByRole('button', { name: 'Planning Center' });
+  expect(planningCenter).toBeEnabled();
+  expect(screen.queryByText(/Planning Center isn't available/)).not.toBeInTheDocument();
+  await userEvent.click(planningCenter);
+  await userEvent.click(screen.getByRole('button', {
+    name: mode === 'sync' ? /Keep using Planning Center/ : /one-time import/i,
+  }));
+  expect(await screen.findByRole('button', { name: 'Connect Planning Center' })).toBeEnabled();
+});
+
+it('allows retrying a failed availability check without declaring Planning Center unavailable', async () => {
+  api.pco.mockRejectedValueOnce(new Error('Temporarily offline'));
+  render(<Harness />);
+  expect(await screen.findByRole('button', { name: 'Planning Center' })).toBeDisabled();
+  expect(screen.getByText(/availability could not be checked/)).toBeInTheDocument();
+  expect(screen.queryByText(/Planning Center isn't available/)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(await screen.findByRole('button', { name: 'Planning Center' })).toBeEnabled();
 });
 
 it.each(['milestone', 'people'] as const)('keeps a saved person when the %s refresh fails and retries both reads', async (failedRead) => {

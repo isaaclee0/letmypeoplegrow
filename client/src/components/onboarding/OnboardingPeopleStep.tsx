@@ -54,7 +54,9 @@ export default function OnboardingPeopleStep({ state, status, gatherings, onStat
       setPeople((roster.data.people || []).filter((person: Person) => person.isActive !== false));
       const settings = policy.data.settings;
       setAllowManual(settings.authorityProvider === 'none' || settings.peopleEditingLocked === false);
-      setPcoAvailable(!!pco.data?.enabled && pco.data?.configured !== false);
+      // `configured` describes this church's saved connection, not installation availability.
+      // New churches must be able to choose Planning Center before connecting it.
+      setPcoAvailable(pco.data?.enabled === true);
       setPcoCheckFailed(pco.failed);
       setSavedRefreshPending(false);
       setReady(true);
