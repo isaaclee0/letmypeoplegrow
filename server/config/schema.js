@@ -25,6 +25,25 @@ CREATE INDEX IF NOT EXISTS idx_user_lookup_email ON user_lookup(email);
 CREATE INDEX IF NOT EXISTS idx_user_lookup_mobile ON user_lookup(mobile_number);
 CREATE INDEX IF NOT EXISTS idx_user_lookup_church ON user_lookup(church_id);
 
+CREATE TABLE IF NOT EXISTS organisation_referrals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  invited_by INTEGER NOT NULL,
+  referrer_name TEXT NOT NULL,
+  email TEXT NOT NULL COLLATE NOCASE,
+  attempt_id TEXT NOT NULL,
+  last_attempt_at TEXT NOT NULL DEFAULT (datetime('now')),
+  delivery_failed INTEGER NOT NULL DEFAULT 0,
+  sent_at TEXT,
+  expires_at TEXT,
+  registered_church_id TEXT,
+  redeemed_at TEXT,
+  UNIQUE(church_id, email),
+  FOREIGN KEY (church_id) REFERENCES churches(church_id) ON DELETE CASCADE,
+  FOREIGN KEY (registered_church_id) REFERENCES churches(church_id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_organisation_referrals_email ON organisation_referrals(email);
+
 CREATE TABLE IF NOT EXISTS platform_settings (
   setting_key TEXT PRIMARY KEY,
   setting_value TEXT,

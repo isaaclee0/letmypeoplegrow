@@ -4,13 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsPage from './SettingsPage';
 import { settingsAPI } from '../services/api';
 
-const { updateUser } = vi.hoisted(() => ({ updateUser: vi.fn() }));
+const { updateUser, authState } = vi.hoisted(() => ({ updateUser: vi.fn(), authState: { role: 'admin' } }));
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     user: {
       id: 1,
-      role: 'admin',
+      role: authState.role,
       firstName: 'Admin',
       lastName: 'User',
       primaryContactMethod: 'email',
@@ -26,6 +26,7 @@ vi.mock('../utils/logger', () => ({
 }));
 
 vi.mock('../services/api', () => ({
+  referralsAPI: { list: vi.fn().mockResolvedValue({ data: { referrals: [] } }), send: vi.fn() },
   usersAPI: { updateMe: vi.fn() },
   settingsAPI: {
     getAll: vi.fn().mockResolvedValue({ data: { settings: {} } }),
@@ -51,7 +52,19 @@ describe('SettingsPage location search', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    authState.role = 'admin';
     vi.mocked(settingsAPI.getAll).mockResolvedValue({ data: { settings: {} } } as never);
+  });
+
+  it('shows referrals only to admins, including after the user role changes', async () => {
+    const { rerender } = render(<SettingsPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Referrals' }));
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'Refer an organisation' })).toBeInTheDocument();
+    authState.role = 'coordinator';
+    rerender(<SettingsPage />);
+    expect(screen.queryByRole('button', { name: 'Referrals' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Email address')).not.toBeInTheDocument();
   });
 
   it('waits for three characters before searching for a city', async () => {

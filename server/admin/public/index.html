@@ -509,6 +509,13 @@
     <div id="view-churches" style="display: none;">
       <div class="section">
         <div class="section-header">
+          <h2>Organisation Referrals</h2>
+          <button class="action-btn" onclick="loadReferrals()" title="Refresh referrals">↻</button>
+        </div>
+        <div id="referrals-table"><div class="loading">Loading referrals...</div></div>
+      </div>
+      <div class="section">
+        <div class="section-header">
           <h2>All Churches</h2>
         </div>
         <div id="all-churches-table">
@@ -753,6 +760,25 @@
         `;
       } catch (err) {
         el.innerHTML = `<span class="health-dot unhealthy"></span><span>Error</span>`;
+      }
+    }
+
+    async function loadReferrals() {
+      const container = document.getElementById('referrals-table');
+      try {
+        const { referrals } = await fetchJSON('/api/referrals');
+        const labels = { pre_approved: 'Pre-approved', registered: 'Signed up', expired: 'Expired', failed: 'Email failed', sending: 'Sending' };
+        container.innerHTML = referrals.length ? `<table>
+          <thead><tr><th>Invited email</th><th>Referred by</th><th>Status</th><th>Valid until</th><th>New organisation</th></tr></thead>
+          <tbody>${referrals.map(r => `<tr>
+            <td>${escapeHtml(r.email)}</td>
+            <td>${escapeHtml(r.referrer_name)}<div class="created-by">${escapeHtml(r.referring_church_name || 'Removed organisation')}</div></td>
+            <td>${escapeHtml(labels[r.status] || r.status)}${r.delivery_failed && r.status === 'pre_approved' ? '<div class="created-by">Latest resend failed</div>' : ''}</td>
+            <td>${r.expires_at ? escapeHtml(r.expires_at + ' UTC') : '—'}</td>
+            <td>${escapeHtml(r.registered_church_name || '—')}</td>
+          </tr>`).join('')}</tbody></table>` : '<div class="empty-state">No referrals yet</div>';
+      } catch (_) {
+        container.textContent = 'Could not load referrals. Use refresh to try again.';
       }
     }
 
@@ -1392,6 +1418,7 @@
     }
 
     // Initial load
+    loadReferrals();
     loadHealth();
     loadStats();
     loadChurches();

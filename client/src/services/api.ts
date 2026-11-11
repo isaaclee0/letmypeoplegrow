@@ -488,6 +488,20 @@ export interface AddVisitorData {
   }>;
 }
 
+export interface OrganisationReferral {
+  id: number;
+  email: string;
+  referrer_name: string;
+  status: 'pre_approved' | 'registered' | 'expired' | 'failed' | 'sending';
+  expires_at: string | null;
+  delivery_failed: number;
+}
+
+export const referralsAPI = {
+  list: () => api.get<{ referrals: OrganisationReferral[] }>('/auth/referrals'),
+  send: (email: string) => api.post<{ message: string }>('/auth/referrals', { email }),
+};
+
 // Auth API
 export const authAPI = {
   // Service status, including whether the server's dev-login bypass

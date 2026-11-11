@@ -23,8 +23,10 @@ const SignupPage: React.FC = () => {
 
   const { login } = useAuth();
   const navigate = useNavigate();
+  const invitedEmail = new URLSearchParams(window.location.search).get('email')?.trim() || '';
+  const hasInvitedEmail = invitedEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invitedEmail);
 
-  const signupForm = useForm<SignupFormData>();
+  const signupForm = useForm<SignupFormData>({ defaultValues: { email: hasInvitedEmail ? invitedEmail : '' } });
   const codeForm = useForm<{ code: string }>();
 
   // Cooldown timer effect
@@ -139,6 +141,11 @@ const SignupPage: React.FC = () => {
 
         {step === 'signup' ? (
           <form className="mt-8 space-y-6" onSubmit={signupForm.handleSubmit(handleSignupSubmit)}>
+            {hasInvitedEmail && (
+              <p className="rounded-md bg-primary-50 p-3 text-sm text-primary-800 dark:bg-primary-900/30 dark:text-primary-200">
+                Use the email address that received your invitation to receive pre-approval while your referral is valid.
+              </p>
+            )}
             <div>
               <label htmlFor="churchName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Organisation Name *

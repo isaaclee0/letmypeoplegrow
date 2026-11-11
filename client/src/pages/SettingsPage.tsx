@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import IntegrationsTab from '../components/integrations/IntegrationsTab';
+import OrganisationReferrals from '../components/OrganisationReferrals';
 import { ChurchLocationResult, usersAPI, settingsAPI, visitorConfigAPI, takeoutAPI, aiAPI } from '../services/api';
 import WeeklyReviewGuidanceWizard from '../components/WeeklyReviewGuidanceWizard';
 import logger from '../utils/logger';
@@ -18,12 +19,13 @@ import {
   UserIcon,
   ArrowDownTrayIcon,
   BellIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
   const { user, updateUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'notifications' | 'integrations' | 'data'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'notifications' | 'integrations' | 'referrals' | 'data'>('general');
 
   // My Info (profile) state
   const [profileFirstName, setProfileFirstName] = useState('');
@@ -111,6 +113,7 @@ const SettingsPage: React.FC = () => {
     { id: 'myinfo', name: 'My Info', icon: UserIcon },
     ...(user?.role === 'admin' ? [{ id: 'notifications', name: 'Notifications', icon: BellIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'integrations', name: 'Integrations', icon: LinkIcon }] : []),
+    ...(user?.role === 'admin' ? [{ id: 'referrals', name: 'Referrals', icon: EnvelopeIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'data', name: 'Data', icon: ArrowDownTrayIcon }] : []),
   ];
 
@@ -540,6 +543,7 @@ const SettingsPage: React.FC = () => {
 
         {/* Tab Content */}
         <div className="px-4 py-5 sm:p-6">
+          {activeTab === 'referrals' && user?.role === 'admin' && <OrganisationReferrals />}
           {activeTab === 'general' && (
             <div className="space-y-6">
               {/* Church Location */}

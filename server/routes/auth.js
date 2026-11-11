@@ -15,8 +15,10 @@ const { normalizeTimeZone, timeZoneFromCoordinates } = require('../utils/churchT
 const { reserveNewChurchId } = require('../utils/churchIdGenerator');
 const locationSearch = require('../services/locationSearch');
 const logger = require('../config/logger');
+const organisationReferrals = require('../services/organisationReferrals');
 
 const router = express.Router();
+router.use('/referrals', require('./referrals'));
 
 const isDev = process.env.NODE_ENV === 'development';
 const devBypassEnabled = process.env.AUTH_DEV_BYPASS === 'true';
@@ -797,7 +799,7 @@ router.get('/location-search', signupLocationLimiter, async (req, res) => {
 
 router.post('/register',
   [
-    body('email').isEmail().withMessage('Valid email address is required'),
+    body('email').trim().isEmail().withMessage('Valid email address is required').toLowerCase(),
     body('firstName').trim().isLength({ min: 1, max: 100 }).withMessage('First name is required (max 100 characters)'),
     body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name is required (max 100 characters)'),
     body('churchName').optional().isString().bail().trim().isLength({ min: 1, max: 255 })
@@ -833,6 +835,7 @@ router.post('/register',
       // Serialize lookup and reservation in the registry; publish the login
       // lookup only after the new database has its settings, user and code.
       const registry = Database.getRegistryDb();
+      let preApproved = false;
       const churchId = registry.transaction(() => {
         if (Database.lookupChurchByEmail(email)) return null;
 
@@ -857,6 +860,7 @@ router.post('/register',
           `).run(email, code, expiresAt, newChurchId);
           Database.registerUserLookup(userId, email, null, newChurchId);
         })();
+        preApproved = organisationReferrals.redeem(email, newChurchId);
         return newChurchId;
       }).immediate();
 
@@ -870,6 +874,8 @@ router.post('/register',
         try { await sendOTCEmail(email, code); }
         catch (error) { console.error('Failed to send welcome email:', error); }
 
+        // Referred organisations are already approved in the internal admin panel.
+        if (preApproved) return;
         // Notify app admin that a new church needs approval
         try {
           await sendNewChurchApprovalEmail(

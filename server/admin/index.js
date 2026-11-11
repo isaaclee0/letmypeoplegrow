@@ -22,6 +22,7 @@ const logger = require('../config/logger');
 const platformAiSettings = require('../services/platformAiSettings');
 const platformAiModelCatalog = require('../services/platformAiModelCatalog');
 const { rowsToCsv } = require('../routes/takeout');
+const organisationReferrals = require('../services/organisationReferrals');
 
 const app = express();
 const ADMIN_PORT = process.env.ADMIN_PORT || 7777;
@@ -75,6 +76,10 @@ app.get('/api/stats', async (req, res) => {
     console.error('Stats error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+app.get('/api/referrals', (req, res) => {
+  res.json({ referrals: organisationReferrals.listForPlatform() });
 });
 
 // List all churches

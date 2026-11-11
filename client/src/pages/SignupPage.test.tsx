@@ -41,15 +41,19 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   vi.mocked(authAPI.register).mockResolvedValue(response({ message: 'Account created' }));
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.replaceState({}, '', '/');
+});
 
 function response<T>(data: T): AxiosResponse<T> {
   return { data, status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() } };
 }
 
-function renderSignup() {
+function renderSignup(entry = '/signup') {
+  window.history.replaceState({}, '', entry);
   render(
-    <MemoryRouter initialEntries={['/signup']}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/app" element={<p>Application entry</p>} />
@@ -57,6 +61,14 @@ function renderSignup() {
     </MemoryRouter>,
   );
 }
+
+test('a referral link prefills the invited email while leaving it editable', () => {
+  renderSignup('/signup?email=invited%2Bchurch%40example.com');
+  const emailInput = screen.getByLabelText(/admin email/i);
+  expect(emailInput).toHaveValue('invited+church@example.com');
+  expect(emailInput).not.toHaveAttribute('readonly');
+  expect(screen.getByText(/use the email address.*invitation/i)).toBeInTheDocument();
+});
 
 function fillOrganisationDetails() {
   fireEvent.change(screen.getByLabelText(/organisation name/i), { target: { value: details.churchName } });

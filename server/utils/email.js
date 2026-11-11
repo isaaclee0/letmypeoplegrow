@@ -54,6 +54,24 @@ const sendEmail = async (to, subject, htmlContent, textContent = null, options =
   }
 };
 
+const sendReferralEmail = async (email, signupLink, { name, churchName }) => {
+  const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]);
+  const introduction = `${name} from ${churchName || 'their organisation'} has invited you to try Let My People Grow.`;
+  const details = 'Track attendance, manage people and care for your community. Your new organisation is pre-approved for 30 days when you sign up with this email address.';
+  const verification = 'You will still verify your email with a one-time code. You will be setting up your own organisation.';
+  return sendEmail(email, "You're invited to Let My People Grow", `<!DOCTYPE html>
+    <html lang="en"><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333">
+      <div style="max-width:600px;margin:auto;padding:24px">
+        <h1>You're invited to Let My People Grow</h1>
+        <p>${escape(introduction)}</p><p>${escape(details)}</p><p>${escape(verification)}</p>
+        <p><a href="${escape(signupLink)}" style="display:inline-block;padding:12px 20px;background:#7c3aed;color:white;border-radius:6px">Set up your organisation</a></p>
+        <p>If you weren't expecting this invitation, you can ignore this email.</p>
+      </div>
+    </body></html>`, `${introduction}\n\n${details}\n\n${verification}\n\nSet up your organisation: ${signupLink}\n\nIf you weren't expecting this invitation, you can ignore this email.`);
+};
+
 const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, invitedBy) => {
   console.log('📧 [EMAIL_DEBUG] Starting invitation email send', {
     email,
@@ -849,6 +867,7 @@ module.exports = {
   createEmailData,
   sendEmail,
   sendInvitationEmail,
+  sendReferralEmail,
   sendOTCEmail,
   sendNewChurchApprovalEmail,
   sendWeeklyReviewEmail,
