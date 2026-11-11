@@ -1,5 +1,6 @@
 const https = require('https');
 const { CATEGORIES, describeMember } = require('./visitorFollowUp');
+const { getAppUrl } = require('../utils/appUrl');
 
 const PLATFORM_API_KEY = process.env.PLATFORM_ANTHROPIC_API_KEY;
 const PLATFORM_XAI_API_KEY = process.env.PLATFORM_XAI_API_KEY;
@@ -218,7 +219,7 @@ async function generateInsight(reviewData, options = {}) {
     if (!response) return generateAlgorithmicInsight(reviewData);
 
     // Link to AI insights page for follow-up
-    const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+    const appUrl = getAppUrl();
     const findOutMoreUrl = `${appUrl}/app/ai-insights`;
 
     return response + `\n\n<a href="${findOutMoreUrl}" style="color: #1e40af; font-weight: 600; text-decoration: underline;">Find out more &rarr;</a>`;

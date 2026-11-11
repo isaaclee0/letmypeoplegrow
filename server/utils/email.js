@@ -1,4 +1,5 @@
 const { renderVisitorFollowUp } = require('./visitorFollowUpEmail');
+const { getAppUrl } = require('./appUrl');
 const { BrevoClient } = require('@getbrevo/brevo');
 
 // Configure Brevo API
@@ -371,7 +372,7 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight, opti
     </table>` : '';
 
   // Follow-up section
-  const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+  const appUrl = getAppUrl();
   const guidanceNudgeHtml = options.showGuidanceNudge ? `
     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px;">
       <tr>
@@ -633,7 +634,7 @@ function formatLastAttendances(lastAttendances) {
  */
 const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entries, options = {}) => {
   const subject = `${options.testMode ? '[TEST] ' : ''}${churchName} — Pastoral follow-up this week`;
-  const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+  const appUrl = getAppUrl();
 
   const dateLabel = new Intl.DateTimeFormat('en-AU', {
     day: 'numeric', month: 'long', year: 'numeric', timeZone: options.timeZone || 'UTC',

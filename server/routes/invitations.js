@@ -6,6 +6,7 @@ const moment = require('moment');
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { sendInvitationEmail } = require('../utils/email');
+const { getAppUrl } = require('../utils/appUrl');
 const { sendInvitationSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat } = require('../utils/sms');
 
 const router = express.Router();
@@ -207,9 +208,7 @@ router.post('/send',
         console.log('✅ [INVITATION_DEBUG] Invitation record created with ID:', invitationResult.insertId);
 
         // Use general login link so invitees can log in with OTC
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-        const host = req.headers['x-forwarded-host'] || req.get('host');
-        const loginLink = `${protocol}://${host}/login`;
+        const loginLink = `${getAppUrl(req)}/login`;
         
         console.log('🔗 [INVITATION_DEBUG] Generated login link:', loginLink);
         console.log('📤 [INVITATION_DEBUG] Sending invitation notifications');
@@ -398,9 +397,7 @@ router.post('/resend/:id',
       `, [newToken, newExpiresAt, id]);
 
       // Resend email
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-      const host = req.headers['x-forwarded-host'] || req.get('host');
-      const invitationLink = `${protocol}://${host}/accept-invitation/${newToken}`;
+      const invitationLink = `${getAppUrl(req)}/accept-invitation/${newToken}`;
       await sendInvitationEmail(
         invitation.email, 
         invitation.first_name, 
@@ -469,4 +466,4 @@ router.post('/complete/:token', async (req, res) => {
   });
 });
 
-module.exports = router; 
+module.exports = router;

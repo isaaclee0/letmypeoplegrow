@@ -2,6 +2,7 @@ const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendInvitationEmail } = require('../utils/email');
+const { getAppUrl } = require('../utils/appUrl');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -275,8 +276,7 @@ router.post('/:id/convert-to-user', requireRole(['admin', 'coordinator']), async
 
     // Send invitation email outside transaction (network call)
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      const loginLink = `${frontendUrl}/login`;
+      const loginLink = `${getAppUrl(req)}/login`;
       await sendInvitationEmail(
         newUser.email,
         newUser.first_name,
