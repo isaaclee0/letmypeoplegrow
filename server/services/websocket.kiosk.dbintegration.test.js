@@ -164,6 +164,93 @@ test('WebSocket kiosk check-in records the action and finalises version-1 roster
   });
 });
 
+for (const example of [
+  { name: 'an adult without a signer', isChild: false, signerName: '' },
+  { name: 'a child with a signer', isChild: true, signerName: 'Test Guardian' },
+  { name: 'a family group', isChild: true, signerName: 'Test Guardian', group: true },
+  { name: 'a session ID collision on another date', isChild: false, signerName: '', otherSession: true },
+]) {
+  test(`WebSocket kiosk subsequent check-in uses the selected session for ${example.name}`, async () => {
+    await withTestChurchDb(async (churchId) => {
+      const scenario = await seedKioskScenario(churchId);
+      const date = '2026-11-22';
+      await Database.query(
+        'UPDATE individuals SET is_child = ? WHERE id = ? AND church_id = ?',
+        [example.isChild ? 1 : 0, scenario.rosterId, churchId],
+      );
+      const previousKioskFlag = process.env.KIOSK_MODE_ENABLED;
+      process.env.KIOSK_MODE_ENABLED = 'true';
+      try {
+        const firstSocket = fakeSocket(scenario.userId, churchId);
+        await webSocketService.handleRecordKioskAction(firstSocket, {
+          gatheringId: scenario.gatheringId,
+          date,
+          individualIds: [scenario.adHocId],
+          action: 'checkin',
+          signerName: '',
+        });
+        assert.deepEqual(firstSocket.emitted, [{ event: 'kiosk_action_success', payload: undefined }]);
+
+        // On the second check-in, kiosk_checkins.id is 2 but the selected
+        // attendance session is still 1. A session on another date can also
+        // have ID 2, making an incorrect lookup silently mark the wrong date.
+        if (example.otherSession) {
+          await Database.query(
+            `INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+             VALUES (?, '2026-11-15', ?, ?)`,
+            [scenario.gatheringId, scenario.userId, churchId],
+          );
+        }
+        const individualIds = example.group
+          ? [scenario.rosterId, scenario.adHocId]
+          : [scenario.rosterId];
+        const secondSocket = fakeSocket(scenario.userId, churchId);
+        await webSocketService.handleRecordKioskAction(secondSocket, {
+          gatheringId: scenario.gatheringId,
+          date,
+          individualIds,
+          action: 'checkin',
+          signerName: example.signerName,
+        });
+        assert.deepEqual(secondSocket.emitted, [{ event: 'kiosk_action_success', payload: undefined }]);
+
+        assert.deepEqual(await Database.query(
+          `SELECT s.session_date, ar.individual_id, ar.present, ar.eligible_at_snapshot
+           FROM attendance_records ar
+           JOIN attendance_sessions s ON s.id = ar.session_id AND s.church_id = ar.church_id
+           WHERE ar.church_id = ? AND s.gathering_type_id = ?
+           ORDER BY s.session_date, ar.individual_id`,
+          [churchId, scenario.gatheringId],
+        ), [
+          { session_date: date, individual_id: scenario.rosterId, present: 1, eligible_at_snapshot: 1 },
+          { session_date: date, individual_id: scenario.adHocId, present: 1, eligible_at_snapshot: 0 },
+        ]);
+        assert.deepEqual(await Database.query(
+          `SELECT individual_id, signer_name FROM kiosk_checkins
+           WHERE gathering_type_id = ? AND session_date = ? AND church_id = ? ORDER BY id`,
+          [scenario.gatheringId, date, churchId],
+        ), [
+          { individual_id: scenario.adHocId, signer_name: null },
+          ...individualIds.map(individualId => ({
+            individual_id: individualId,
+            signer_name: example.signerName || null,
+          })),
+        ]);
+        if (example.otherSession) {
+          assert.deepEqual(await Database.query(
+            `SELECT session_status, roster_snapshotted FROM attendance_sessions
+             WHERE gathering_type_id = ? AND session_date = '2026-11-15' AND church_id = ?`,
+            [scenario.gatheringId, churchId],
+          ), [{ session_status: 'open', roster_snapshotted: 0 }]);
+        }
+      } finally {
+        if (previousKioskFlag === undefined) delete process.env.KIOSK_MODE_ENABLED;
+        else process.env.KIOSK_MODE_ENABLED = previousKioskFlag;
+      }
+    });
+  });
+}
+
 test('WebSocket kiosk actions honor the feature gate before writing', async () => {
   await withTestChurchDb(async (churchId) => {
     const scenario = await seedKioskScenario(churchId);

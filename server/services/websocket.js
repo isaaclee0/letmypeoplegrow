@@ -2050,39 +2050,36 @@ class WebSocketService {
           const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
 
           // Create or get attendance session
-          let sessionResult;
           if (hasSessionsChurchId) {
-            sessionResult = await conn.query(`
+            await conn.query(`
               INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
               VALUES (?, ?, ?, ?)
               ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
             `, [gatheringId, date, socket.userId, socket.churchId]);
           } else {
-            sessionResult = await conn.query(`
+            await conn.query(`
               INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
               VALUES (?, ?, ?)
               ON CONFLICT(gathering_type_id, session_date) DO UPDATE SET updated_at = datetime('now')
             `, [gatheringId, date, socket.userId]);
           }
 
-          let sessionId;
-          if (sessionResult.insertId) {
-            sessionId = Number(sessionResult.insertId);
-          } else {
-            const sessions = hasSessionsChurchId
-              ? await conn.query(
-                  'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-                  [gatheringId, date, socket.churchId]
-                )
-              : await conn.query(
-                  'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-                  [gatheringId, date]
-                );
-            if (sessions.length === 0) {
-              throw new Error('Failed to create or retrieve attendance session');
-            }
-            sessionId = Number(sessions[0].id);
+          // After ON CONFLICT DO UPDATE, SQLite's lastInsertRowid still refers
+          // to the preceding kiosk_checkins INSERT. Resolve the session by its
+          // gathering, date and church, as the HTTP kiosk route does.
+          const sessions = hasSessionsChurchId
+            ? await conn.query(
+                'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+                [gatheringId, date, socket.churchId]
+              )
+            : await conn.query(
+                'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+                [gatheringId, date]
+              );
+          if (sessions.length === 0) {
+            throw new Error('Failed to create or retrieve attendance session');
           }
+          const sessionId = Number(sessions[0].id);
 
           await finalizeStandardSessionWithConnection(conn, {
             churchId: socket.churchId,
