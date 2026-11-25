@@ -98,6 +98,54 @@ for (const trigger of ['scheduled', 'reviewed']) {
   }));
 }
 
+for (const trigger of ['scheduled', 'reviewed']) {
+  test(trigger + ' sync leaves a matching linked household alone when an outside-list relative has unknown membership', async () => withTestChurchDb(async churchId => {
+    const f = await fixture(churchId);
+    for (const [index, name] of ['april', 'chloe', 'julia', 'lara', 'matt'].entries()) {
+      await f.person(index + 1, name, 'active', 10, ['king']);
+      f.lists.am.push(name);
+    }
+    await f.query("INSERT INTO external_family_links(church_id,provider,external_family_id,family_id,link_source) VALUES(?,'planning_center','king',10,'manual')");
+    f.families.push({ id:'king', name:'King Household', memberExternalIds:[...f.lists.am], householdMemberExternalIds:[...f.lists.am, 'relative'] });
+    const original = f.adapter.fetchSourceSnapshot;
+    f.adapter.fetchSourceSnapshot = async args => ({ ...await original(args), contextPeople:[{
+      id:'relative', firstName:'Outside', lastName:'Relative', state:'active', familyId:null, householdIds:null,
+    }] });
+    if (trigger === 'reviewed') {
+      const review = await f.review();
+      for (const bucket of ['familyConflicts','renameFamily','moveFamily','addFamilies','linkFamilies','addPeople']) assert.deepEqual(review.plan[bucket], [], bucket);
+      await f.apply(review.reviewToken);
+    } else {
+      assert.equal((await f.scheduled()).status, 'applied');
+      assert.deepEqual(f.notifications, []);
+    }
+    assert.equal((await f.query('SELECT id FROM individuals WHERE church_id=?')).length, 5);
+    assert.deepEqual((await f.query('SELECT family_id FROM individuals WHERE church_id=?')).map(p => p.family_id), [10,10,10,10,10]);
+    assert.equal((await f.query('SELECT family_name FROM families WHERE church_id=? AND id=10'))[0].family_name, 'Local 10');
+  }));
+}
+
+test('a proposed household move stays held and shows the outside-list relative with unknown membership', async () => withTestChurchDb(async churchId => {
+  const f = await fixture(churchId);
+  await f.person(1,'amy','active',10,['hh']);
+  await f.person(2,'bob','active',20,['hh']);
+  f.lists.am.push('amy','bob');
+  await f.query("INSERT INTO external_family_links(church_id,provider,external_family_id,family_id,link_source) VALUES(?,'planning_center','hh',10,'manual')");
+  f.families.push({id:'hh', name:'Example Household', memberExternalIds:['amy','bob'], householdMemberExternalIds:['amy','bob','relative']});
+  const original = f.adapter.fetchSourceSnapshot;
+  f.adapter.fetchSourceSnapshot = async args => ({...await original(args), contextPeople:[{
+    id:'relative',firstName:'Outside',lastName:'Relative',state:'active',familyId:null,householdIds:null,
+  }]});
+  const review = await f.review();
+  assert.equal(review.plan.familyConflicts[0].reason,'unknown_household_membership');
+  assert.equal(review.plan.familyConflicts[0].resolution,undefined);
+  assert.deepEqual(review.plan.familyConflicts[0].contextMemberExternalIds,['relative']);
+  assert.equal(review.plan.people.external.relative.firstName,'Outside');
+  await f.apply(review.reviewToken);
+  assert.deepEqual((await f.query('SELECT family_id FROM individuals WHERE church_id=? ORDER BY id')).map(p=>p.family_id),[10,20]);
+  assert.equal((await f.query('SELECT id FROM individuals WHERE church_id=?')).length,2);
+}));
+
 for (const change of ['incomplete', 'identity', 'authority']) {
   test('scheduled sync fails closed on ' + change + ' and preserves the linked person', async () => withTestChurchDb(async churchId => {
     const f = await fixture(churchId);

@@ -381,6 +381,16 @@ function sanitizePlanForReview(plan, externalPeople = [], localPeople = [], exte
   for (const bucket of BUCKETS) {
     sanitized[bucket] = (plan[bucket] || []).map(stripRawFields);
   }
+  const households = new Map(externalFamilies.map(family => [String(family.id), family]));
+  for (const action of sanitized.familyConflicts) {
+    const roster = households.get(String(action.externalFamilyId))?.householdMemberExternalIds;
+    const participants = new Set(action.memberExternalIds || []);
+    const contextIds = Array.isArray(roster)
+      ? [...new Set(roster.filter(id => typeof id === 'string' && id.trim() && !participants.has(id)))].sort() : [];
+    // Display context only: these people are not added to the signed action,
+    // identity choices or local participants, and cannot be imported here.
+    if (contextIds.length) action.contextMemberExternalIds = contextIds;
+  }
   if (plan.keptReconciliations?.length) {
     sanitized.keptReconciliations = plan.keptReconciliations.map((entry) => ({ ...entry, action: stripRawFields(entry.action) }));
   }

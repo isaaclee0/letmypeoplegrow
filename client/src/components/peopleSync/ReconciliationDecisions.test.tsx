@@ -106,6 +106,21 @@ describe('reviewed household and attendance-list decisions', () => {
     expect(screen.queryByText('No roster changes are planned in this review.')).not.toBeInTheDocument();
   });
 
+  it('shows contextual household relatives without offering to import or move them', () => {
+    const review = fixture();
+    const action = review.plan.familyConflicts[0];
+    delete action.resolution;
+    action.reason = 'unknown_household_membership';
+    action.contextMemberExternalIds = ['outside'];
+    review.plan.people!.external.outside = { firstName:'Outside', lastName:'Relative' };
+    mount(review);
+    const household = screen.getByRole('region', { name:'Household decisions' });
+    expect(within(household).getByText('Outside Relative')).toBeVisible();
+    expect(within(household).getByText(/Other household members.*not included in this change/)).toBeVisible();
+    expect(within(household).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name:/Add Outside Relative/ })).not.toBeInTheDocument();
+  });
+
   it('separates optional old roster removal from automatic updates and preserves history in its explanation', async () => {
     const user = userEvent.setup();
     const review = fixture();

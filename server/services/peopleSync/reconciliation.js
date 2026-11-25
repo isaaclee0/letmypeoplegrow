@@ -150,13 +150,20 @@ function addReviewedFamilyActions(context) {
       rosterOwners.get(id).add(String(family.id));
     }
   }
-  function reciprocalRoster(family) {
+  function reciprocalRoster(family, allowUnknownOutsideScope = false) {
     const roster = family.householdMemberExternalIds;
     if (family.incompleteRoster || !validHouseholdRoster(roster)) return false;
     const listed = new Set(roster);
     return (family.providerMemberIds || []).every(id => !input.householdVetoIds?.has(id) && listed.has(id)) &&
-      roster.every(id => rosterOwners.get(id)?.size === 1 && personFor(id)?.householdIds?.length === 1 &&
-        String(personFor(id).householdIds[0]) === String(family.id));
+      roster.every(id => {
+        if (rosterOwners.get(id)?.size !== 1 || input.householdVetoIds?.has(id)) return false;
+        const ids = personFor(id)?.householdIds;
+        // Included relatives often omit Person.households. That unknown is
+        // harmless only when checking an existing placement, never a move,
+        // rename or new family link. Explicit contradictions still veto it.
+        if (allowUnknownOutsideScope && ids == null && !populationIds.has(id) && !linkedExternalIds.has(id)) return true;
+        return Array.isArray(ids) && ids.length === 1 && String(ids[0]) === String(family.id);
+      });
   }
   const familyMembers = (family) => [...new Set([...(family.providerMemberIds || []), ...(family.householdMemberExternalIds || [])].map(String))];
   const unchangedIdentity = id => established.has(id) && input.automaticLinks?.get(id) === established.get(id);
@@ -221,6 +228,15 @@ function addReviewedFamilyActions(context) {
     const verifiedResidents = destinationFamily && residentPairs.length === (residentsByFamily.get(destinationFamily.id) || []).length;
     const canInferLink = !input.automaticLinks || linkedFamily || verifiedResidents;
     const previousConflict = plan.familyConflicts.find((action) => action.externalFamilyId === externalFamilyId);
+    if (input.automaticLinks && linkedFamily && !differentMembers.length && !unresolved.length &&
+        !unknownHousehold && !conflictingHousehold && !conflictingOwnership && !rosterAgrees &&
+        reciprocalRoster(family, true)) {
+      // Every participating person is already in the linked family. An
+      // unknown outside-list relative creates no local work to review.
+      // Leave the family name and all memberships untouched.
+      plan.familyConflicts = plan.familyConflicts.filter((entry) => entry.externalFamilyId !== externalFamilyId);
+      continue;
+    }
     if (destinationFamily && !differentMembers.length && unresolved.every((id) => newPersonFamily.get(id) === externalFamilyId) &&
         canInferLink && rosterAgrees && !unknownHousehold && !conflictingHousehold && !conflictingOwnership) {
       // The established people already justify this family link. A new

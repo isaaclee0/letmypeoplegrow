@@ -769,7 +769,7 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
               setPageSize(Number(event.target.value));
               setPages({ decisions: 1, established: 1 });
             }}
-            className="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+            className="rounded-md border border-gray-300 bg-white py-1.5 pl-2 pr-8 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
           >
             <option value={25}>25</option>
             <option value={50}>50</option>

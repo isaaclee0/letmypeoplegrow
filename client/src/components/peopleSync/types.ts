@@ -402,6 +402,7 @@ export interface FamilyConflictAction {
   externalFamilyId?: string | null;
   externalFamilyName?: string | null;
   memberExternalIds?: string[];
+  contextMemberExternalIds?: string[];
   candidateFamilyIds?: number[];
   unresolvedExternalPersonIds?: string[];
   reason?: string;

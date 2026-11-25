@@ -27,6 +27,35 @@ function fixture(overrides = {}) {
   };
 }
 
+for (const issue of ['explicitly empty', 'different household', 'multiple households', 'duplicate roster owner', 'missing roster', 'missing source member', 'unknown linked member', 'directory veto', 'unlinked family']) {
+  test('matching household still needs review for ' + issue, () => {
+    const input = fixture({
+      automaticLinks: new Map([['bruce',1],['bronwyn',2]]),
+      localPeople: [{id:1,firstName:'Bruce',lastName:'Smith',familyId:10},{id:2,firstName:'Bronwyn',lastName:'Smith',familyId:10}],
+      localFamilies: [{id:10,familyName:'Local family',planningCenterId:'hh'}],
+      familyLinks: [{externalFamilyId:'hh',familyId:10}],
+      externalFamilies: [{id:'hh',name:'Source family',memberExternalIds:['bruce','bronwyn'],householdMemberExternalIds:['bruce','bronwyn','outside']}],
+      householdPeople: [{id:'outside',householdIds:null}],
+    });
+    if (issue === 'explicitly empty') input.householdPeople[0].householdIds = [];
+    if (issue === 'different household') input.householdPeople[0].householdIds = ['other'];
+    if (issue === 'multiple households') input.householdPeople[0].householdIds = ['hh','other'];
+    if (issue === 'duplicate roster owner') input.externalFamilies.push({id:'other',memberExternalIds:[],householdMemberExternalIds:['outside']});
+    if (issue === 'missing roster') delete input.externalFamilies[0].householdMemberExternalIds;
+    if (issue === 'missing source member') input.externalFamilies[0].householdMemberExternalIds = ['bruce','outside'];
+    if (issue === 'unknown linked member') input.externalPeople[0].householdIds = null;
+    if (issue === 'directory veto') input.householdVetoIds = new Set(['bruce']);
+    if (issue === 'unlinked family') {
+      input.familyLinks = [];
+      delete input.localFamilies[0].planningCenterId;
+    }
+    const plan = computePeopleSyncPlan(input);
+    assert.ok(plan.familyConflicts.some(action=>action.externalFamilyId==='hh'));
+    for (const bucket of ['renameFamily','moveFamily','linkFamilies']) assert.deepEqual(plan[bucket],[],bucket);
+    assert.equal(plan.familyConflicts.find(action=>action.externalFamilyId==='hh').resolution,undefined);
+  });
+}
+
 for (const membership of ['multiple', 'none']) {
   test(`locally managed people with ${membership} provider households receive no provider family action`, () => {
     const input = fixture({ localHouseholdExternalIds: new Set(['bruce', 'bronwyn']) });

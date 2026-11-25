@@ -10,7 +10,7 @@ const reasonCopy: Record<string, string> = {
   missing_family_name: 'The source household needs a name before it can be added.',
   multiple_provider_households: 'Some people belong to more than one source household. LMPG supports one family per person and can’t choose between them automatically.',
   provider_has_no_household: 'The source no longer places this person in a household.',
-  unknown_household_membership: 'Household details are incomplete or inconsistent in this sync. Refresh the review; if this persists, the connection or sync needs checking.',
+  unknown_household_membership: 'This sync could not confirm every household relationship. Until those relationships can be verified, this household will stay unchanged.',
   conflicting_family_ownership: 'This LMPG family is already linked to a different source household. Check those household links first.',
 };
 
@@ -103,6 +103,10 @@ export default function ReconciliationDecisions({ review, state, onStateChange }
                   <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{provider}</p>
                   <p>{resolution?.kind === 'single_person' ? `No household in ${provider}` : resolution?.kind === 'detach' ? 'No household' : title}</p>
                   <p className="mt-1 text-gray-600 dark:text-gray-300">{(action.memberExternalIds || []).map((id) => name(directory.external[id])).join(', ')}</p>
+                  {!!action.contextMemberExternalIds?.length && <div className="mt-3 text-gray-600 dark:text-gray-300">
+                    <p className="font-medium">Other household members (not included in this change)</p>
+                    <p>{action.contextMemberExternalIds.map(id => directory.external[id] ? name(directory.external[id]) : 'Name unavailable').join(', ')}</p>
+                  </div>}
                 </div>
                 <div>
                   <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">LMPG now</p>
