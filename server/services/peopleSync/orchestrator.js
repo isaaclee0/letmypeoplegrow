@@ -734,9 +734,9 @@ function isCompleteSourceSnapshot(snapshot, provider) {
 async function recordSourceFailureSafely(deps, input) {
   try {
     await deps.recordActiveSourceFailure(input);
-    assertAuthorityPreviewActive(input.signal);
+    assertSyncActive(input.signal);
   } catch (healthError) {
-    assertAuthorityPreviewActive(input.signal);
+    assertSyncActive(input.signal);
     logger.error(`peopleSync orchestrator: failed to record source health for church ${input.churchId} batch ${input.batchId}: ${healthError.message}`);
   }
 }
@@ -770,7 +770,7 @@ async function acquireCompleteProviderSources({
   const conflictingHouseholdIds = new Set();
 
   for (const batch of batches) {
-    assertAuthorityPreviewActive(signal);
+    assertSyncActive(signal);
     await assertConnectionExpectationCurrent({
       churchId, provider, connectionExpectation, deps,
     });
@@ -788,7 +788,7 @@ async function acquireCompleteProviderSources({
         sourceExternalId: selectedSource.externalId,
         signal,
       });
-      assertAuthorityPreviewActive(signal);
+      assertSyncActive(signal);
       await assertConnectionExpectationCurrent({
         churchId, provider, connectionExpectation, deps,
       });
@@ -892,7 +892,7 @@ async function acquireCompleteProviderSources({
       sourceProvenance.push(provenanceEntry);
 
       if (activeRead) {
-        assertAuthorityPreviewActive(signal);
+        assertSyncActive(signal);
         await deps.recordActiveSourceAvailable({
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           observedSource: sourceSnapshot.source, checkedAt: sourceSnapshot.fetchedAt,
@@ -903,13 +903,13 @@ async function acquireCompleteProviderSources({
       // Cancellation wins over a provider result or provider failure. In
       // particular, a request that no longer owns this preview must not
       // update active-source health or emit its missing-source transition.
-      assertAuthorityPreviewActive(signal);
+      assertSyncActive(signal);
       const failure = error?.code ? error : sourceIncomplete(provider);
       if (failure.code === 'SYNC_PLAN_STALE') {
         throw failure instanceof OrchestratorError ? failure : staleConnectionGeneration();
       }
       if (activeRead) {
-        assertAuthorityPreviewActive(signal);
+        assertSyncActive(signal);
         await recordSourceFailureSafely(deps, {
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           code: failure.code, checkedAt: new Date().toISOString(),
@@ -974,12 +974,12 @@ function memberOnlyMatcherResult(result, memberIds) {
 async function acquirePipelineState(input) {
   // 4. Fetch every provider-owned source sequentially and build one member union.
   const providerState = await acquireCompleteProviderSources(input);
-  assertAuthorityPreviewActive(input.signal);
+  assertSyncActive(input.signal);
 
   // 5. Load church-scoped local state only after the complete provider read.
   const { individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState, reconciliationKeeps, householdPreferences } =
     await input.deps.loadLocalProjectionState(input.churchId, input.provider);
-  assertAuthorityPreviewActive(input.signal);
+  assertSyncActive(input.signal);
 
   const linkedMaintenance = input.provider === 'planning_center' && input.authoritative === true &&
     typeof input.adapter.fetchLinkedSnapshot === 'function';
@@ -988,7 +988,7 @@ async function acquirePipelineState(input) {
     const externalPersonIds = [...automaticLinks.keys()].filter(id => !providerState.seenMemberExternalIds.has(id)).sort();
     if (externalPersonIds.length) {
       const linked = await input.adapter.fetchLinkedSnapshot({ churchId: input.churchId, externalPersonIds, signal: input.signal });
-      assertAuthorityPreviewActive(input.signal);
+      assertSyncActive(input.signal);
       await assertConnectionExpectationCurrent(input);
       const ids = new Set(Array.isArray(linked?.people) ? linked.people.map(personId) : []);
       if (!linked || linked.provider !== input.provider || linked.complete !== true || !isIsoTimestamp(linked.fetchedAt) ||
@@ -1003,13 +1003,13 @@ async function acquirePipelineState(input) {
   }
   let directorySnapshot = null;
   if (input.trigger !== 'scheduled' && input.trigger !== 'authority_switch' && canReviewOutsideSources(input)) {
-    directorySnapshot = await input.adapter.fetchReconciliationSnapshot({ churchId: input.churchId });
+    directorySnapshot = await input.adapter.fetchReconciliationSnapshot({ churchId: input.churchId, signal: input.signal });
     if (!isCompleteSourceSnapshot(directorySnapshot, input.provider)) throw sourceIncomplete(input.provider);
     if (automaticLinks) {
       observePlanningCenterLifecycle(providerState.lifecycleStates, directorySnapshot.people);
       observePlanningCenterLifecycle(providerState.lifecycleStates, directorySnapshot.contextPeople);
     }
-    assertAuthorityPreviewActive(input.signal);
+    assertSyncActive(input.signal);
   }
 
   if (automaticLinks && [...automaticLinks.keys()].some(id => providerState.lifecycleStates.get(id) === 'conflict')) {
@@ -1271,7 +1271,7 @@ async function runPipelineBody(input, { linkCorrections = {} } = {}) {
 // never increments missing counters — a pure preview, however many times
 // it is called.
 async function buildReview({
-  churchId, provider, batchId = null, trigger, forceFull, linkCorrections = {},
+  churchId, provider, batchId = null, trigger, forceFull, linkCorrections = {}, signal,
 } = {}, overrides = {}) {
   void forceFull; // accepted for interface parity; buildReview is always a full-snapshot preview.
   const deps = mergeDeps(overrides);
@@ -1298,13 +1298,14 @@ async function buildReview({
   try {
     const body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger, mode: 'full', watermark: undefined,
-      batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation,
+      batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation, signal,
     }), { linkCorrections });
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration,
       reviewSourceSet, batchConfigurationExpectation,
     );
+    assertSyncActive(signal);
     await deps.replacePendingIdentityObservations(churchId, provider, body.pendingIdentityObservations);
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
@@ -1337,7 +1338,7 @@ async function buildReview({
 // before any submitted correction is validated or signed. Unlike buildReview,
 // this interactive edit preview deliberately creates no audit run.
 async function previewLinkCorrections({
-  churchId, provider, batchId = null, baseReviewToken, linkCorrections, householdChoices = {},
+  churchId, provider, batchId = null, baseReviewToken, linkCorrections, householdChoices = {}, signal,
 } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -1352,7 +1353,7 @@ async function previewLinkCorrections({
   const reviewSourceSet = isIntegrationReview(provider, batchId) ? integrationSourceSetFor(reviewBatches) : null;
   const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
     churchId, provider, batchId, trigger: 'manual', mode: 'full', watermark: undefined,
-    authoritative: true, activeAuthority: provider, batches: reviewBatches,
+    authoritative: true, activeAuthority: provider, batches: reviewBatches, signal,
   }));
   const sourceContext = reviewedSourceContext(
     provider, pre.batches, batchId, acquired.sourceProvenance, pre.connectionGeneration,
@@ -1430,11 +1431,11 @@ async function previewHouseholdChoices(input = {}, overrides = {}) {
 // same transaction as the reviewed reconciliation.
 // Always review-only — never applies anything, never touches presence
 // counters.
-function assertAuthorityPreviewActive(signal) {
+function assertSyncActive(signal) {
   if (signal?.aborted) {
     throw new OrchestratorError(
       'SYNC_ROUTE_TIMEOUT',
-      'The authority preview was cancelled after its request timed out.',
+      'The sync operation timed out while preparing the review.',
       503
     );
   }
@@ -1477,18 +1478,18 @@ async function previewAuthoritySwitch({
     // Check on both sides of beginAuthoritySwitch so every ordering is safe:
     // canceled-before-stage never stages; canceled-during-stage enters the
     // catch below and conditionally removes only this exact intent.
-    assertAuthorityPreviewActive(signal);
+    assertSyncActive(signal);
     authorityState = await deps.beginAuthoritySwitch(churchId, provider, authorityPreviewId);
     stagedThisPreview = authorityState.pending === provider;
-    assertAuthorityPreviewActive(signal);
+    assertSyncActive(signal);
     run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
-    assertAuthorityPreviewActive(signal);
+    assertSyncActive(signal);
     const body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
       batchId: null, authoritative: true, activeAuthority: provider, batches: reviewBatches,
       connectionExpectation, signal,
     }));
-    assertAuthorityPreviewActive(signal);
+    assertSyncActive(signal);
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, reviewBatches, null, body.sourceProvenance, pre.connectionGeneration,
@@ -1506,7 +1507,7 @@ async function previewAuthoritySwitch({
       churchId, provider, runId: run.id, status: 'review_required',
       counts: countsFromPlan(body.plan), externalWatermark: null, sourceProvenance: body.sourceProvenance,
     });
-    assertAuthorityPreviewActive(signal);
+    assertSyncActive(signal);
 
     return {
       runId: run.id,
@@ -1561,7 +1562,7 @@ function reviewTokenErrorMessage(code) {
 // apply transaction; only finishRun remains after it returns.
 async function applyReviewed({
   churchId, provider, batchId = null, reviewToken, selections = {}, userId, onCriticalCommit = null,
-  operationKind: requestedOperationKind,
+  operationKind: requestedOperationKind, signal,
 } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -1630,7 +1631,7 @@ async function applyReviewed({
   try {
     const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger, mode: 'full', watermark: undefined,
-      batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation,
+      batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation, signal,
     }));
 
     try {
@@ -1686,6 +1687,7 @@ async function applyReviewed({
 
     // 8. apply — the last step that may still cause this run to be
     // recorded as failed.
+    assertSyncActive(signal);
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections, userId,
       pendingIdentityObservations: body.pendingIdentityObservations,

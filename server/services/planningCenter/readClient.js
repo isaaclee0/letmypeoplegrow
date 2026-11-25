@@ -96,7 +96,8 @@ function createPcoReadClient({ accessToken, request = defaultRequest, signal, sl
 
   async function waitForDynamicQuota(headers) {
     const limit = Number(headers['x-pco-api-request-rate-limit']);
-    const period = Number(headers['x-pco-api-request-rate-period']);
+    const seconds = /^(\d+(?:\.\d+)?)(?:\s+seconds?)?$/i.exec(headers['x-pco-api-request-rate-period']?.trim());
+    const period = seconds ? Number(seconds[1]) : NaN;
     const count = Number(headers['x-pco-api-request-rate-count']);
     if (Number.isFinite(limit) && limit > 0 && Number.isFinite(period) && period >= 0 && Number.isFinite(count) && count >= limit - 1) {
       await sleep(Math.round(period * 1000));

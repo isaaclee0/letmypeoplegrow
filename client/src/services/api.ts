@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import type {
   SyncProvider,
   PeopleSyncBatch,
@@ -1177,6 +1177,37 @@ export interface PlanningCenterSyncBatchInput {
 export type PlanningCenterSyncBatchPatch = Partial<PlanningCenterSyncBatchInput>;
 
 // Integrations API
+type PlanningCenterJob = { jobId: string };
+
+async function planningCenterReviewRequest<T>(path: string, body?: unknown, force = false) {
+  const config = { params: { background: 1, ...(force ? { refresh: 1 } : {}) }, timeout: 120000 };
+  type ResponseBody = PlanningCenterJob | ({ success: true } & T);
+  let response = body === undefined
+    ? await api.get<ResponseBody>(path, config)
+    : await api.post<ResponseBody>(path, body, config);
+
+  if (response.status === 202) {
+    const jobId = (response.data as PlanningCenterJob).jobId;
+    if (!jobId) throw new Error('Planning Center did not return a sync job ID.');
+    const statusPath = '/integrations/planning-center/sync/jobs/' + encodeURIComponent(jobId);
+    let transientFailures = 0;
+    do {
+      const seconds = Number(response.headers?.['retry-after']);
+      const delayMs = seconds > 0 && Number.isFinite(seconds) ? Math.min(seconds, 30) * 1000 : 4000;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      try {
+        response = await api.get<ResponseBody>(statusPath);
+        transientFailures = 0;
+      } catch (error) {
+        // Retry only the status read. In particular, never replay a signed apply.
+        if (!axios.isAxiosError(error) || (error.response && ![502, 504].includes(error.response.status)) ||
+            ++transientFailures > 2) throw error;
+      }
+    } while (response.status === 202);
+  }
+  return response as AxiosResponse<{ success: true } & T>;
+}
+
 export const integrationsAPI = {
   // Elvanto connection status/connect/disconnect use the encrypted,
   // church-scoped connection managed by the provider-neutral sync backend.
@@ -1211,44 +1242,27 @@ export const integrationsAPI = {
   deletePlanningCenterSyncBatch: (id: number) =>
     api.delete(`/integrations/planning-center/sync-batches/${id}`),
   getPlanningCenterSyncPlan: () =>
-    api.get<{ success: true } & PeopleSyncReview>('/integrations/planning-center/sync/plan', { timeout: 120000 }),
+    planningCenterReviewRequest<PeopleSyncReview>('/integrations/planning-center/sync/plan'),
   previewPlanningCenterSyncLinkCorrections: (
     data: { baseReviewToken: PeopleReviewToken<'people_sync'>; linkCorrections: Record<string, EstablishedLinkCorrection> },
-  ) => api.post<{ success: true } & PeopleSyncCorrectionPreview>(
-    '/integrations/planning-center/sync/preview-link-corrections', data, { timeout: 120000 },
-  ),
+  ) => planningCenterReviewRequest<PeopleSyncCorrectionPreview>('/integrations/planning-center/sync/preview-link-corrections', data),
   previewPlanningCenterSyncHouseholdChoices: (
     data: { baseReviewToken: PeopleReviewToken<'people_sync'>; householdChoices: HouseholdChoiceEdits },
-  ) => api.post<{ success: true } & PeopleSyncCorrectionPreview>(
-    '/integrations/planning-center/sync/preview-household-choices', data, { timeout: 120000 },
-  ),
+  ) => planningCenterReviewRequest<PeopleSyncCorrectionPreview>('/integrations/planning-center/sync/preview-household-choices', data),
   applyPlanningCenterSync: (data: PeopleSyncApplyRequest<'people_sync'>) =>
-    api.post<{ success: true } & PeopleSyncApplyResult>('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
+    planningCenterReviewRequest<PeopleSyncApplyResult>('/integrations/planning-center/sync/apply', data),
   getPlanningCenterBatchPlan: (id: number, opts?: { force?: boolean }) =>
-    api.get<{ success: true } & PeopleSyncReview>(`/integrations/planning-center/sync-batches/${id}/plan`, {
-      params: opts?.force ? { refresh: 1 } : undefined,
-      timeout: 120000,
-    }),
+    planningCenterReviewRequest<PeopleSyncReview>(`/integrations/planning-center/sync-batches/${id}/plan`, undefined, opts?.force),
   previewPlanningCenterLinkCorrections: (
     id: number,
     data: { baseReviewToken: PeopleReviewToken<'people_sync'>; linkCorrections: Record<string, EstablishedLinkCorrection> },
-  ) =>
-    api.post<{ success: true } & PeopleSyncCorrectionPreview>(
-      `/integrations/planning-center/sync-batches/${id}/preview-link-corrections`,
-      data,
-      { timeout: 120000 },
-    ),
+  ) => planningCenterReviewRequest<PeopleSyncCorrectionPreview>(`/integrations/planning-center/sync-batches/${id}/preview-link-corrections`, data),
   previewPlanningCenterHouseholdChoices: (
     id: number,
     data: { baseReviewToken: PeopleReviewToken<'people_sync'>; householdChoices: HouseholdChoiceEdits },
-  ) =>
-    api.post<{ success: true } & PeopleSyncCorrectionPreview>(
-      `/integrations/planning-center/sync-batches/${id}/preview-household-choices`,
-      data,
-      { timeout: 120000 },
-    ),
+  ) => planningCenterReviewRequest<PeopleSyncCorrectionPreview>(`/integrations/planning-center/sync-batches/${id}/preview-household-choices`, data),
   applyPlanningCenterBatch: (id: number, data: PeopleSyncApplyRequest<'people_sync'>) =>
-    api.post<{ success: true } & PeopleSyncApplyResult>(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
+    planningCenterReviewRequest<PeopleSyncApplyResult>(`/integrations/planning-center/sync-batches/${id}/apply`, data),
   // Check-in attendance import (events discovery + preview + execute)
   getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
     api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),

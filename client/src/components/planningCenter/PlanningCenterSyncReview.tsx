@@ -62,7 +62,7 @@ export default function PlanningCenterSyncReview({
   if (!connected) {
     return <div className="text-sm text-gray-600 dark:text-gray-300">Planning Center is not connected. <button className={secondaryButtonClass} onClick={() => navigate('/app/settings?tab=integrations')}>Connect it in Settings</button>.</div>;
   }
-  if (loading && !review) return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}><p className="text-sm text-gray-500 dark:text-gray-400">Computing sync plan… (fetching everyone from Planning Center)</p></div>;
+  if (loading && !review) return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}><p className="text-sm text-gray-500 dark:text-gray-400">Preparing the Planning Center review in the background…</p></div>;
   if (error && !review) return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}><p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p><button className={secondaryButtonClass} onClick={() => void loadReview()}>Refresh plan</button></div>;
   if (!review) return null;
 

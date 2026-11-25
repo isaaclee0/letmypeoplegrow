@@ -213,3 +213,18 @@ test('rejects hostile absolute URLs and next links before a bearer token can lea
   assert.deepEqual(pagedCalls.map((call) => call.url), ['https://api.planningcenteronline.com/people/v2/lists?per_page=100']);
   assert.ok(pagedCalls.every((call) => call.headers.Authorization === `Bearer ${token}`));
 });
+
+test('accepts the documented rate period in seconds and ignores unknown units', async () => {
+  for (const [period, expected] of [['20 seconds', [20000]], ['1 second', [1000]], ['20 minutes', []]]) {
+    const waits = [];
+    const client = createPcoReadClient({
+      accessToken: 'token', sleep: async ms => waits.push(ms),
+      request: async () => response(200, { data: [] }, {
+        'X-PCO-API-Request-Rate-Limit': '100', 'X-PCO-API-Request-Rate-Count': '99',
+        'X-PCO-API-Request-Rate-Period': period,
+      }),
+    });
+    await client.getJson('/people/v2/people');
+    assert.deepEqual(waits, expected);
+  }
+});

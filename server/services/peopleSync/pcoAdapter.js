@@ -59,9 +59,9 @@ function createPcoAdapter(deps = {}) {
         });
       });
     },
-    async fetchReconciliationSnapshot({ churchId } = {}) {
+    async fetchReconciliationSnapshot({ churchId, signal } = {}) {
       return resolved.withPlanningCenterSourceToken(churchId, (accessToken) =>
-        resolved.fetchAllSnapshot({ accessToken, includeFieldData: false }));
+        resolved.fetchAllSnapshot({ accessToken, includeFieldData: false, signal }));
     },
     async fetchLinkedSnapshot({ churchId, externalPersonIds, signal } = {}) {
       return resolved.withPlanningCenterSourceToken(churchId, accessToken =>

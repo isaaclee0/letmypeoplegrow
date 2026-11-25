@@ -349,3 +349,76 @@ test('all integration endpoints retain admin and church-isolation middleware', a
     }, user);
   }
 });
+
+test('a slow background review reconnects, survives the route deadline, and publishes only the complete review', async () => {
+  let finish;
+  let builds = 0;
+  await withServer({
+    routeTimeoutMs: 1,
+    buildReview: async ({ signal }) => {
+      assert.ok(signal instanceof AbortSignal);
+      builds++;
+      return new Promise(resolve => { finish = resolve; });
+    },
+  }, async base => {
+    const start = () => requestJson(base + '/sync/plan?background=1');
+    const pending = await start();
+    assert.equal(pending.status, 202);
+    const statusUrl = base + '/sync/jobs/' + pending.body.jobId;
+    assert.deepEqual(await start(), pending);
+    assert.deepEqual(await requestJson(statusUrl), pending);
+    assert.equal(builds, 1);
+    finish({ reviewToken: 'signed-complete-plan' });
+    // Reload after completion but before the first successful poll also rejoins.
+    assert.deepEqual(await start(), pending);
+    assert.deepEqual(await requestJson(statusUrl), { status: 200, body: { success: true, reviewToken: 'signed-complete-plan' } });
+    const fresh = await start();
+    assert.notEqual(fresh.body.jobId, pending.body.jobId);
+    finish({ reviewToken: 'fresh-plan' });
+  });
+});
+
+test('background results are private to the authenticated church and admin', async () => {
+  const user = { ...ADMIN };
+  await withServer({ buildReview: async () => ({ reviewToken: 'private' }) }, async base => {
+    const { body } = await requestJson(base + '/sync-batches/12/plan?background=1');
+    const url = base + '/sync/jobs/' + body.jobId;
+    user.church_id = 'otherch1';
+    assert.equal((await requestJson(url)).status, 404);
+    Object.assign(user, ADMIN, { id: ADMIN.id + 1 });
+    assert.equal((await requestJson(url)).status, 404);
+    Object.assign(user, ADMIN, { role: 'coordinator' });
+    assert.equal((await requestJson(url)).status, 403);
+    Object.assign(user, ADMIN);
+    assert.equal((await requestJson(url)).body.reviewToken, 'private');
+  }, user);
+});
+
+test('signed apply can be polled repeatedly without replaying writes, and failed previews retain their typed error', async () => {
+  let applies = 0;
+  await withServer({
+    applyReviewed: async ({ reviewToken, selections }) => {
+      assert.equal(reviewToken, 'signed');
+      assert.deepEqual(selections, { decisionContractVersion: 2 });
+      applies++;
+      return { runId: 8, status: 'applied' };
+    },
+    previewHouseholdChoices: async () => { throw new OrchestratorError('SYNC_PLAN_STALE', 'Refresh this review.', 409); },
+  }, async base => {
+    const applyUrl = base + '/sync/apply?background=1';
+    const options = { method: 'POST', body: { reviewToken: 'signed', selections: { decisionContractVersion: 2 } } };
+    const start = await requestJson(applyUrl, options);
+    assert.equal(start.status, 202);
+    const statusUrl = base + '/sync/jobs/' + start.body.jobId;
+    assert.equal((await requestJson(statusUrl)).body.status, 'applied');
+    assert.deepEqual(await requestJson(applyUrl, options), start);
+    assert.equal((await requestJson(statusUrl)).body.runId, 8);
+    assert.equal(applies, 1);
+    const edit = await requestJson(base + '/sync/preview-household-choices?background=1', {
+      method: 'POST', body: { baseReviewToken: 'signed', householdChoices: {} },
+    });
+    assert.deepEqual(await requestJson(base + '/sync/jobs/' + edit.body.jobId), {
+      status: 409, body: { code: 'SYNC_PLAN_STALE', error: 'Refresh this review.' },
+    });
+  });
+});

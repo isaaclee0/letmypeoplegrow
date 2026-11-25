@@ -274,7 +274,7 @@ function PeopleSyncReviewWorkspace({ integrationWide }: { integrationWide: boole
 
       {loading && !visibleReview && (
         <p role="status" className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
-          Loading sync review…
+          Loading sync review…{providerSlug === 'planning-center' && ' LMPG is reading your Planning Center Lists in the background. You can refresh this page while it runs.'}
         </p>
       )}
 

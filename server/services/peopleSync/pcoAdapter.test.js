@@ -200,8 +200,9 @@ test('reconciliation directory reads basic identities without custom field data'
   const snapshot = { complete: true, people: [] };
   const value = adapter({fetchAllSnapshot:async options=>{received=options;return snapshot;}});
   assert.equal(typeof value.fetchReconciliationSnapshot,'function');
-  assert.equal(await value.fetchReconciliationSnapshot({churchId:'church-a'}),snapshot);
-  assert.deepEqual(received,{accessToken:'fresh-token',includeFieldData:false});
+  const signal = new AbortController().signal;
+  assert.equal(await value.fetchReconciliationSnapshot({churchId:'church-a', signal}),snapshot);
+  assert.deepEqual(received,{accessToken:'fresh-token',includeFieldData:false, signal});
 });
 
 test('linked person reads use the fresh church token and preserve the requested identity set', async () => {

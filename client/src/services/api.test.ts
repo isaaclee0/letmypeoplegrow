@@ -20,6 +20,7 @@ const axiosHarness = vi.hoisted(() => {
 vi.mock('axios', () => ({
   default: {
     create: vi.fn(() => axiosHarness.instance),
+    isAxiosError: (error: { isAxiosError?: boolean }) => error?.isAxiosError === true,
   },
 }));
 
@@ -74,7 +75,11 @@ describe('API authentication response handling', () => {
 
 
 describe('Planning Center local household review requests', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    axiosHarness.instance.get.mockResolvedValue({ status: 200, data: { success: true } });
+    axiosHarness.instance.post.mockResolvedValue({ status: 200, data: { success: true } });
+  });
 
   it('sends v2 local destinations and exact signed edits without a provider-household ID', async () => {
     const edits: HouseholdChoiceEdits = {
@@ -87,30 +92,55 @@ describe('Planning Center local household review requests', () => {
     await integrationsAPI.previewPlanningCenterHouseholdChoices(7, { baseReviewToken, householdChoices: edits });
     expect(axiosHarness.instance.post).toHaveBeenCalledWith('/integrations/planning-center/sync-batches/7/preview-household-choices', {
       baseReviewToken: 'original-review', householdChoices: edits,
-    }, { timeout: 120000 });
+    }, { params: { background: 1 }, timeout: 120000 });
     await integrationsAPI.applyPlanningCenterBatch(7, {
       reviewToken: 'signed-local-preview' as PeopleReviewToken<'people_sync'>,
       selections: { householdChoices: edits },
     });
     expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync-batches/7/apply', {
       reviewToken: 'signed-local-preview', selections: { householdChoices: edits },
-    }, { timeout: 120000 });
+    }, { params: { background: 1 }, timeout: 120000 });
   });
 });
 
 
 describe('Planning Center integration-wide review requests', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    axiosHarness.instance.get.mockResolvedValue({ status: 200, data: { success: true } });
+    axiosHarness.instance.post.mockResolvedValue({ status: 200, data: { success: true } });
+  });
   it('uses null-scope review endpoints and preserves signed bodies without a batch ID', async () => {
     const baseReviewToken = 'combined-base' as PeopleReviewToken<'people_sync'>;
     const householdChoices: HouseholdChoiceEdits = { household: { destination: { kind: 'keep' } } };
     await integrationsAPI.getPlanningCenterSyncPlan();
-    expect(axiosHarness.instance.get).toHaveBeenCalledWith('/integrations/planning-center/sync/plan', { timeout: 120000 });
+    expect(axiosHarness.instance.get).toHaveBeenCalledWith('/integrations/planning-center/sync/plan', { params: { background: 1 }, timeout: 120000 });
     await integrationsAPI.previewPlanningCenterSyncLinkCorrections({ baseReviewToken, linkCorrections: {} });
-    expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync/preview-link-corrections', { baseReviewToken, linkCorrections: {} }, { timeout: 120000 });
+    expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync/preview-link-corrections', { baseReviewToken, linkCorrections: {} }, { params: { background: 1 }, timeout: 120000 });
     await integrationsAPI.previewPlanningCenterSyncHouseholdChoices({ baseReviewToken, householdChoices });
-    expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync/preview-household-choices', { baseReviewToken, householdChoices }, { timeout: 120000 });
+    expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync/preview-household-choices', { baseReviewToken, householdChoices }, { params: { background: 1 }, timeout: 120000 });
     await integrationsAPI.applyPlanningCenterSync({ reviewToken: baseReviewToken, selections: { householdChoices } });
-    expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync/apply', { reviewToken: baseReviewToken, selections: { householdChoices } }, { timeout: 120000 });
+    expect(axiosHarness.instance.post).toHaveBeenLastCalledWith('/integrations/planning-center/sync/apply', { reviewToken: baseReviewToken, selections: { householdChoices } }, { params: { background: 1 }, timeout: 120000 });
   });
+});
+
+
+it('polls a slow signed apply through a gateway error and returns the final result without replaying the apply', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.clearAllMocks();
+    const pending = { status: 202, data: { jobId: 'job' } };
+    const result = { status: 200, data: { success: true, runId: 19 } };
+    axiosHarness.instance.post.mockResolvedValueOnce(pending);
+    axiosHarness.instance.get.mockResolvedValue(pending);
+    const work = integrationsAPI.applyPlanningCenterSync({ reviewToken: 'signed' as PeopleReviewToken<'people_sync'>, selections: {} });
+    await vi.advanceTimersByTimeAsync(92000);
+    axiosHarness.instance.get.mockRejectedValueOnce({ isAxiosError: true, response: { status: 504 } }).mockResolvedValueOnce(result);
+    await vi.advanceTimersByTimeAsync(8000);
+    await expect(work).resolves.toEqual(result);
+    expect(axiosHarness.instance.post).toHaveBeenCalledTimes(1);
+    expect(axiosHarness.instance.get.mock.calls.every(([url]) => url === '/integrations/planning-center/sync/jobs/job')).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
 });
