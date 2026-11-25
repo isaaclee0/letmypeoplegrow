@@ -28,7 +28,7 @@ function adapter(deps = {}) {
 test('createPcoAdapter exposes the complete-provider import contract', () => {
   const value = adapter();
   assert.deepEqual(Object.getOwnPropertyNames(value).sort(), [
-    'fetchImportSnapshot', 'fetchReconciliationSnapshot', 'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
+    'fetchImportSnapshot', 'fetchLinkedSnapshot', 'fetchReconciliationSnapshot', 'fetchSourceSnapshot', 'isLifecycleEligible', 'listSources', 'provider', 'validateConnection',
   ]);
   assert.equal(value.provider, 'planning_center');
 });
@@ -202,4 +202,16 @@ test('reconciliation directory reads basic identities without custom field data'
   assert.equal(typeof value.fetchReconciliationSnapshot,'function');
   assert.equal(await value.fetchReconciliationSnapshot({churchId:'church-a'}),snapshot);
   assert.deepEqual(received,{accessToken:'fresh-token',includeFieldData:false});
+});
+
+test('linked person reads use the fresh church token and preserve the requested identity set', async () => {
+  const seen = [];
+  const snapshot = { provider: 'planning_center', complete: true, people: [] };
+  const value = adapter({
+    getAccessTokenForChurch: async churchId => { seen.push(churchId); return 'rotated-token'; },
+    fetchLinkedSnapshot: async options => { seen.push(options); return snapshot; },
+  });
+  const signal = new AbortController().signal;
+  assert.equal(await value.fetchLinkedSnapshot({ churchId: 'church-a', externalPersonIds: ['p1'], signal }), snapshot);
+  assert.deepEqual(seen, ['church-a', { accessToken: 'rotated-token', externalPersonIds: ['p1'], signal }]);
 });

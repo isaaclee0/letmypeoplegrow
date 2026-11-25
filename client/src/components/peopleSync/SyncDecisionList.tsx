@@ -9,6 +9,7 @@ import PeoplePickerDialog from './PeoplePickerDialog';
 import OutsideSourceReviewSection from './OutsideSourceReviewSection';
 import GatheringReviewFilter, { filterGatheringReview, reviewGatherings, type ReviewGathering } from './GatheringReviewFilter';
 import { withoutCoveredHouseholdWarnings } from './HouseholdChoiceEditor';
+import UnresolvedLinkWarnings, { unresolvedLinkedPeople } from './UnresolvedLinkWarnings';
 import { useChurchTime } from '../../hooks/useChurchTime';
 import { isRefreshOnlyReviewError, peopleSyncErrorMessage } from './apiError';
 import type {
@@ -403,6 +404,7 @@ export default function SyncDecisionList({
   const applyDisabled = applying || interactionDisabled || applyBlocked || refreshRequired || collisions.size > 0 || (total === 0 && newDeferrals === 0 && keptCount === 0);
   const fetchedAt = review.snapshot?.fetchedAt || review.plan.snapshot?.fetchedAt || null;
   const needsYou = mainViews.filter(({ group }) => group.needsYou).length;
+  const unresolvedLinkCount = unresolvedLinkedPeople(review).length;
 
   const claimedBy = useMemo(() => {
     const claims = new Map<number, string>();
@@ -490,7 +492,7 @@ export default function SyncDecisionList({
         </div>
         <p className="mt-4 text-[15px] leading-relaxed text-gray-800 dark:text-gray-200">
           {mainViews.length === 0
-            ? collapseOutside ? 'No other reconciliation decisions are pending.' : review.plan.householdChoices?.groups.length ? 'Review the LMPG household choices and their preview above.' : `Everyone matches ${providerName}. Nothing needs a decision.`
+            ? unresolvedLinkCount > 0 ? 'Some linked records need checking before they can sync.' : collapseOutside ? 'No other reconciliation decisions are pending.' : review.plan.householdChoices?.groups.length ? 'Review the LMPG household choices and their preview above.' : automaticCount > 0 ? 'No decisions need review. Automatic updates are ready to apply.' : `Everyone matches ${providerName}. Nothing needs a decision.`
             : <>
               <strong className="font-semibold">{mainViews.length} {mainViews.length === 1 ? 'person or household' : 'people and households'} to review.</strong>{' '}
               Each one has the recommended answer chosen{needsYou ? `, apart from ${needsYou} that need${needsYou === 1 ? 's' : ''} you` : ''}. Change anything that’s wrong.
@@ -508,6 +510,7 @@ export default function SyncDecisionList({
           </details>
         )}
       </header>
+      <UnresolvedLinkWarnings review={review} />
 
       {gatherings && <GatheringReviewFilter gatherings={gatheringOptions} value={gatheringFilter}
         onChange={setGatheringFilter} disabled={applying || interactionDisabled} />}

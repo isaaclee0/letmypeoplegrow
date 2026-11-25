@@ -7,7 +7,7 @@ const batchRepository = require('./batchRepository');
 const { replacePendingIdentityObservationsWithConnection } = require('./pendingIdentityProjection');
 const { digestSourceIdentity } = require('./sourceModel');
 const { BUCKETS } = require('./plan');
-const { assertReconciliationAuthority, applyReviewedFamilies, removeReviewedLegacyMembership, persistReconciliationKeeps } = require('./reconciliationApply');
+const { acceptAutomaticActions, assertReconciliationAuthority, applyReviewedFamilies, removeReviewedLegacyMembership, persistReconciliationKeeps } = require('./reconciliationApply');
 const { buildLocalIdentityDigest } = require('./reviewContext');
 const { digestPlan, digestReviewToken } = require('./planDigest');
 const { validateHouseholdChoiceSelections, assertHouseholdChoicesWithConnection, persistHouseholdChoicesWithConnection } = require('./householdChoiceApply');
@@ -323,9 +323,7 @@ function planWithSuppressedSuggestions(plan, accepted) {
 }
 
 function planWithReviewedArchiveSelections(plan, accepted) {
-  // Every lifecycle archive is a reviewed proposal, including when the plan
-  // reaches this boundary from unattended orchestration. Only explicit
-  // archive selections may turn a proposal into a mutation.
+  // Transaction-validated terminal statuses and signed manual selections share this filter.
   return {
     ...plan,
     archive: asArray(plan.archive).filter((action) =>
@@ -514,6 +512,7 @@ async function applyPeopleSyncPlan({
   sourcePromotions = [],
   pendingIdentityObservations = null,
   reviewedApply = null,
+  unattended = false,
   authorityExpectation = null,
   sourceExpectations = null,
   batchConfigurationExpectation = null,
@@ -633,6 +632,8 @@ async function applyPeopleSyncPlan({
       });
       await assertLocalIdentityContextWithConnection(conn, churchId, provider, plan.reviewContext);
     }
+    const automatic = await acceptAutomaticActions(conn, { churchId, provider, plan, accepted, unattended, reviewedApply, activateAuthority });
+    if (automatic && !reviewedApply) await assertLocalIdentityContextWithConnection(conn, churchId, provider, plan.reviewContext);
     const applicablePlan = planWithResolvedHeldGatherings(
       planWithReviewedArchiveSelections(planWithSuppressedSuggestions(plan, accepted), accepted),
       accepted
@@ -640,7 +641,7 @@ async function applyPeopleSyncPlan({
     assertAllowedMutationBuckets(applicablePlan, allowedMutationBuckets);
     await enforceAuthorityLock(conn, churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
 
-    await assertReconciliationAuthority(conn, { churchId, provider, plan, accepted, reviewedApply, activateAuthority });
+    await assertReconciliationAuthority(conn, { churchId, provider, plan, accepted, reviewedApply, activateAuthority, unattended });
     await assertHouseholdChoicesWithConnection(conn, { churchId, provider, plan, selections, reviewedApply, allowedMutationBuckets, accepted });
     const outsideSourceLinks = await outsideSourceLinksWithConnection(conn, { churchId, provider, plan: applicablePlan, accepted, reviewedApply, allowedMutationBuckets });
     const result = emptyResult();

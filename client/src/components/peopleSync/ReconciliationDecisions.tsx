@@ -15,8 +15,8 @@ const reasonCopy: Record<string, string> = {
 };
 
 export function reconciliationCounts(review: PeopleSyncReview, state: SyncSelectionState) {
-  const families = review.plan.familyConflicts;
-  const removals = review.plan.removeFromGathering.filter((action) => action.reviewRequired);
+  const families = review.plan.familyConflicts.filter((action) => !action.automatic);
+  const removals = review.plan.removeFromGathering.filter((action) => action.reviewRequired && !action.automatic);
   const selectedFamilies = families.filter((action) => action.id && action.resolution
     && state.acceptedFamilyResolutionIds?.has(action.id)).length;
   const selectedRemovals = removals.filter((action) => state.acceptedGatheringRemovalIds?.has(action.id)).length;
@@ -34,7 +34,8 @@ export default function ReconciliationDecisions({ review, state, onStateChange }
 }) {
   const provider = review.plan.provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
   const directory = review.plan.people || { external: {}, local: {} };
-  const removals = review.plan.removeFromGathering.filter((action) => action.reviewRequired);
+  const families = review.plan.familyConflicts.filter((action) => !action.automatic);
+  const removals = review.plan.removeFromGathering.filter((action) => action.reviewRequired && !action.automatic);
   const toggle = (key: 'acceptedFamilyResolutionIds' | 'acceptedGatheringRemovalIds', id: string) => {
     const ids = new Set(state[key]);
     if (ids.has(id)) ids.delete(id); else ids.add(id);
@@ -68,14 +69,14 @@ export default function ReconciliationDecisions({ review, state, onStateChange }
   };
   const panel = 'overflow-hidden rounded-xl border border-amber-200 bg-white dark:border-amber-800 dark:bg-gray-800';
   return <div className="space-y-5">
-    {review.plan.familyConflicts.length > 0 && (
+    {families.length > 0 && (
       <section aria-label="Household decisions" className={panel}>
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
-          <h4 className="font-semibold">Household decisions <span className="ml-2 text-sm font-normal">{review.plan.familyConflicts.length}</span></h4>
+          <h4 className="font-semibold">Household decisions <span className="ml-2 text-sm font-normal">{families.length}</span></h4>
           <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">Choose which families to update. Unselected households stay unchanged and remain available for review.</p>
         </div>
         <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-          {review.plan.familyConflicts.map((action, index) => {
+          {families.map((action, index) => {
             const resolution = action.resolution;
             const members = resolution?.moves || [];
             const participants = localParticipants(action);

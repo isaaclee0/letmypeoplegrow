@@ -137,6 +137,7 @@ export function buildDecisionItems(review: PeopleSyncReview): DecisionItem[] {
   }
 
   plan.familyConflicts.forEach((action: FamilyConflictAction, index) => {
+    if (action.automatic) return;
     const keys = [
       ...(action.memberExternalIds || []).map((id) => `x:${id}`),
       ...(action.resolution?.moves || []).map((move) => `i:${move.individualId}`),
@@ -155,7 +156,7 @@ export function buildDecisionItems(review: PeopleSyncReview): DecisionItem[] {
     });
   });
 
-  for (const action of plan.removeFromGathering.filter((entry) => entry.reviewRequired)) {
+  for (const action of plan.removeFromGathering.filter((entry) => entry.reviewRequired && !entry.automatic)) {
     items.push({
       id: `list:${action.id}`,
       kind: 'listRemoval',
@@ -171,7 +172,7 @@ export function buildDecisionItems(review: PeopleSyncReview): DecisionItem[] {
     });
   }
 
-  for (const action of plan.archive) {
+  for (const action of plan.archive.filter((entry) => !entry.automatic)) {
     const outsideSource = action.reason === 'outside_all_sync_sources';
     items.push({
       id: `${outsideSource ? 'outside-source' : 'archive'}:${action.id}`,
@@ -334,7 +335,12 @@ export function automaticChanges(review: PeopleSyncReview, gatherings: Array<{ i
     { label: 'linked to Planning Center', names: plan.linkPeople.filter((action) => !action.reviewRequired
       && !plan.reviewContext?.identities[action.externalPersonId]).map((action) => local(action.individualId)) },
     { label: 'added to attendance lists', names: plan.addToGathering.map((action) => `${action.individualId === null ? external(action.externalPersonId) : local(action.individualId)} → ${gatheringName(action.gatheringTypeId)}`) },
-    { label: 'removed from attendance lists', names: plan.removeFromGathering.filter((action) => !action.reviewRequired).map((action) => `${local(action.individualId)} → ${action.gatheringName || gatheringName(action.gatheringTypeId)}`) },
+    { label: 'removed from attendance lists', names: plan.removeFromGathering.filter((action) => action.automatic || !action.reviewRequired).map((action) => `${local(action.individualId)} → ${action.gatheringName || gatheringName(action.gatheringTypeId)}`) },
+    { label: 'archived to match Planning Center', names: plan.archive.filter((action) => action.automatic).map((action) => local(action.individualId)) },
+    { label: 'households updated', names: plan.familyConflicts.filter((action) => action.automatic && action.resolution)
+      .map((action) => action.resolution!.moves.map((move) => local(move.individualId)).join(' and ')) },
+    { label: 'families renamed', names: plan.renameFamily.filter((action) => action.automatic).map((action) => action.familyName) },
+    { label: 'families linked', names: plan.linkFamilies.filter((action) => action.automatic).map(() => 'Existing LMPG family') },
   ];
   return entries.filter((entry) => entry.names.length > 0);
 }

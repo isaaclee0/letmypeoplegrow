@@ -462,7 +462,6 @@ export default function AuthorityReviewWorkspace({
                 onApply={apply}
                 applying={state === 'applying'}
                 interactionDisabled={state === 'previewing' || state === 'cancelling'}
-                requireAllPlannedArchivesAccepted={reviewProvider === 'planning_center'}
               />
               <button
                 type="button"

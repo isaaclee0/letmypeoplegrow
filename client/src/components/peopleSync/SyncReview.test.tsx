@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import SyncReview from './SyncReview';
+import SyncDecisionList from './SyncDecisionList';
 import {
   tagLegacyPeopleReview,
   type AuthoritySwitchReview,
@@ -261,6 +262,113 @@ async function beginEstablishedCorrection(target: 'Replacement Local' | 'Alterna
 }
 
 describe('SyncReview compact V2 workflow', () => {
+  it.each(['table', 'decisions'])('shows inconsistent links outside source lists in the %s layout', (layout) => {
+    const review = v2Review({ attention: false, planOverrides: {
+      linkPeople: [], reviewContext: { version: 2, manualCandidateIndividualIds: [], identities: {} },
+      ambiguousPeople: [{ id: 'invalid:outside', externalPersonId: 'outside', reason: 'stale_link',
+        candidateIndividualIds: [], staleLinkedIndividualIds: [40] }],
+    } });
+    render(layout === 'table'
+      ? <SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />
+      : <SyncDecisionList provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} />);
+    const warning = screen.getByRole('region', { name: 'Linked people needing review' });
+    expect(within(warning).getByText('Current Link')).toBeInTheDocument();
+    expect(within(warning).getByText(/They will remain unchanged/)).toBeInTheDocument();
+    expect(screen.queryByText(/Everyone matches/)).not.toBeInTheDocument();
+  });
+
+  it('includes clear linked changes without per-person decisions and leaves unrelated archives pending', async () => {
+    const user = userEvent.setup();
+    const review = v2Review({ attention: false, planOverrides: {
+      linkPeople: [],
+      reviewContext: { version: 2, manualCandidateIndividualIds: [], identities: {},
+        establishedLinks: { inactive: { individualId: 8 }, moved: { individualId: 9 } } },
+      archive: [
+        { id: 'archive:8', externalPersonId: 'inactive', individualId: 8, reason: 'provider_state_archived', automatic: true },
+        { id: 'archive:30', externalPersonId: 'outside', individualId: 30, reason: 'outside_all_sync_sources' },
+      ],
+      familyConflicts: [{ id: 'family:9', reason: 'multiple_local_families', automatic: true,
+        memberExternalIds: ['moved'], resolution: { kind: 'household', destination: { kind: 'existing', familyId: 22, familyName: 'Source family' },
+          moves: [{ externalPersonId: 'moved', individualId: 9, fromFamilyId: 21 }] } }],
+      renameFamily: [{ id: 'rename:22', familyId: 22, familyName: 'Source family', automatic: true }],
+      removeFromGathering: [{ id: 'remove:9', batchId: null, gatheringTypeId: 2, gatheringName: 'PM', individualId: 9,
+        externalPersonId: 'moved', reason: 'legacy_roster_not_in_source', reviewRequired: true, automatic: true }],
+    } });
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
+    expect(screen.queryByRole('checkbox', { name: 'Archive Taylor Reed' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Use Planning Center household/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Remove Jordan Lee from PM/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Accept family rename/ })).not.toBeInTheDocument();
+    expect(screen.getByText('4 automatic changes included')).toBeInTheDocument();
+    expect(screen.getByText(/Remove Jordan Lee from PM/)).toBeInTheDocument();
+    expect(screen.getByText(/Move Jordan Lee to Source family/)).toBeInTheDocument();
+    const apply = screen.getByRole('button', { name: 'Apply sync' });
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+    expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({
+      acceptArchiveIndividualIds: [], acceptFamilyRenameIds: [],
+    }));
+    expect(onApply.mock.calls[0][1].acceptFamilyResolutionIds || []).toEqual([]);
+    expect(onApply.mock.calls[0][1].acceptGatheringRemovalIds || []).toEqual([]);
+  });
+
+  it('keeps uncertain households and duplicate identity choices available beside automatic changes', () => {
+    const review = v2Review({ planOverrides: {
+      archive: [{ id: 'archive:40', externalPersonId: 'inactive', individualId: 40,
+        reason: 'provider_state_archived', automatic: true }],
+      familyConflicts: [{ id: 'uncertain', reason: 'multiple_provider_households', memberExternalIds: ['ext-attention'] }],
+    } });
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    expect(screen.getByRole('button', { name: 'Change LMPG match for Blair Jones' })).toBeInTheDocument();
+    expect(screen.getByText('No household changes will be applied for this issue.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
+  });
+
+  it('keeps a manual gathering removal opt-in beside automatic changes', async () => {
+    const user = userEvent.setup();
+    const review = v2Review({ attention: false, planOverrides: {
+      archive: [{ id: 'archive:40', externalPersonId: 'inactive', individualId: 40,
+        reason: 'provider_state_archived', automatic: true }],
+      removeFromGathering: [{ id: 'remove:9', batchId: null, gatheringTypeId: 2, gatheringName: 'PM', individualId: 9,
+        externalPersonId: 'moved', reason: 'legacy_roster_not_in_source', reviewRequired: true }],
+    } });
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
+    const apply = screen.getByRole('button', { name: 'Apply sync' });
+    expect(apply).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: /Remove Jordan Lee from PM/ })).not.toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: /Remove Jordan Lee from PM/ }));
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+    expect(onApply.mock.calls[0][1].acceptGatheringRemovalIds).toEqual(['remove:9']);
+  });
+
+  it.each([false, true])('counts included linked name updates with an archive present=%s', (includeArchive) => {
+    const review = v2Review({ attention: false, planOverrides: {
+      linkPeople: [],
+      reviewContext: { version: 2, manualCandidateIndividualIds: [], identities: {}, establishedLinks: { changed: { individualId: 9 } } },
+      updateManagedFields: [{ id: 'update:9', externalPersonId: 'changed', individualId: 9,
+        reason: 'provider_managed_fields', reviewRequired: false, automatic: true,
+        changes: [{ field: 'firstName', localValue: 'Jordan', externalValue: 'Jo' }] }],
+      archive: includeArchive ? [{ id: 'archive:40', externalPersonId: 'inactive', individualId: 40,
+        reason: 'provider_state_archived', automatic: true }] : [],
+    } });
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    expect(screen.getByText(includeArchive ? '2 automatic changes included' : '1 automatic change included')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
+  });
+
+  it('allows a confirmed family link to be the only automatic change', () => {
+    const review = v2Review({ attention: false, planOverrides: {
+      linkPeople: [], reviewContext: { version: 2, manualCandidateIndividualIds: [], identities: {} },
+      linkFamilies: [{ id: 'link-family:20', externalFamilyId: 'household', familyId: 20, automatic: true }],
+    } });
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    expect(screen.getByText('1 automatic change included')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
+  });
+
   it('renders the source snapshot through the church-time formatter', () => {
     render(<SyncReview operationKind="people_sync" provider="planning_center" review={v2Review({ attention: false })} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
 
@@ -476,7 +584,7 @@ describe('SyncReview compact V2 workflow', () => {
     expect(screen.queryByText('Lifecycle review')).not.toBeInTheDocument();
   });
 
-  it('keeps archive acceptance and the destructive acknowledgement immediately before apply', async () => {
+  it('allows unrelated changes while an archive is pending, and confirms a manually selected archive', async () => {
     const user = userEvent.setup();
     const review = v2Review({
       attention: false,
@@ -488,12 +596,13 @@ describe('SyncReview compact V2 workflow', () => {
       },
     });
     const onApply = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} requireAllPlannedArchivesAccepted />);
+    render(<SyncReview operationKind="people_sync" provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
 
     const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
-    expect(apply).toBeDisabled();
+    expect(apply).toBeEnabled();
     expect(screen.getByText('Archived in the provider')).toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' }));
+    expect(screen.getByRole('button', { name: 'Apply 2 selected changes' })).toBeDisabled();
     await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
     await user.click(screen.getByRole('button', { name: 'Apply 2 selected changes' }));
     expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({ acceptArchiveIndividualIds: [8] }));
@@ -526,7 +635,6 @@ describe('SyncReview compact V2 workflow', () => {
       onRefresh={vi.fn()}
       onApply={onApply}
       applying={false}
-      requireAllPlannedArchivesAccepted
     />);
 
     expect(screen.getByText('Lifecycle review')).toBeInTheDocument();
@@ -851,7 +959,6 @@ describe('SyncReview legacy compatibility', () => {
       onApply={onApply}
       applying={false}
       resolveAmbiguousArchiveIndividualId={() => 11}
-      requireAllPlannedArchivesAccepted
     />);
 
     expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();

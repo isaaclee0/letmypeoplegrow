@@ -1,6 +1,7 @@
 'use strict';
 
 const https = require('https');
+const { setTimeout: delay } = require('node:timers/promises');
 
 const MAX_RETRIES = 3;
 const MAX_PAGES = 1000;
@@ -23,7 +24,7 @@ function normalizedHeaders(headers) {
   return result;
 }
 
-function defaultRequest({ url, method, headers }) {
+function defaultRequest({ url, method, headers, signal }) {
   if (method !== 'GET') return Promise.reject(new Error('Planning Center source transport only accepts GET'));
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -33,6 +34,7 @@ function defaultRequest({ url, method, headers }) {
       path: parsed.pathname + parsed.search,
       method: 'GET',
       headers,
+      signal,
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
@@ -79,7 +81,7 @@ function isEnvelope(data) {
     (Array.isArray(data.data) || (data.data && typeof data.data === 'object'));
 }
 
-function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)), maxRetries = MAX_RETRIES, requestScope = 'account' } = {}) {
+function createPcoReadClient({ accessToken, request = defaultRequest, signal, sleep = (milliseconds) => delay(milliseconds, undefined, { signal }), maxRetries = MAX_RETRIES, requestScope = 'account' } = {}) {
   const token = typeof accessToken === 'string' ? accessToken : '';
   const authHeader = `Bearer ${token}`;
   const boundedRetries = Math.max(0, Math.min(MAX_RETRIES, Number.isInteger(maxRetries) ? maxRetries : MAX_RETRIES));
@@ -98,18 +100,22 @@ function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (m
     const count = Number(headers['x-pco-api-request-rate-count']);
     if (Number.isFinite(limit) && limit > 0 && Number.isFinite(period) && period >= 0 && Number.isFinite(count) && count >= limit - 1) {
       await sleep(Math.round(period * 1000));
+      signal?.throwIfAborted();
     }
   }
 
   async function getJson(url) {
     const safeUrl = pcoUrl(url).toString();
     for (let retry = 0; ; retry += 1) {
+      signal?.throwIfAborted();
       let response;
       try {
-        response = await request({ url: safeUrl, method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' } });
+        response = await request({ url: safeUrl, method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' }, ...(signal ? { signal } : {}) });
       } catch (err) {
+        signal?.throwIfAborted();
         throw new PcoSourceError(`Planning Center source request failed: ${redact(err && err.message)}`, 'SYNC_SOURCE_CHECK_FAILED', {});
       }
+      signal?.throwIfAborted();
 
       const status = response && response.status;
       const headers = normalizedHeaders(response && response.headers);

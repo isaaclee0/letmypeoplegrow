@@ -229,6 +229,7 @@ export interface LinkPersonAction {
 // from apply.js's linkFamilies handling (externalFamilyId, familyId,
 // linkSource).
 export interface LinkFamilyAction {
+  automatic?: boolean;
   id: string;
   externalFamilyId: string;
   familyId: number;
@@ -273,6 +274,7 @@ export interface ManagedFieldChange {
 }
 
 export interface UpdateManagedFieldsAction {
+  automatic?: boolean;
   id: string;
   externalPersonId: string;
   individualId: number;
@@ -302,6 +304,7 @@ export interface DemoteToLocalVisitorAction {
 }
 
 export interface ArchiveAction {
+  automatic?: boolean;
   id: string;
   externalPersonId: string;
   individualId: number;
@@ -335,6 +338,7 @@ export interface MoveFamilyAction {
 // No producer yet (same caveat as LinkFamilyAction). Shape inferred from
 // apply.js's renameFamily handling (familyName, familyId).
 export interface RenameFamilyAction {
+  automatic?: boolean;
   id: string;
   familyId: number;
   familyName: string;
@@ -354,6 +358,7 @@ export interface AddToGatheringAction {
 }
 
 export interface RemoveFromGatheringAction {
+  automatic?: boolean;
   id: string;
   batchId: number | null;
   gatheringTypeId: number;
@@ -390,6 +395,7 @@ export interface FamilyResolution {
 }
 
 export interface FamilyConflictAction {
+  automatic?: boolean;
   id?: string;
   // Server-proven chooser coverage; contextual single-household relatives may also be present.
   householdChoiceGroupIds?: string[];

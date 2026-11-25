@@ -79,9 +79,10 @@ export function deriveSyncPlanView(review: PeopleSyncReview, state: SyncSelectio
     addFamilies: isV2 ? plan.addFamilies.filter((action) => !action.singlePersonExternalId
       || state.identityDecisions?.[action.singlePersonExternalId]?.outcome === 'create') : plan.addFamilies,
     renameFamily: plan.renameFamily,
+    automaticFamilies: plan.familyConflicts.filter((action) => action.automatic && action.resolution),
     addToGathering: isV2 ? plan.addToGathering.filter(gatheringAdditionStillSelected) : plan.addToGathering,
     removeFromGathering: (isV2 ? plan.removeFromGathering.filter(suggestionStillAccepted) : plan.removeFromGathering)
-      .filter((action) => !action.reviewRequired || state.acceptedGatheringRemovalIds?.has(action.id)),
+      .filter((action) => action.automatic || !action.reviewRequired || state.acceptedGatheringRemovalIds?.has(action.id)),
     archive: (isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive).filter(isTerminalArchive),
     reactivate: isV2 ? plan.reactivate.filter(suggestionStillAccepted) : plan.reactivate,
     skipped: plan.skipped,
@@ -151,6 +152,8 @@ export default function SyncPlanSections({
   const view = deriveSyncPlanView(review, state);
   const directory = review.plan.people || { external: {}, local: {} };
   const terminalArchiveActions = archiveActions.filter(isTerminalArchive);
+  const manualArchiveActions = terminalArchiveActions.filter((action) => !action.automatic);
+  const automaticArchiveActions = terminalArchiveActions.filter((action) => action.automatic);
   const localOnlyCount = review.coverage?.unlinkedActiveLocalRegulars ?? 0;
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
@@ -175,7 +178,8 @@ export default function SyncPlanSections({
   const familyCount = view.linkFamilies.length
     + view.addFamilies.length
     + view.moveFamily.length
-    + view.renameFamily.length;
+    + view.renameFamily.length
+    + view.automaticFamilies.length;
   const gatheringCount = view.addToGathering.length + view.removeFromGathering.length;
   const lifecycleCount = terminalArchiveActions.length + localOnlyCount;
   const skippedCount = view.skipped.length
@@ -202,8 +206,13 @@ export default function SyncPlanSections({
           {view.linkFamilies.map((action) => <li key={action.id}>Link a provider family to an LMPG family</li>)}
           {view.addFamilies.map((action) => <li key={action.id}>Add family {action.familyName}</li>)}
           {view.moveFamily.map((action) => <li key={action.id}>Move {localPerson(action.individualId)} to another family</li>)}
+          {view.automaticFamilies.map((action) => <li key={action.id}>
+            Move {action.resolution!.moves.map((move) => localPerson(move.individualId)).join(' and ')} to {' '}
+            {action.resolution!.destination.kind === 'none' ? 'a separate family' : action.resolution!.destination.familyName || action.externalFamilyName || 'the Planning Center household'} (automatic)
+          </li>)}
           {view.renameFamily.map((action) => (
             <li key={action.id}>
+              {action.automatic ? <>Rename family to {action.familyName} (automatic)</> : (
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -212,6 +221,7 @@ export default function SyncPlanSections({
                 />
                 Accept family rename to {action.familyName}
               </label>
+              )}
             </li>
           ))}
         </DenseChangeList>
@@ -225,7 +235,7 @@ export default function SyncPlanSections({
       >
         <DenseChangeList>
           {view.addToGathering.map((action) => <li key={action.id}>Add {externalPerson(action.externalPersonId)} to {gatheringName(action.gatheringTypeId)}</li>)}
-          {view.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from {action.gatheringName || gatheringName(action.gatheringTypeId)}</li>)}
+          {view.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from {action.gatheringName || gatheringName(action.gatheringTypeId)}{action.automatic ? ' (automatic)' : ''}</li>)}
         </DenseChangeList>
       </CompactSection>
 
@@ -235,7 +245,13 @@ export default function SyncPlanSections({
         open
         tone={terminalArchiveActions.length > 0 ? 'amber' : 'neutral'}
       >
-        {terminalArchiveActions.length > 0 && (
+        {automaticArchiveActions.length > 0 && <div>
+          <h4 className="mb-2 text-sm font-semibold text-gray-950 dark:text-white">Automatic status updates</h4>
+          <DenseChangeList>{automaticArchiveActions.map((action) => <li key={action.id}>
+            Archive {localPerson(action.individualId)} — {archiveReasonLabel(action.reason)}. Attendance history is kept.
+          </li>)}</DenseChangeList>
+        </div>}
+        {manualArchiveActions.length > 0 && (
           <div>
             <h4 className="mb-2 text-sm font-semibold text-gray-950 dark:text-white">Proposed archives</h4>
             <button
@@ -246,7 +262,7 @@ export default function SyncPlanSections({
               Accept all proposed archives
             </button>
             <DenseChangeList>
-              {terminalArchiveActions.map((action) => (
+              {manualArchiveActions.map((action) => (
                 <li key={action.id}>
                   <label className="flex items-start gap-2">
                     <input

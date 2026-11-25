@@ -37,6 +37,7 @@ const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
 const unattendedPolicy = require('./unattendedPolicy');
 const runRepository = require('./runRepository');
+const { uniquePlanningCenterLinks, combineLinkedHouseholds, mergeHousehold, directoryHouseholdVetoes } = require('./linkedPlanningCenter');
 const { loadLocalProjectionState } = require('./localProjectionState');
 const authority = require('./authority');
 const providerRegistry = require('./providerRegistry');
@@ -337,22 +338,22 @@ function mergeAppliedCounts(applyResult, plan) {
 }
 
 function pendingGatheringRemovals(plan) {
-  return (plan.removeFromGathering || []).filter((action) => action.reviewRequired).length;
+  return (plan.removeFromGathering || []).filter((action) => action.reviewRequired && !action.automatic).length;
 }
 
 function heldCountsFromPlan(plan) {
   return {
     ...(pendingGatheringRemovals(plan) ? { gatheringRemovals: pendingGatheringRemovals(plan) } : {}),
-    archive: plan.archive.length,
+    archive: plan.archive.filter(action => !action.automatic).length,
     ambiguousPeople: plan.ambiguousPeople.length,
-    familyConflicts: plan.familyConflicts.length,
-    renameFamily: plan.renameFamily.length,
+    familyConflicts: plan.familyConflicts.filter(action => !action.automatic).length,
+    renameFamily: plan.renameFamily.filter(action => !action.automatic).length,
     unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
   };
 }
 
 function hasHeldItems(plan) {
-  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].length > 0) || pendingGatheringRemovals(plan) > 0;
+  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].some(action => !action.automatic)) || pendingGatheringRemovals(plan) > 0;
 }
 
 function stripRawFields(action) {
@@ -730,6 +731,17 @@ async function recordSourceFailureSafely(deps, input) {
   }
 }
 
+// Retain contradictory observations before source unions discard copies. Only
+// explicit lifecycle states from the configured authority are evidence.
+function observePlanningCenterLifecycle(states, people) {
+  for (const person of people) {
+    if (!['active', 'archived', 'deceased'].includes(person.state)) continue;
+    const id = String(person.id);
+    const before = states.get(id);
+    states.set(id, before === undefined || before === person.state ? person.state : 'conflict');
+  }
+}
+
 async function acquireCompleteProviderSources({
   churchId, provider, batches, settings, credentials, adapter, deps,
   connectionExpectation = null, signal = null,
@@ -744,6 +756,7 @@ async function acquireCompleteProviderSources({
   const familiesById = new Map();
   const sourceProvenance = [];
   const observedHouseholds = new Map();
+  const lifecycleStates = new Map();
   const conflictingHouseholdIds = new Set();
 
   for (const batch of batches) {
@@ -779,6 +792,10 @@ async function acquireCompleteProviderSources({
         throw sourceIncomplete(provider);
       }
 
+      if (provider === 'planning_center') {
+        observePlanningCenterLifecycle(lifecycleStates, sourceSnapshot.people);
+        observePlanningCenterLifecycle(lifecycleStates, sourceSnapshot.contextPeople);
+      }
       const sourcePeopleById = new Map();
       for (const candidate of sourceSnapshot.people) {
         const id = personId(candidate);
@@ -845,19 +862,7 @@ async function acquireCompleteProviderSources({
       for (const family of sourceSnapshot.families) {
         const id = family?.id === null || family?.id === undefined ? '' : String(family.id);
         if (!id) throw sourceIncomplete(provider);
-        if (!familiesById.has(id)) familiesById.set(id, family);
-        else {
-          const previous = familiesById.get(id);
-          familiesById.set(id, { ...previous, memberExternalIds: [...new Set([
-            ...(previous.memberExternalIds || []), ...(family.memberExternalIds || []),
-          ].map(String))].sort(),
-          ...((previous.householdMemberExternalIds || family.householdMemberExternalIds) ? {
-            householdMemberExternalIds: [...new Set([
-              ...(previous.householdMemberExternalIds || []), ...(family.householdMemberExternalIds || []),
-            ].map(String))].sort(),
-          } : {}),
-          });
-        }
+        mergeHousehold(familiesById, family, provider === 'planning_center');
       }
 
       eligibleByBatch.set(batch.id, eligible);
@@ -932,6 +937,7 @@ async function acquireCompleteProviderSources({
       people: [...memberPeopleById.values()],
       families: [...familiesById.values()],
     },
+    conflictingHouseholdIds, lifecycleStates,
     contextPeople: [...contextPeopleById.values()],
     matchingPeople: [...matchingPeopleById.values()],
     ineligibleMemberPeople: [...ineligibleMemberPeopleById.values()],
@@ -965,17 +971,46 @@ async function acquirePipelineState(input) {
     await input.deps.loadLocalProjectionState(input.churchId, input.provider);
   assertAuthorityPreviewActive(input.signal);
 
+  const linkedMaintenance = input.provider === 'planning_center' && input.authoritative === true &&
+    typeof input.adapter.fetchLinkedSnapshot === 'function';
+  const automaticLinks = linkedMaintenance ? uniquePlanningCenterLinks({ churchId: input.churchId, individuals, personLinks }) : null;
+  if (automaticLinks) {
+    const externalPersonIds = [...automaticLinks.keys()].filter(id => !providerState.seenMemberExternalIds.has(id)).sort();
+    if (externalPersonIds.length) {
+      const linked = await input.adapter.fetchLinkedSnapshot({ churchId: input.churchId, externalPersonIds, signal: input.signal });
+      assertAuthorityPreviewActive(input.signal);
+      await assertConnectionExpectationCurrent(input);
+      const ids = new Set(Array.isArray(linked?.people) ? linked.people.map(personId) : []);
+      if (!linked || linked.provider !== input.provider || linked.complete !== true || !isIsoTimestamp(linked.fetchedAt) ||
+          !Array.isArray(linked.people) || linked.people.length !== externalPersonIds.length ||
+          externalPersonIds.some(id => !ids.has(id)) || !Array.isArray(linked.contextPeople) ||
+          linked.contextPeople.some(person => !personId(person) || ids.has(personId(person))) ||
+          !Array.isArray(linked.families) || linked.families.some(family => !family?.id)) throw sourceIncomplete(input.provider);
+      observePlanningCenterLifecycle(providerState.lifecycleStates, linked.people);
+      observePlanningCenterLifecycle(providerState.lifecycleStates, linked.contextPeople);
+      combineLinkedHouseholds(providerState, linked);
+    }
+  }
   let directorySnapshot = null;
   if (input.trigger !== 'scheduled' && input.trigger !== 'authority_switch' && canReviewOutsideSources(input)) {
     directorySnapshot = await input.adapter.fetchReconciliationSnapshot({ churchId: input.churchId });
     if (!isCompleteSourceSnapshot(directorySnapshot, input.provider)) throw sourceIncomplete(input.provider);
+    if (automaticLinks) {
+      observePlanningCenterLifecycle(providerState.lifecycleStates, directorySnapshot.people);
+      observePlanningCenterLifecycle(providerState.lifecycleStates, directorySnapshot.contextPeople);
+    }
     assertAuthorityPreviewActive(input.signal);
   }
 
+  if (automaticLinks && [...automaticLinks.keys()].some(id => providerState.lifecycleStates.get(id) === 'conflict')) {
+    throw sourceIncomplete(input.provider);
+  }
   return {
     ...input,
     ...providerState,
     directorySnapshot,
+    householdVetoIds: directoryHouseholdVetoes(providerState, directorySnapshot, automaticLinks),
+    automaticLinks,
     individuals,
     families,
     personLinks,
@@ -1055,7 +1090,7 @@ function matchProjectedPeople(acquired, correction, effectiveReviewState) {
     if (linkedExternalIds.has(String(person.id))) matchingPeople.push(person);
   }
 
-  return memberOnlyMatcherResult(acquired.deps.matchPeople({
+  const result = memberOnlyMatcherResult(acquired.deps.matchPeople({
     externalPeople: matchingPeople,
     localPeople: acquired.individuals,
     existingLinks: correction.projectedLinks.map((link) => ({
@@ -1068,6 +1103,25 @@ function matchProjectedPeople(acquired, correction, effectiveReviewState) {
     externalFamilyMembers: groupMembersByFamily(matchingPeople),
     localFamilyMembers: groupMembersByFamily(acquired.individuals),
   }), acquired.seenMemberExternalIds);
+  if (acquired.automaticLinks) {
+    const corrected = new Set(correction.corrections.map(change => change.externalPersonId));
+    const invalid = new Map();
+    for (const link of acquired.personLinks) {
+      const id = link.externalPersonId;
+      if ((link.churchId && link.churchId !== acquired.churchId) || (link.provider && link.provider !== acquired.provider) ||
+          corrected.has(id) || acquired.automaticLinks.get(id) === link.individualId) continue;
+      if (!invalid.has(id)) invalid.set(id, new Set());
+      invalid.get(id).add(link.individualId);
+    }
+    result.linked = result.linked.filter(link => !invalid.has(link.externalPersonId));
+    const alreadyAmbiguous = new Set(result.ambiguous.map(row => row.externalPersonId));
+    for (const [externalPersonId, staleIds] of invalid) {
+      if (!alreadyAmbiguous.has(externalPersonId)) result.ambiguous.push({
+        externalPersonId, candidateIndividualIds: [], staleLinkedIndividualIds: [...staleIds].sort((a,b) => a-b), reason: 'stale_link',
+      });
+    }
+  }
+  return result;
 }
 
 function appendDeferredCorrectionRows(plan, unlinkedExternalIds) {
@@ -1080,7 +1134,14 @@ function appendDeferredCorrectionRows(plan, unlinkedExternalIds) {
 }
 
 function computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState) {
-  const planningPeople = [...acquired.snapshot.people, ...acquired.ineligibleMemberPeople];
+  const linkedPeople = acquired.linkedPeople || [];
+  const planningPeople = [...acquired.snapshot.people, ...acquired.ineligibleMemberPeople, ...linkedPeople];
+  const projectedLinks = new Map(correction.projectedLinks.map(link => [link.externalPersonId, link.individualId]));
+  const automaticLinks = acquired.automaticLinks && new Map([...acquired.automaticLinks]
+    .filter(([id, localId]) => projectedLinks.get(id) === localId));
+  const supplementalLinks = linkedPeople.filter(person => automaticLinks.has(person.id)).map(person => ({
+    externalPersonId: person.id, individualId: automaticLinks.get(person.id),
+  }));
   let plan = acquired.deps.computePeopleSyncPlan({
     provider: acquired.provider,
     externalPeople: planningPeople,
@@ -1088,7 +1149,9 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     householdPeople: [...planningPeople, ...acquired.contextPeople],
     localPeople: acquired.individuals,
     localFamilies: acquired.families,
-    matcher: matcherResult,
+    automaticLinks,
+    householdVetoIds: acquired.householdVetoIds,
+    matcher: { ...matcherResult, linked: [...(matcherResult.linked || []), ...supplementalLinks] },
     batches: acquired.batches,
     allBatches: acquired.allBatches,
     eligibleByBatch: acquired.eligibleByBatch,
@@ -1112,6 +1175,7 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     gatheringMemberships: acquired.gatheringMemberships,
     reconciliationKeeps: acquired.reconciliationKeeps || [],
     localHouseholdExternalIds: acquired.localHouseholdExternalIds || new Set(),
+    savedHouseholdExternalIds: new Set((acquired.householdPreferences || []).map(p => p.externalPersonId)),
   });
   appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
 
@@ -1740,7 +1804,9 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   const unattendedBatches = effectiveReviewBatches(pre.batches, null);
   const authorityExpectation = { active: pre.authorityState.active, pending: pre.authorityState.pending };
   const sourceExpectations = sourceExpectationsFor(unattendedBatches);
-  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(unattendedBatches);
+  const batchConfigurationExpectation = batchRepository.buildPlanAffectingBatchConfigurationExpectation(unattendedBatches, {
+    requireExactSet: provider === 'planning_center' && typeof pre.adapter.fetchLinkedSnapshot === 'function',
+  });
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
 
@@ -1763,10 +1829,11 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     );
 
     // 8. Apply safe unattended actions. Deterministic matches and signed
-    // additions are accepted; ambiguous/held identities are deferred, and
-    // destructive review buckets remain unselected.
+    // additions are accepted. Ambiguities are deferred. The transaction
+    // revalidates established-link automatic actions before applying them.
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan,
+      unattended: true,
       selections: {
         decisionContractVersion: 2,
         identityDecisions: unattendedIdentityDecisions(body.plan),

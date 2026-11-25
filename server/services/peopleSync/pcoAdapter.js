@@ -5,6 +5,7 @@ const {
   listPlanningCenterSources,
   fetchPlanningCenterSourceSnapshot,
   fetchPlanningCenterAllSnapshot,
+  fetchPlanningCenterLinkedSnapshot,
 } = require('../planningCenter/sourceAdapter');
 
 const defaultDeps = {
@@ -22,6 +23,9 @@ const defaultDeps = {
   },
   async fetchAllSnapshot({ accessToken, signal, includeFieldData }) {
     return fetchPlanningCenterAllSnapshot({ accessToken, signal, includeFieldData });
+  },
+  async fetchLinkedSnapshot({ accessToken, externalPersonIds, signal }) {
+    return fetchPlanningCenterLinkedSnapshot({ accessToken, externalPersonIds, signal });
   },
 };
 
@@ -58,6 +62,10 @@ function createPcoAdapter(deps = {}) {
     async fetchReconciliationSnapshot({ churchId } = {}) {
       return resolved.withPlanningCenterSourceToken(churchId, (accessToken) =>
         resolved.fetchAllSnapshot({ accessToken, includeFieldData: false }));
+    },
+    async fetchLinkedSnapshot({ churchId, externalPersonIds, signal } = {}) {
+      return resolved.withPlanningCenterSourceToken(churchId, accessToken =>
+        resolved.fetchLinkedSnapshot({ accessToken, externalPersonIds, signal }));
     },
     isLifecycleEligible(person) {
       return !!person && (person.state === 'active' || person.status === 'active');

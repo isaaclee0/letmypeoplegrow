@@ -2,7 +2,7 @@ const REQUIRED = [
   'validateConnection', 'listSources', 'fetchSourceSnapshot', 'fetchImportSnapshot', 'isLifecycleEligible',
 ];
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
-const OPTIONAL = ['fetchReconciliationSnapshot'];
+const OPTIONAL = ['fetchReconciliationSnapshot', 'fetchLinkedSnapshot'];
 const ALLOWED_KEYS = new Set(['provider', ...REQUIRED, ...OPTIONAL]);
 const adapters = new Map();
 

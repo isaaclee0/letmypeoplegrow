@@ -5,6 +5,7 @@ import IdentityReviewTable, {
 } from './IdentityReviewTable';
 import SyncPlanSections, { deriveSyncPlanView } from './SyncPlanSections';
 import ReconciliationDecisions, { reconciliationCounts } from './ReconciliationDecisions';
+import UnresolvedLinkWarnings, { unresolvedLinkedPeople } from './UnresolvedLinkWarnings';
 import { withoutCoveredHouseholdWarnings } from './HouseholdChoiceEditor';
 import OutsideSourceArchiveDecisions from './OutsideSourceArchiveDecisions';
 import GatheringReviewFilter, { filterGatheringReview, reviewGatherings, type ReviewGathering } from './GatheringReviewFilter';
@@ -67,7 +68,6 @@ interface SyncReviewCommonProps {
   renderCandidateSearch?: (props: CandidateSearchRenderProps) => React.ReactNode;
   renderCandidateLabel?: (action: AmbiguousPersonAction, candidateId: number) => React.ReactNode;
   resolveAmbiguousArchiveIndividualId?: (action: AmbiguousPersonAction) => number | undefined;
-  requireAllPlannedArchivesAccepted?: boolean;
   initialIdentityFilter?: ReviewRowFilter;
 }
 
@@ -494,7 +494,6 @@ function SafeSyncReview({
   renderCandidateSearch,
   renderCandidateLabel,
   resolveAmbiguousArchiveIndividualId,
-  requireAllPlannedArchivesAccepted = false,
   initialIdentityFilter,
 }: SyncReviewProps) {
   const { formatInstant } = useChurchTime();
@@ -613,11 +612,12 @@ function SafeSyncReview({
   const displayedReview = filterGatheringReview(effectiveReview, gatheringFilter);
   const gatheringOptions = reviewGatherings(effectiveReview, gatherings);
   const reconciliation = reconciliationCounts(reconciliationReview, state);
+  const unresolvedLinkCount = isV2 ? unresolvedLinkedPeople(effectiveReview).length : 0;
   const acceptAllArchives = () => setState((current) => ({
     ...current,
     acceptedArchiveIds: new Set([
       ...current.acceptedArchiveIds,
-      ...planView.archive.map((action) => action.individualId),
+      ...planView.archive.filter((action) => !action.automatic).map((action) => action.individualId),
     ]),
   }));
   const signedCorrections = validV2Context && !isPeopleImport
@@ -625,13 +625,12 @@ function SafeSyncReview({
     : {};
   const correctionsReady = recordsMatch(state.linkCorrections, signedCorrections);
   const requiresConfirmation = !isPeopleImport && (
-    planView.archive.length > 0
-    || planView.removeFromGathering.some((action) => !action.reviewRequired)
+    planView.removeFromGathering.some((action) => !action.automatic && !action.reviewRequired)
     || state.acceptedFamilyRenameIds.size > 0
     || state.acceptedArchiveIds.size > 0
   );
-  const allPlannedArchivesAccepted = isPeopleImport || !requireAllPlannedArchivesAccepted
-    || planView.archive.every((action) => state.acceptedArchiveIds.has(action.individualId));
+  const automaticCount = Object.values(planView).flat().filter((action) =>
+    typeof action === 'object' && action !== null && 'automatic' in action && action.automatic === true).length;
 
   const refreshOnlyError = isRefreshOnlyReviewError(applyError);
   const refreshOnlyCode = peopleSyncErrorCode(applyError);
@@ -645,7 +644,6 @@ function SafeSyncReview({
     || unsafeReview
     || !correctionsReady
     || collisions.length > 0
-    || !allPlannedArchivesAccepted
     || (requiresConfirmation && !confirmedDestructiveChanges);
   const householdChoiceCount = Object.keys(plan.householdChoices?.edits || {}).length;
   const sourceChangeCount = plan.sourceContext?.promotions?.length || 0;
@@ -654,6 +652,8 @@ function SafeSyncReview({
     ? 'Applying…'
     : isPeopleImport
       ? 'Apply import'
+    : automaticCount > 0
+      ? 'Apply sync'
     : isV2
       ? `Apply ${selectedCount} selected ${selectedCount === 1 ? 'change' : 'changes'}`
       : 'Apply sync';
@@ -743,6 +743,7 @@ function SafeSyncReview({
     + planView.addFamilies.length
     + planView.moveFamily.length
     + planView.renameFamily.length
+    + planView.automaticFamilies.length
     + reconciliation.selectedFamilies;
   const gatheringCount = planView.addToGathering.length + planView.removeFromGathering.length;
   const outsideSourceArchives = plan.archive.filter((action) => action.reason === 'outside_all_sync_sources');
@@ -803,7 +804,9 @@ function SafeSyncReview({
                 Source snapshot: {fetchedAt ? <time dateTime={fetchedAt}>{formatInstant(fetchedAt, { dateStyle: 'medium', timeStyle: 'short' }) || 'Unavailable'}</time> : 'Unavailable'}
               </p>
               {!isPeopleImport && <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
-                Match people, review household differences, then tidy attendance lists. Choose what to apply; anything left undecided stays unchanged.
+                {provider === 'planning_center'
+                  ? 'Clear updates for linked people are included automatically. Review uncertain matches and household differences; anything left undecided stays unchanged.'
+                  : 'Match people, review household differences, then tidy attendance lists. Choose what to apply; anything left undecided stays unchanged.'}
               </p>}
             </div>
             <button
@@ -819,18 +822,22 @@ function SafeSyncReview({
             {Object.keys(reviewContext?.identities || {}).length > 0 && <SummaryChip label="Identity decisions" count={Object.keys(reviewContext?.identities || {}).length} />}
             <SummaryChip
               label="Needs attention"
-              count={incompleteExternalIds.length + collisions.length + (isPeopleImport ? 0 : reconciliation.pending)}
-              tone={affectedExternalId || (!isPeopleImport && reconciliation.pending) ? 'amber' : 'neutral'}
+              count={incompleteExternalIds.length + collisions.length + unresolvedLinkCount + (isPeopleImport ? 0 : reconciliation.pending)}
+              tone={affectedExternalId || unresolvedLinkCount || (!isPeopleImport && reconciliation.pending) ? 'amber' : 'neutral'}
               onClick={affectedExternalId ? () => focusAffected() : undefined}
             />
             {!isPeopleImport && managedCount > 0 && <SummaryChip label="Managed updates" count={managedCount} />}
             {!isPeopleImport && familyCount > 0 && <SummaryChip label="Family changes" count={familyCount} />}
-            {!isPeopleImport && reconciliationReview.plan.familyConflicts.length > 0 && <SummaryChip label="Households to review" count={reconciliationReview.plan.familyConflicts.length} tone="amber" />}
+            {!isPeopleImport && reconciliationReview.plan.familyConflicts.some((action) => !action.automatic) && <SummaryChip label="Households to review" count={reconciliationReview.plan.familyConflicts.filter((action) => !action.automatic).length} tone="amber" />}
             {!isPeopleImport && householdChoiceCount > 0 && <SummaryChip label="Household choices to save" count={householdChoiceCount} />}
             {!isPeopleImport && gatheringCount > 0 && <SummaryChip label="Gathering changes" count={gatheringCount} />}
             {!isPeopleImport && destructiveCount > 0 && <SummaryChip label="Destructive changes" count={destructiveCount} tone="amber" />}
           </div>
+          {!isPeopleImport && automaticCount > 0 && <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
+            {automaticCount} automatic {automaticCount === 1 ? 'change' : 'changes'} included
+          </p>}
         </header>
+        {!isPeopleImport && isV2 && <UnresolvedLinkWarnings review={effectiveReview} />}
 
         {gatherings && <GatheringReviewFilter gatherings={gatheringOptions} value={gatheringFilter}
           onChange={setGatheringFilter} disabled={applying || previewing} />}
@@ -939,7 +946,7 @@ function SafeSyncReview({
           </label>
         )}
 
-        {(incompleteExternalIds.length > 0 || collisions.length > 0 || !correctionsReady || !allPlannedArchivesAccepted) && (
+        {(incompleteExternalIds.length > 0 || collisions.length > 0 || !correctionsReady) && (
           <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
             {incompleteExternalIds.map((externalId) => (
               <p key={externalId}>
@@ -956,7 +963,6 @@ function SafeSyncReview({
               </p>
             ))}
             {!correctionsReady && <p>The latest established-link correction needs a successful signed preview before you can apply.</p>}
-            {!allPlannedArchivesAccepted && <p>Review and accept every planned archive before applying this sync.</p>}
           </div>
         )}
 

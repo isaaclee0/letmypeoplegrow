@@ -20,6 +20,47 @@ function person(id, { firstName = 'Ada', lastName = 'Lovelace', householdId = 'h
   };
 }
 
+for (const kind of ['list', 'directory']) {
+  test(`${kind} rejects explicit household disagreement when context becomes a later source member`, async () => {
+    let page = 0;
+    const options = { accessToken: 'token', sourceKind: 'planning_center_list', sourceExternalId: '42',
+      request: async ({ url }) => {
+        if (url === `${API}/lists/42`) return response(200, { data: { type: 'List', id: '42', attributes: { name: 'Members' } } });
+        page++;
+        const household = { type: 'Household', id: 'h1', attributes: { name: 'Example' },
+          relationships: { people: { data: [{ type: 'Person', id: 'p1' }, { type: 'Person', id: 'p2' }] } } };
+        return response(200, { data: [person(page === 1 ? 'p1' : 'p2')],
+          included: page === 1 ? [household, person('p2', { householdId: null })] : [household],
+          links: { next: page === 1 ? `${API}/people?page=2` : null } });
+      } };
+    await assert.rejects(() => kind === 'list' ? fetchPlanningCenterSourceSnapshot(options) : fetchPlanningCenterAllSnapshot(options),
+      { code: 'SYNC_SOURCE_INCOMPLETE' });
+    assert.equal(page, 2);
+  });
+
+  for (const issue of ['malformed roster', 'partial roster', 'contradictory roster', 'contradictory lifecycle']) {
+    test(`${kind} reads reject ${issue} evidence before automatic reconciliation`, async () => {
+      let page = 0;
+      const options = { accessToken: 'token', sourceKind: 'planning_center_list', sourceExternalId: '42',
+        request: async ({ url }) => {
+          if (url === `${API}/lists/42`) return response(200, { data: { type: 'List', id: '42', attributes: { name: 'Members' } } });
+          page++;
+          const household = { type: 'Household', id: 'h1', attributes: { name: 'Test household', member_count: 1 },
+            relationships: { people: { data: [{ type: 'Person', id: 'p1' }] } } };
+          if (issue === 'malformed roster') household.relationships.people.data = [{ type: 'Person' }];
+          if (issue === 'partial roster') household.attributes.member_count = 2;
+          if (issue === 'contradictory roster' && page === 2) household.relationships.people.data = [{ type: 'Person', id: 'other' }];
+          const related = person('p1');
+          if (issue === 'contradictory lifecycle') related.attributes.status = 'inactive';
+          return response(200, { data: [person('p1')], included: [household, related],
+            links: { next: page === 1 && issue === 'contradictory roster' ? `${API}/people?page=2` : null } });
+        } };
+      await assert.rejects(() => kind === 'list' ? fetchPlanningCenterSourceSnapshot(options) : fetchPlanningCenterAllSnapshot(options),
+        { code: 'SYNC_SOURCE_INCOMPLETE' });
+    });
+  }
+}
+
 test('enumerates visible Planning Center Lists by stable ID with defensive sorted DTO mapping', async () => {
   const calls = [];
   const sources = await listPlanningCenterSources({
@@ -174,13 +215,13 @@ for (const sourceKind of ['planning_center_list', 'all']) {
         included: [
           household('h1', ['p1', 'p2', 'p3']), household('h2', ['p1', 'p3']),
           household('h3', ['p2']), { type: 'Household', id: 'h4', attributes: {} },
-          contextWithoutMembership, person('p3', { firstName: 'Earlier context' }),
+          contextWithoutMembership, person('p3', { firstName: 'Earlier context', householdId: 'h2' }),
         ],
         links: { next: secondUrl },
       });
       if (url === secondUrl) return response(200, {
         data: [person('p3', { firstName: 'Source member', householdId: 'h2' })],
-        included: [person('p3', { firstName: 'Later context', householdId: 'h1' })],
+        included: [person('p3', { firstName: 'Later context', householdId: 'h2' })],
         links: { next: null },
       });
       throw new Error(`Unexpected provider call: ${url}`);

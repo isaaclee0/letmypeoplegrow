@@ -241,6 +241,7 @@ function addLifecycleAndManagedActions(context) {
     if (!externalPerson || !localPerson) continue;
     const state = normalizeState(externalPerson.state);
     const included = populationIds.has(externalPersonId);
+    const established = identity.bucket === 'linked' && input.automaticLinks?.get(externalPersonId) === individualId;
     const changes = managedFieldChanges(externalPerson, localPerson);
     if (identity.bucket !== 'linked') {
       plan.linkPeople.push({
@@ -266,13 +267,15 @@ function addLifecycleAndManagedActions(context) {
     if (canManage && isActive(localPerson) && isTerminalState(state)) {
       plan.archive.push({
         id: actionId('archive', externalPersonId, individualId), externalPersonId, individualId,
-        reason: `provider_state_${state}`,
+        reason: `provider_state_${state}`, ...(established ? { automatic: true } : {}),
       });
       continue;
     }
 
-    if (!included || isTerminalState(state)) continue;
-    if (canManage && !isActive(localPerson)) {
+    // Linked people outside all configured sources retain their local lifecycle
+    // and people type while their provider-managed details stay current.
+    if ((!included && !(established && state === 'active')) || isTerminalState(state)) continue;
+    if (included && canManage && !isActive(localPerson)) {
       plan.reactivate.push({
         id: actionId('reactivate', externalPersonId, individualId), externalPersonId, individualId,
         reason: 'provider_reappearance',
@@ -282,11 +285,11 @@ function addLifecycleAndManagedActions(context) {
     if (changes.length > 0 && canManage) {
       plan.updateManagedFields.push({
         id: actionId('updateManagedFields', externalPersonId, individualId), externalPersonId, individualId,
-        changes, reason: 'provider_managed_fields', reviewRequired: false,
+        changes, reason: 'provider_managed_fields', reviewRequired: false, ...(established ? { automatic: true } : {}),
       });
     }
 
-    if (!alignPeopleType) continue;
+    if (!included || !alignPeopleType) continue;
     const desired = desiredPeopleType(externalPerson, qualifyingBatchesFor(externalPersonId, batches, eligibleByBatch));
     const current = peopleType(localPerson);
     if (desired === current || !canManage) continue;
@@ -559,7 +562,11 @@ function computePeopleSyncPlan(input = {}) {
   addLifecycleAndManagedActions(context);
   addUnmatchedActions(context);
   addFamilyActions(context);
-  addReviewedFamilyActions(context);
+  const familyPopulation = new Set(populationIds);
+  for (const id of input.automaticLinks?.keys() || []) {
+    if (externalById.get(id)?.state === 'active' && isActive(localById.get(input.automaticLinks.get(id)))) familyPopulation.add(id);
+  }
+  addReviewedFamilyActions({ ...context, populationIds: familyPopulation });
   addGatheringActions(context);
   addReviewedGatheringRemovals(context);
 

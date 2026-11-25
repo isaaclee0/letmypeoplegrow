@@ -664,7 +664,7 @@ describe('PeopleSourceControl', () => {
     ));
   });
 
-  it('requires every planned Planning Center archive to be accepted before authority apply', async () => {
+  it('keeps individual archive decisions optional during Planning Center authority review', async () => {
     const planningCenterPlan: PeopleSyncPlan = {
       ...plan,
       provider: 'planning_center',
@@ -696,10 +696,10 @@ describe('PeopleSourceControl', () => {
     expect(await screen.findByRole('region', { name: 'Planning Center authority review' })).toBeInTheDocument();
 
     const apply = screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ });
-    fireEvent.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
-    expect(apply).toBeDisabled();
-
+    expect(apply).toBeEnabled();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' }));
+    expect(apply).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
     expect(apply).toBeEnabled();
   });
 

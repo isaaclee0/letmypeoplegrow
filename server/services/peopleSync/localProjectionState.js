@@ -42,7 +42,7 @@ async function listLocalFamilies(churchId) {
 async function listGatheringMemberships(churchId, provider) {
   const rows = await Database.queryForChurch(
     churchId,
-    `SELECT gl.gathering_type_id, gl.individual_id, gl.added_by_sync_batch_id, gl.added_by_pco_batch_id, g.name AS gathering_name,
+    `SELECT gl.gathering_type_id, gl.individual_id, gl.added_by, gl.added_by_sync_batch_id, gl.added_by_pco_batch_id, g.name AS gathering_name,
             EXISTS(SELECT 1 FROM people_sync_batches b
                     WHERE b.church_id = gl.church_id AND b.gathering_type_id = gl.gathering_type_id
                       AND b.provider <> ?) AS has_other_provider_sources
@@ -56,6 +56,7 @@ async function listGatheringMemberships(churchId, provider) {
     gatheringName: row.gathering_name,
     hasOtherProviderSources: !!row.has_other_provider_sources,
     individualId: Number(row.individual_id),
+    addedBy: row.added_by == null ? null : Number(row.added_by),
     addedByPcoBatchId: row.added_by_pco_batch_id == null ? null : Number(row.added_by_pco_batch_id),
     addedBySyncBatchId: row.added_by_sync_batch_id === null || row.added_by_sync_batch_id === undefined
       ? null : Number(row.added_by_sync_batch_id),

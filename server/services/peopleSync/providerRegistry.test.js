@@ -110,8 +110,10 @@ test('validateAdapter rejects own symbol properties', () => {
   );
 });
 
-test('the real PCO adapter registers its optional read-only reconciliation directory capability', () => {
+test('the real PCO adapter registers its optional read-only reconciliation and linked-person capabilities', () => {
   const { createPcoAdapter } = require('./pcoAdapter');
   assert.doesNotThrow(() => validateAdapter(createPcoAdapter()));
-  assert.throws(() => validateAdapter(adapter('planning_center', { fetchReconciliationSnapshot: true })), /fetchReconciliationSnapshot/);
+  for (const capability of ['fetchReconciliationSnapshot', 'fetchLinkedSnapshot']) {
+    assert.throws(() => validateAdapter(adapter('planning_center', { [capability]: true })), new RegExp(capability));
+  }
 });

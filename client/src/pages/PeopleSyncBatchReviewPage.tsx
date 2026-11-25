@@ -374,7 +374,6 @@ function PeopleSyncReviewWorkspace({ integrationWide }: { integrationWide: boole
           applying={applying || loading}
           interactionDisabled={loading || householdPreviewing}
           applyBlocked={householdNeedsPreview || householdPreviewing || householdRefreshRequired || householdContractUnsupported}
-          requireAllPlannedArchivesAccepted={adapter.provider === 'planning_center'}
           initialIdentityFilter={!integrationWide && visibleBatch?.unresolvedIdentityCount && visibleBatch.unresolvedIdentityCount > 0
             ? 'needs_attention'
             : 'all'}

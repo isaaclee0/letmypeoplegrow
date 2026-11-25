@@ -2,6 +2,7 @@
 
 const { buildFamilyName, buildSinglePersonFamilyName, hasConfirmedNoHousehold } = require('./familyName');
 const crypto = require('node:crypto');
+const { validHouseholdRoster } = require('./linkedPlanningCenter');
 
 const actionId = (...parts) => parts.map((part) => encodeURIComponent(String(part ?? ''))).join(':');
 const completeAuthority = (input) => input.authoritative === true &&
@@ -102,11 +103,20 @@ function addReviewedFamilyActions(context) {
   if (!completeAuthority(input)) return;
   const established = establishedIdentities(input, protectedIndividualIds, conflictIds);
   const localFamilies = new Map((input.localFamilies || []).map((family) => [family.id, family]));
+  const residentsByFamily = new Map();
+  for (const person of localById.values()) {
+    if (person.familyId == null) continue;
+    if (!residentsByFamily.has(person.familyId)) residentsByFamily.set(person.familyId, []);
+    residentsByFamily.get(person.familyId).push(person.id);
+  }
   const families = (input.externalFamilies || []).map((family) => ({
     ...family,
+    providerMemberIds: family.memberExternalIds,
     memberExternalIds: (family.memberExternalIds || []).map(String).filter((id) => !localHouseholdExternalIds.has(id)),
   })).sort((a, b) => String(a.id).localeCompare(String(b.id), 'en'));
   const familyLinks = input.familyLinks || [];
+  const ownership = familyId => ({ familyId, compatibilityId: localFamilies.get(familyId)?.planningCenterId || null,
+    externalIds: familyLinks.filter(link => link.familyId === familyId).map(link => String(link.externalFamilyId)).sort() });
   const householdPeople = new Map((input.householdPeople || []).map((person) => [String(person.id), person]));
   const personFor = (id) => externalById.get(id) || householdPeople.get(id);
   const linkedIdsByLocalFamily = new Map();
@@ -130,6 +140,33 @@ function addReviewedFamilyActions(context) {
     if (!householdMembership.has(String(id))) householdMembership.set(String(id), new Set());
     householdMembership.get(String(id)).add(String(family.id));
   }
+
+  // The Person relationship establishes membership. The inverse Household
+  // roster can veto an inference when it omits someone or claims them twice.
+  const rosterOwners = new Map();
+  for (const family of families) {
+    for (const id of family.householdMemberExternalIds || []) {
+      if (!rosterOwners.has(id)) rosterOwners.set(id, new Set());
+      rosterOwners.get(id).add(String(family.id));
+    }
+  }
+  function reciprocalRoster(family) {
+    const roster = family.householdMemberExternalIds;
+    if (family.incompleteRoster || !validHouseholdRoster(roster)) return false;
+    const listed = new Set(roster);
+    return (family.providerMemberIds || []).every(id => !input.householdVetoIds?.has(id) && listed.has(id)) &&
+      roster.every(id => rosterOwners.get(id)?.size === 1 && personFor(id)?.householdIds?.length === 1 &&
+        String(personFor(id).householdIds[0]) === String(family.id));
+  }
+  const familyMembers = (family) => [...new Set([...(family.providerMemberIds || []), ...(family.householdMemberExternalIds || [])].map(String))];
+  const unchangedIdentity = id => established.has(id) && input.automaticLinks?.get(id) === established.get(id);
+  const automaticallyPlaceable = (id, familyId) => {
+    const person = personFor(id);
+    return unchangedIdentity(id) && !localHouseholdExternalIds.has(id) && !input.savedHouseholdExternalIds?.has(id) &&
+      person?.state === 'active' && Array.isArray(person.householdIds) && person.householdIds.length === 1 &&
+      String(person.householdIds[0]) === familyId && String(person.familyId) === familyId &&
+      householdMembership.get(id)?.size === 1;
+  };
 
   for (const family of families) {
     const externalFamilyId = String(family.id);
@@ -157,7 +194,7 @@ function addReviewedFamilyActions(context) {
         (ids.length === 1 && !memberships.has(String(ids[0]))) ||
         (person.familyId !== undefined && String(person.familyId ?? '') !== String(ids[0] ?? ''));
     });
-    const conflictingOwnership = linked.length > 1 || (linked.length === 1 && (!linkedFamily || familyLinks.some((link) =>
+    const conflictingFamilyLinks = linked.length > 1 || (linked.length === 1 && (!linkedFamily || familyLinks.some((link) =>
       link.familyId === linkedFamily.id && String(link.externalFamilyId) !== externalFamilyId))) ||
       (input.provider === 'planning_center' && linkedFamily?.planningCenterId && String(linkedFamily.planningCenterId) !== externalFamilyId);
     // Reusing an unlinked local family that contains unrelated people would
@@ -165,28 +202,50 @@ function addReviewedFamilyActions(context) {
     // family instead, leaving all unrelated people and old family rows alone.
     const soleFamily = candidates.length === 1 ? localFamilies.get(candidates[0]) : null;
     const memberIndividualIds = new Set(members.map((id) => established.get(id)));
-    const soleFamilyIsExact = soleFamily && [...localById.values()].every((person) =>
-      person.familyId !== soleFamily.id || memberIndividualIds.has(person.id));
+    const soleFamilyIsExact = soleFamily && (residentsByFamily.get(soleFamily.id) || []).every(id => memberIndividualIds.has(id));
     const soleFamilyOwnedElsewhere = soleFamily && (familyLinks.some((link) =>
       link.familyId === soleFamily.id && String(link.externalFamilyId) !== externalFamilyId) ||
       (input.provider === 'planning_center' && soleFamily.planningCenterId && String(soleFamily.planningCenterId) !== externalFamilyId));
     const destinationFamily = linkedFamily || (soleFamilyIsExact && !soleFamilyOwnedElsewhere ? soleFamily : null);
+    const conflictingOwnership = conflictingFamilyLinks || (input.automaticLinks &&
+      [...localFamilies.values()].some(local => local.planningCenterId === externalFamilyId && local.id !== destinationFamily?.id));
     const differentMembers = destinationFamily ? moves.filter((move) => move.fromFamilyId !== destinationFamily.id) : moves;
     const familiesBeingLeft = new Set(differentMembers.map((move) => move.fromFamilyId).filter((id) => id != null));
     const separatesExcludedRelative = members.some((id) => !populationIds.has(id) &&
       familiesBeingLeft.has(localById.get(established.get(id))?.familyId));
+    const rosterAgrees = !input.automaticLinks || reciprocalRoster(family);
+    const allMembers = familyMembers(family);
+    const residentPairs = destinationFamily ? allMembers.filter(id => automaticallyPlaceable(id, externalFamilyId) &&
+      localById.get(established.get(id))?.familyId === destinationFamily.id)
+      .sort().map(id => ({ externalPersonId: id, individualId: established.get(id) })) : [];
+    const verifiedResidents = destinationFamily && residentPairs.length === (residentsByFamily.get(destinationFamily.id) || []).length;
+    const canInferLink = !input.automaticLinks || linkedFamily || verifiedResidents;
     const previousConflict = plan.familyConflicts.find((action) => action.externalFamilyId === externalFamilyId);
     if (destinationFamily && !differentMembers.length && unresolved.every((id) => newPersonFamily.get(id) === externalFamilyId) &&
-        !unknownHousehold && !conflictingHousehold && !conflictingOwnership) {
+        canInferLink && rosterAgrees && !unknownHousehold && !conflictingHousehold && !conflictingOwnership) {
       // The established people already justify this family link. A new
       // person's signed creation can use it without moving any local person.
       plan.familyConflicts = plan.familyConflicts.filter((entry) => entry.externalFamilyId !== externalFamilyId);
+      const familyName = String(family.name || '').trim();
+      if (input.automaticLinks && linkedFamily && familyName && familyName !== linkedFamily.familyName &&
+          !family.ambiguousName && verifiedResidents && allMembers.length && residentPairs.length === allMembers.length) {
+        plan.renameFamily.push({
+          id: actionId('renameFamily', externalFamilyId, linkedFamily.id), externalFamilyId,
+          familyId: linkedFamily.id, currentFamilyName: linkedFamily.familyName, familyName,
+          members: residentPairs,
+          reason: 'provider_household_name', automatic: true, familyOwnership: [ownership(linkedFamily.id)],
+        });
+      }
       if (!linked.length) {
         plan.linkFamilies = plan.linkFamilies.filter((entry) => entry.externalFamilyId !== externalFamilyId);
         plan.linkFamilies.push({
           id: actionId('linkFamilies', externalFamilyId, destinationFamily.id),
           externalFamilyId, familyId: destinationFamily.id,
           memberExternalIds: inScopeIds, reason: 'household_member_family',
+          ...(input.automaticLinks ? {
+            automatic: true, familyOwnership: [ownership(destinationFamily.id)],
+            members: residentPairs,
+          } : {}),
         });
       }
       continue;
@@ -194,7 +253,7 @@ function addReviewedFamilyActions(context) {
 
     let reason = previousConflict?.reason || 'household_membership_mismatch';
     if (unresolved.length) reason = 'unresolved_household_members';
-    else if (unknownHousehold) reason = 'unknown_household_membership';
+    else if (unknownHousehold || !rosterAgrees) reason = 'unknown_household_membership';
     else if (conflictingHousehold) reason = 'multiple_provider_households';
     else if (conflictingOwnership) reason = 'conflicting_family_ownership';
     else if (separatesExcludedRelative) reason = 'household_member_outside_source';
@@ -207,7 +266,7 @@ function addReviewedFamilyActions(context) {
       unresolvedExternalPersonIds: unresolved,
       reason,
     };
-    if (!unresolved.length && !unknownHousehold && !conflictingHousehold && !conflictingOwnership &&
+    if (rosterAgrees && !unresolved.length && !unknownHousehold && !conflictingHousehold && !conflictingOwnership &&
         !separatesExcludedRelative && differentMembers.length) {
       const familyName = String(family.name || family.familyName || buildFamilyName(inScopeIds.map((id) => externalById.get(id))) || '').trim();
       if (destinationFamily || familyName) {
@@ -220,6 +279,20 @@ function addReviewedFamilyActions(context) {
         };
       }
     }
+    if (action.resolution && input.automaticLinks && familyMembers(family).some(id =>
+      (personFor(id)?.householdIds || []).length > 1)) {
+      delete action.resolution;
+      action.reason = 'multiple_provider_households';
+    }
+    const confirmedMembers = familyMembers(family);
+    const expectedResidents = new Set(confirmedMembers.map(id => established.get(id)));
+    const destinationIsClear = !destinationFamily || (residentsByFamily.get(destinationFamily.id) || []).every(id => expectedResidents.has(id));
+    if (action.resolution && input.automaticLinks && destinationIsClear && !family.ambiguousName &&
+        confirmedMembers.every(id => automaticallyPlaceable(id, externalFamilyId))) {
+      action.automatic = true;
+      action.members = familyMembers(family).sort().map(id => ({ externalPersonId: id, individualId: established.get(id) }));
+      action.familyOwnership = [...new Set([...candidates, ...(destinationFamily ? [destinationFamily.id] : [])])].map(ownership);
+    }
     plan.familyConflicts = plan.familyConflicts.filter((entry) => entry.externalFamilyId !== externalFamilyId);
     if (!action.resolution || !honourKeep(input, plan, 'familyConflicts', action)) plan.familyConflicts.push(action);
     plan.linkFamilies = plan.linkFamilies.filter((entry) => entry.externalFamilyId !== externalFamilyId);
@@ -230,7 +303,7 @@ function addReviewedFamilyActions(context) {
     if (!populationIds.has(externalPersonId) || localHouseholdExternalIds.has(externalPersonId)) continue;
     const person = externalById.get(externalPersonId);
     const local = localById.get(individualId);
-    if (!local || !hasConfirmedNoHousehold(person, input.externalFamilies)) continue;
+    if (!local || input.householdVetoIds?.has(externalPersonId) || !hasConfirmedNoHousehold(person, input.externalFamilies)) continue;
     const singlePerson = input.provider === 'planning_center';
     if (!singlePerson && local.familyId == null) continue;
     const currentFamily = localFamilies.get(local.familyId);
@@ -250,7 +323,27 @@ function addReviewedFamilyActions(context) {
         { externalPersonId, individualId, fromFamilyId: local.familyId ?? null },
       ] },
     };
+    if (unchangedIdentity(externalPersonId) && !input.savedHouseholdExternalIds?.has(externalPersonId)) {
+      detach.automatic = true;
+      detach.familyOwnership = local.familyId == null ? [] : [ownership(local.familyId)];
+    }
     if (!honourKeep(input, plan, 'familyConflicts', detach)) plan.familyConflicts.push(detach);
+  }
+
+  if (input.automaticLinks) for (const [id, individualId] of established) {
+    if (!populationIds.has(id) || !unchangedIdentity(id) || input.savedHouseholdExternalIds?.has(id)) continue;
+    const person = personFor(id);
+    const ids = person?.householdIds;
+    const reason = Array.isArray(ids) && ids.length > 1 ? 'multiple_provider_households'
+      : input.householdVetoIds?.has(id) || !Array.isArray(ids) || (ids.length === 1 && !householdMembership.get(id)?.has(String(ids[0]))) ||
+        (ids.length === 0 && !hasConfirmedNoHousehold(person, input.externalFamilies)) ? 'unknown_household_membership' : null;
+    if (reason && !plan.familyConflicts.some(action => action.memberExternalIds?.includes(id))) {
+      const familyId = localById.get(individualId)?.familyId;
+      plan.familyConflicts.push({
+        id: actionId('familyConflicts', 'person', id, reason), reason, externalFamilyId: null,
+        memberExternalIds: [id], candidateFamilyIds: familyId == null ? [] : [familyId], unresolvedExternalPersonIds: [id],
+      });
+    }
   }
 
   if (input.provider === 'planning_center') for (const action of plan.addPeople) {
@@ -296,6 +389,11 @@ function addReviewedGatheringRemovals(context) {
       gatheringName: row.gatheringName || null,
       sourceNames: [...new Set(batches.map((batch) => readSources.get(batch.id).name || batch.name).filter(Boolean))].sort(),
       reviewRequired: true, reason: 'legacy_roster_not_in_source',
+      // Keep the creator as a concurrency check, not a source-of-truth
+      // override: linked people follow the complete provider source union.
+      ...(Object.hasOwn(row, 'addedBy') ? { addedBy: row.addedBy } : {}),
+      ...(input.automaticLinks?.get(externalPersonId) === row.individualId &&
+        batches.every(batch => batch.gatheringAutoRemoveEnabled === true) ? { automatic: true } : {}),
     };
     if (!honourKeep(input, plan, 'removeFromGathering', removal)) plan.removeFromGathering.push(removal);
   }

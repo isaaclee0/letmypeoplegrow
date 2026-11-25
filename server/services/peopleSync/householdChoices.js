@@ -95,7 +95,7 @@ function projectHouseholdChoices(acquired, rawEdits = {}) {
   const eligibleSets = acquired.eligibleByBatch instanceof Map ? acquired.eligibleByBatch.values() : Object.values(acquired.eligibleByBatch || {});
   for (const ids of eligibleSets) for (const id of ids) sourceIds.add(String(id));
   const directory = new Map();
-  for (const list of [acquired.snapshot.people, acquired.ineligibleMemberPeople, acquired.contextPeople, acquired.matchingPeople]) {
+  for (const list of [acquired.snapshot.people, acquired.linkedPeople, acquired.ineligibleMemberPeople, acquired.contextPeople, acquired.matchingPeople]) {
     for (const person of list || []) if (!directory.has(String(person.id))) directory.set(String(person.id), person);
   }
   const localHouseholdExternalIds = new Set(preferences.keys());
@@ -129,7 +129,8 @@ function projectHouseholdChoices(acquired, rawEdits = {}) {
 
   const participantsByGroup = new Map();
   const newGroupsByMembership = new Map();
-  for (const id of [...sourceIds].sort()) {
+  const placementIds = new Set([...sourceIds, ...(acquired.linkedPeople || []).map(person => person.id)]);
+  for (const id of [...placementIds].sort()) {
     const saved = preferences.get(id);
     if (saved) {
       if (!participantsByGroup.has(saved.groupId)) participantsByGroup.set(saved.groupId, []);

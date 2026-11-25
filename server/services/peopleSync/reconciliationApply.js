@@ -4,6 +4,7 @@ const linkRepository = require('./linkRepository');
 const authority = require('./authority');
 const reconciliationKeepRepository = require('./reconciliationKeepRepository');
 const { reconciliationKeepFor } = require('./reconciliation');
+const { uniquePlanningCenterLinks } = require('./linkedPlanningCenter');
 
 function stale(message) {
   const error = new Error(`${message} Refresh the signed review before applying.`);
@@ -16,9 +17,64 @@ function selectedFamilyResolutions(plan, accepted) {
   return (plan.familyConflicts || []).filter((action) => accepted.acceptedFamilyResolutionIds.has(action.id));
 }
 
-async function assertReconciliationAuthority(conn, { churchId, provider, plan, accepted, reviewedApply, activateAuthority }) {
+// These flags come exclusively from the freshly rebuilt server plan. Manual
+// selections still need the signed review path even in a mixed plan.
+async function acceptAutomaticActions(conn, { churchId, provider, plan, accepted, unattended, reviewedApply, activateAuthority }) {
+  const byBucket = [
+    ['archive', 'acceptedArchiveIndividualIds'], ['familyConflicts', 'acceptedFamilyResolutionIds'],
+    ['removeFromGathering', 'acceptedGatheringRemovalIds'], ['renameFamily', 'acceptedFamilyRenameIds'],
+    ['updateManagedFields', null], ['linkFamilies', null],
+  ];
+  if (unattended && byBucket.some(([, key]) => key && accepted[key].size)) throw stale('Manual selections require a signed review.');
+  const actions = byBucket.flatMap(([bucket, key]) => (plan[bucket] || [])
+    .filter(action => action.automatic === true).map(action => ({ bucket, key, action })));
+  if (!actions.length) return false;
+  if ((!reviewedApply && !unattended) || provider !== 'planning_center' || !plan.authoritative ||
+      plan.operationKind === 'people_import' || plan.snapshot?.mode !== 'full') throw stale('Automatic changes require an authoritative Planning Center sync.');
+  const state = await authority.getAuthorityWithConnection(conn, churchId);
+  if (state.active !== provider && !(activateAuthority && reviewedApply && state.pending === provider)) throw stale('The people-sync authority changed.');
+  const locals = await conn.query('SELECT id, planning_center_id AS planningCenterId FROM individuals WHERE church_id = ?', [churchId]);
+  const links = await conn.query('SELECT external_person_id AS externalPersonId, individual_id AS individualId FROM external_person_links WHERE church_id = ? AND provider = ?', [churchId, provider]);
+  const pairs = uniquePlanningCenterLinks({ churchId, individuals: locals, personLinks: links });
+  for (const { bucket, key, action } of actions) {
+    const members = action.members || action.resolution?.moves || [action];
+    if (!members.length || members.some(member => !pairs.has(member.externalPersonId) || pairs.get(member.externalPersonId) !== member.individualId)) {
+      throw stale('An established Planning Center person link changed.');
+    }
+    if (bucket === 'archive' && !['provider_state_archived','provider_state_deceased'].includes(action.reason)) throw stale('Automatic archive requires a terminal provider status.');
+    if (accepted.keptReconciliationIds.has(action.id)) throw stale('An automatic change conflicts with a keep selection.');
+    if (action.externalFamilyId) {
+      const owners = await conn.query('SELECT id FROM families WHERE church_id = ? AND planning_center_id = ?', [churchId, action.externalFamilyId]);
+      const destinationId = action.familyId ?? action.resolution?.destination?.familyId;
+      if (owners.some(owner => owner.id !== destinationId)) throw stale('The provider household has a conflicting local owner.');
+      if (bucket === 'linkFamilies') {
+        const existing = await conn.query('SELECT family_id FROM external_family_links WHERE church_id = ? AND provider = ? AND external_family_id = ?', [churchId, provider, action.externalFamilyId]);
+        const residents = await conn.query('SELECT id FROM individuals WHERE church_id = ? AND family_id = ?', [churchId, destinationId]);
+        const expectedResidents = new Set(members.map(member => member.individualId));
+        if (existing.length || residents.length !== expectedResidents.size || residents.some(person => !expectedResidents.has(person.id))) {
+          throw stale('The residents or provider link of the matched family changed.');
+        }
+      }
+    }
+    for (const ownership of action.familyOwnership || []) {
+      const [family] = await conn.query('SELECT planning_center_id FROM families WHERE church_id = ? AND id = ?', [churchId, ownership.familyId]);
+      const owners = await conn.query('SELECT external_family_id FROM external_family_links WHERE church_id = ? AND provider = ? AND family_id = ?', [churchId, provider, ownership.familyId]);
+      if (!family || (family.planning_center_id || null) !== ownership.compatibilityId ||
+          JSON.stringify(owners.map(row => row.external_family_id).sort()) !== JSON.stringify(ownership.externalIds)) throw stale('The local household ownership changed.');
+    }
+    const keep = reconciliationKeepFor(bucket, action);
+    if (keep) {
+      const existing = await conn.query('SELECT fingerprint FROM people_sync_reconciliation_keeps WHERE church_id = ? AND provider = ? AND kind = ? AND subject_key = ?', [churchId, provider, keep.kind, keep.subjectKey]);
+      if (existing.some(row => row.fingerprint === keep.fingerprint)) throw stale('An administrator kept this local arrangement.');
+    }
+    if (key) accepted[key].add(bucket === 'archive' ? action.individualId : action.id);
+  }
+  return true;
+}
+
+async function assertReconciliationAuthority(conn, { churchId, provider, plan, accepted, reviewedApply, activateAuthority, unattended }) {
   if (!accepted.acceptedFamilyResolutionIds.size && !accepted.acceptedGatheringRemovalIds.size) return;
-  if (!reviewedApply || !plan.authoritative || plan.snapshot?.mode !== 'full' || plan.operationKind === 'people_import') {
+  if ((!reviewedApply && !unattended) || !plan.authoritative || plan.snapshot?.mode !== 'full' || plan.operationKind === 'people_import') {
     throw stale('Reconciliation requires an authoritative, complete signed review.');
   }
   const state = await authority.getAuthorityWithConnection(conn, churchId);
@@ -117,17 +173,19 @@ async function removeReviewedLegacyMembership(conn, { churchId, provider, action
   );
   if (links.length !== 1 || links[0].individual_id !== action.individualId) throw stale('The attendance-list member identity changed.');
   const sources = await conn.query(
-    `SELECT id, enabled, provider FROM people_sync_batches WHERE church_id = ? AND gathering_type_id = ? ORDER BY id`,
+    `SELECT id, enabled, provider, gathering_auto_remove_enabled FROM people_sync_batches WHERE church_id = ? AND gathering_type_id = ? ORDER BY id`,
     [churchId, action.gatheringTypeId]
   );
-  if (!sources.length || sources.some((source) => !source.enabled || source.provider !== provider) ||
+  if (!sources.length || sources.some((source) => !source.enabled || source.provider !== provider ||
+      (action.automatic && !source.gathering_auto_remove_enabled)) ||
       JSON.stringify(sources.map(({ id }) => id)) !== JSON.stringify(action.sourceBatchIds)) {
     throw stale('The attendance-list sync sources changed.');
   }
   const deleted = await conn.query(
     `DELETE FROM gathering_lists WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ?
-       AND added_by_sync_batch_id IS NULL AND added_by_pco_batch_id IS NULL`,
-    [churchId, action.gatheringTypeId, action.individualId]
+       AND added_by_sync_batch_id IS NULL AND added_by_pco_batch_id IS NULL
+       AND (? = 0 OR added_by IS ?)`,
+    [churchId, action.gatheringTypeId, action.individualId, action.automatic || Object.hasOwn(action, 'addedBy') ? 1 : 0, action.addedBy ?? null]
   );
   if (deleted.affectedRows !== 1) throw stale('The attendance-list membership or its ownership changed.');
   return deleted;
@@ -164,4 +222,4 @@ async function persistReconciliationKeeps(conn, { churchId, provider, plan, acce
   }
 }
 
-module.exports = { assertReconciliationAuthority, applyReviewedFamilies, removeReviewedLegacyMembership, persistReconciliationKeeps };
+module.exports = { acceptAutomaticActions, assertReconciliationAuthority, applyReviewedFamilies, removeReviewedLegacyMembership, persistReconciliationKeeps };
