@@ -451,6 +451,9 @@ export interface Individual {
 }
 
 export interface Visitor {
+  firstName?: string;
+  lastName?: string;
+  currentPeopleType?: 'regular' | 'local_visitor' | 'traveller_visitor';
   id?: number;
   individualId?: number;
   name: string;
@@ -471,6 +474,21 @@ export interface Visitor {
 export interface AttendanceData {
   attendanceList: Individual[];
   visitors: Visitor[];
+}
+
+export interface VisitorDetailsInput {
+  revision?: string;
+  familyName: string;
+  notes: string;
+  peopleType: 'local_visitor' | 'traveller_visitor';
+  people: Array<{ id?: number; firstName: string; lastName: string; isChild: boolean }>;
+}
+
+export interface VisitorDetails extends VisitorDetailsInput {
+  revision: string;
+  familyEditable: boolean;
+  notesEditable: boolean;
+  people: Array<VisitorDetailsInput['people'][number] & { id: number; locked?: boolean }>;
 }
 
 export interface AddVisitorData {
@@ -693,9 +711,15 @@ export const attendanceAPI = {
   addVisitor: (gatheringTypeId: number, date: string, visitor: AddVisitorData) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitors`, visitor),
     
-  updateVisitor: (gatheringTypeId: number, date: string, visitorId: number, visitor: AddVisitorData) => 
-    api.put(`/attendance/${gatheringTypeId}/${date}/visitors/${visitorId}`, visitor),
-    
+  getVisitorDetails: (gatheringId: number, date: string, visitorId: number) =>
+    api.get<VisitorDetails>(`/attendance/${gatheringId}/${date}/visitors/${visitorId}`),
+
+  updateVisitorDetails: (gatheringId: number, date: string, visitorId: number, details: VisitorDetailsInput) =>
+    api.put<VisitorDetails>(`/attendance/${gatheringId}/${date}/visitors/${visitorId}`, details),
+
+  createVisitorDetails: (gatheringId: number, date: string, details: VisitorDetailsInput) =>
+    api.post<VisitorDetails>(`/attendance/${gatheringId}/${date}/visitor-details`, details),
+
   deleteVisitor: (gatheringTypeId: number, date: string, visitorId: number, deleteFamily: boolean = false) => 
     api.delete(`/attendance/${gatheringTypeId}/${date}/visitors/${visitorId}${deleteFamily ? '?deleteFamily=true' : ''}`),
     

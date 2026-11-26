@@ -40,11 +40,11 @@ export interface AttendanceUpdateAck {
 }
 
 export interface VisitorUpdate {
-  type: 'visitors' | 'visitor_family_added' | 'visitor_family_updated';
+  type: 'visitors' | 'visitor_family_added' | 'visitor_family_updated' | 'visitor_details_changed';
   gatheringId: number;
   date: string;
   family?: { id?: number; name?: string };
-  visitors: any[];
+  visitors?: any[];
   timestamp: string;
 }
 

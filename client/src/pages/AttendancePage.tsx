@@ -11,11 +11,11 @@ import {
   attendanceAPI,
   authAPI,
   familiesAPI,
-  individualsAPI,
   GatheringType,
   Individual,
   Visitor,
 } from '../services/api';
+import AddVisitorModal from '../components/attendance/AddVisitorModal';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
 import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
@@ -58,19 +58,9 @@ import {
   type BadgeFilterOption,
 } from '../utils/badgeFilters';
 
-interface PersonForm {
-  firstName: string;
-  lastName: string;
-  fillLastNameFromAbove: boolean;
-  isChild?: boolean;
-}
-
-interface VisitorFormState {
-  personType: 'local_visitor' | 'traveller_visitor';
-  notes: string;
-  persons: PersonForm[];
-  autoFillSurname: boolean;
-  familyName: string;
+function isEditableVisitor(visitor: Visitor) {
+  return !!visitor.id && (visitor.visitorType === 'potential_regular' || visitor.visitorType === 'temporary_other')
+    && visitor.currentPeopleType !== 'regular';
 }
 
 export async function recordAttendanceViaRest(
@@ -124,6 +114,8 @@ const AttendancePage: React.FC = () => {
   
   // Trigger for refreshing regular attendance data (similar to how visitors work)
   const [attendanceRefreshTrigger, setAttendanceRefreshTrigger] = useState(0);
+  const [visitorDetailsRefresh, setVisitorDetailsRefresh] = useState(0);
+  const loadedRosterRef = useRef<{ gatheringId: number; date: string; attendanceRefresh: number; detailsRefresh: number; needsCache: boolean } | null>(null);
 
   // Time sync for conflict detection
   const [serverTimeOffset, setServerTimeOffset] = useState(0); // Difference between server and client time
@@ -187,8 +179,9 @@ const AttendancePage: React.FC = () => {
       setPresentById({});
       presentByIdRef.current = {};
       
-      // Also clear visitor attendance for consistency
+      setVisitorEditor(null);
       setVisitorAttendance({});
+      loadedRosterRef.current = null;
     }
     
     // Update refs for next comparison
@@ -295,18 +288,10 @@ const AttendancePage: React.FC = () => {
   const [selectedBadgeKeys, setSelectedBadgeKeys] = useState<string[]>([]);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
-  const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
-  const [isEditingVisitor, setIsEditingVisitor] = useState(false);
-  const [editingVisitorData, setEditingVisitorData] = useState<{
-    visitorId: number;
-    familyId: number;
-    familyName: string;
-    selectedMemberIndex?: number;
-  } | null>(null);
+  const [visitorEditor, setVisitorEditor] = useState<number | 'add' | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
   
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
-  const [isSubmittingVisitor, setIsSubmittingVisitor] = useState(false);
   const [activeStatBubble, setActiveStatBubble] = useState<string | null>(null);
   
   // WebSocket integration with environment-based configuration
@@ -518,19 +503,6 @@ const AttendancePage: React.FC = () => {
   useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
   useEffect(() => { visitorsRef.current = visitors; }, [visitors]);
   useEffect(() => { lastUserModificationRef.current = lastUserModification; }, [lastUserModification]);
-
-  const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
-    personType: 'local_visitor',
-    notes: '',
-    persons: [{
-      firstName: '',
-      lastName: '',
-      fillLastNameFromAbove: false,
-      isChild: false
-    }],
-    autoFillSurname: false,
-    familyName: ''
-  });
 
   // Handle click outside to close date picker and gathering dropdown
   useEffect(() => {
@@ -1003,11 +975,15 @@ const AttendancePage: React.FC = () => {
       if (!validDates.includes(selectedDate)) {
         return;
       }
+
+      const lastLoad = loadedRosterRef.current;
+      const detailsOnly = lastLoad?.gatheringId === selectedGathering.id && lastLoad.date === selectedDate
+        && lastLoad.attendanceRefresh === attendanceRefreshTrigger && lastLoad.detailsRefresh !== visitorDetailsRefresh;
       
       // STEP 1: Load from cache immediately for instant UI (if available)
       let loadedFromCache = false;
       try {
-        const cachedData = localStorage.getItem('attendance_cached_data');
+        const cachedData = !detailsOnly && localStorage.getItem('attendance_cached_data');
         if (cachedData) {
           const parsed = JSON.parse(cachedData);
           const cacheAge = Date.now() - (parsed.timestamp || 0);
@@ -1055,13 +1031,14 @@ const AttendancePage: React.FC = () => {
       // WebSocket handles real-time updates after the page is loaded.
       try {
         // Only show loading spinner if we didn't load from cache
-        if (!loadedFromCache) {
+        if (!loadedFromCache && !detailsOnly) {
           setIsLoading(true);
         }
 
         const apiResponse = await attendanceAPI.getFull(selectedGathering.id, selectedDate);
         const response: any = apiResponse.data;
 
+        if (isCancelled) return;
         if (response.recentVisitors) {
           setRecentVisitors(response.recentVisitors);
           setAllRecentVisitorsPool(response.recentVisitors);
@@ -1071,12 +1048,7 @@ const AttendancePage: React.FC = () => {
           setIsLoadingAllVisitors(false);
         }
 
-        // CRITICAL: Check if this request is still relevant before updating state
-        // This prevents race conditions when user changes date quickly
-        if (isCancelled) {
-          logger.log('🚫 Ignoring stale response - date/gathering changed during fetch');
-          return;
-        }
+        loadedRosterRef.current = { gatheringId: selectedGathering.id, date: selectedDate, attendanceRefresh: attendanceRefreshTrigger, detailsRefresh: visitorDetailsRefresh, needsCache: true };
         
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
@@ -1118,7 +1090,15 @@ const AttendancePage: React.FC = () => {
               initialVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
             }
           });
-          setVisitorAttendance(initialVisitorAttendance);
+          // A details update can introduce visitors. Only those new rows need a mark.
+          setVisitorAttendance(previous => detailsOnly
+            ? Object.fromEntries(Object.entries(initialVisitorAttendance).map(([id, present]) => [id, previous[Number(id)] ?? present]))
+            : initialVisitorAttendance);
+        }
+
+        if (detailsOnly) {
+          setError('');
+          return;
         }
         
         // Initialize presentById from server data directly
@@ -1134,25 +1114,6 @@ const AttendancePage: React.FC = () => {
         
         setPresentById(serverPresentById);
         presentByIdRef.current = serverPresentById;
-        
-        // Cache the fresh attendance data
-        const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
-          const finalPresent = serverPresentById[person.id] ?? person.present;
-          return { ...person, present: finalPresent };
-        });
-        
-        const cacheData = {
-          gatheringId: currentGatheringId,
-          date: currentDate,
-          attendanceList: attendanceListForCache,
-          visitors: response.visitors || [],
-          medicalNotesIndicator: response.medicalNotesIndicator || null,
-          timestamp: Date.now(),
-          hasPendingChanges: pendingChanges.some(change => 
-            change.gatheringId === currentGatheringId && change.date === currentDate
-          )
-        };
-        localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
         setShowBackgroundCheckStatus(!!response.showBackgroundCheckStatus);
 
@@ -1172,7 +1133,7 @@ const AttendancePage: React.FC = () => {
         console.error('Failed to load fresh attendance data:', err);
         
         // If we already loaded from cache, just show a subtle error
-        if (loadedFromCache) {
+        if (loadedFromCache || detailsOnly) {
           logger.warn('⚠️ Could not refresh from server, using cached data');
           // Don't set error - user already has working UI from cache
         } else {
@@ -1216,7 +1177,7 @@ const AttendancePage: React.FC = () => {
       isCancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGathering, selectedDate, attendanceRefreshTrigger, validDates]);
+  }, [selectedGathering, selectedDate, attendanceRefreshTrigger, visitorDetailsRefresh, validDates]);
 
   // Refresh data when WebSocket reconnects (device woke up, network restored, etc.)
   useEffect(() => {
@@ -1540,6 +1501,13 @@ const AttendancePage: React.FC = () => {
         // Received attendance update via WebSocket
         // Handle standard attendance updates
         if (data.records) {
+          setVisitorAttendance(previous => {
+            const updated = { ...previous };
+            for (const record of data.records) {
+              updated[record.individualId] = Boolean(record.present);
+            }
+            return updated;
+          });
           // Update attendance records and presentById state (like visitor system)
           setAttendanceList(prev => prev.map(person => {
             const matchingRecord = data.records.find((record: any) => record.individualId === person.id);
@@ -1581,8 +1549,8 @@ const AttendancePage: React.FC = () => {
     const handleVisitorUpdated = (data: any) => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        logger.log('🔌 [WEBSOCKET] Received visitor update:', data);
-        setVisitors(data.visitors);
+        if (data.type === 'visitor_details_changed') setVisitorDetailsRefresh(value => value + 1);
+        else if (data.visitors) setVisitors(data.visitors);
       }
     };
 
@@ -1622,324 +1590,6 @@ const AttendancePage: React.FC = () => {
 
     return () => clearInterval(cleanupInterval);
   }, []);
-
-  // Handle add visitor
-  const handleAddVisitor = async () => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    setVisitorForm({
-      personType: 'local_visitor',
-      notes: '',
-      persons: [{
-        firstName: '',
-        lastName: '',
-        fillLastNameFromAbove: false,
-        isChild: false
-      }],
-      autoFillSurname: false,
-      familyName: ''
-    });
-    setIsEditingVisitor(false);
-    setEditingVisitorData(null);
-    setShowAddVisitorModal(true);
-  };
-
-  // Handle edit visitor
-  const handleEditVisitor = (visitor: any, memberIndex?: number) => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    
-    // Find the family group this visitor belongs to
-    const familyGroup = filteredGroupedVisitors.find((group: any) => 
-      group.members.some((member: any) => member.id === visitor.id)
-    );
-    
-    if (!familyGroup) {
-      setError('Could not find visitor family group');
-      return;
-    }
-
-    // Convert visitor data to form format, preserving isChild from DB
-    const persons = familyGroup.members.map((member: any) => {
-      const nameParts = member.name.trim().split(' ');
-      const firstName = nameParts[0] || '';
-      const lastName = nameParts.slice(1).join(' ') || '';
-      
-      return {
-        firstName,
-        lastName,
-        fillLastNameFromAbove: false,
-        isChild: Boolean(member.isChild)
-      };
-    });
-
-    // Determine person type from visitor type
-    const personType = visitor.visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor';
-
-    setVisitorForm({
-      personType,
-      notes: familyGroup.members[0]?.notes || '',
-      persons,
-      autoFillSurname: false,
-      familyName: familyGroup.familyName || ''
-    });
-
-    setIsEditingVisitor(true);
-    setEditingVisitorData({
-      visitorId: visitor.id,
-      familyId: visitor.familyId || familyGroup.members[0]?.familyId || 0,
-      familyName: familyGroup.familyName || '',
-      selectedMemberIndex: memberIndex
-    });
-    setShowAddVisitorModal(true);
-  };
-
-  // Add functions to manage persons array
-  const addPerson = () => {
-    setVisitorForm(prev => {
-      const newPerson: PersonForm = { 
-        firstName: '', 
-        lastName: '', 
-        fillLastNameFromAbove: true,
-        isChild: false
-      };
-      
-      // Auto-fill surname from first person if they have one
-      if (prev.persons.length > 0) {
-        const firstPerson = prev.persons[0];
-        if (firstPerson.lastName && firstPerson.lastName.trim()) {
-          newPerson.lastName = firstPerson.lastName;
-        }
-      }
-      
-      return {
-        ...prev,
-        persons: [...prev.persons, newPerson]
-      };
-    });
-  };
-
-  const removePerson = (index: number) => {
-    setVisitorForm(prev => ({
-      ...prev,
-      persons: prev.persons.filter((_, i) => i !== index)
-    }));
-  };
-
-  const updatePerson = (index: number, updates: Partial<PersonForm>) => {
-    setVisitorForm(prev => {
-      const newPersons = [...prev.persons];
-      newPersons[index] = { ...newPersons[index], ...updates };
-      
-      // Handle fill from above checkbox
-      if (updates.fillLastNameFromAbove !== undefined) {
-        if (updates.fillLastNameFromAbove && index > 0) {
-          // Fill from first person's last name (only if they have one)
-          const firstPerson = newPersons[0];
-          if (firstPerson.lastName && firstPerson.lastName.trim()) {
-            newPersons[index].lastName = firstPerson.lastName;
-          }
-        }
-        // If unchecking fill from above, don't clear the name (let user decide)
-      }
-      
-      // If updating first person's last name, update all others who have fillLastNameFromAbove checked
-      if (index === 0 && updates.lastName !== undefined) {
-        for (let i = 1; i < newPersons.length; i++) {
-          if (newPersons[i].fillLastNameFromAbove) {
-            newPersons[i].lastName = updates.lastName || '';
-          }
-        }
-      }
-      
-      return { ...prev, persons: newPersons };
-    });
-  };
-
-  const handleSubmitVisitor = async () => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    if (!selectedGathering) return;
-    if (isSubmittingVisitor) return; // Prevent double-clicks
-    
-    setIsSubmittingVisitor(true);
-    try {
-      // Validate form
-      for (const person of visitorForm.persons) {
-        if (!person.firstName.trim()) {
-          setError('First name is required for all persons');
-          return;
-        }
-        // Last name is optional - can be empty
-      }
-
-      // Build people array - use empty string for missing surnames (not 'Unknown')
-      const people = visitorForm.persons.map(person => ({
-        firstName: person.firstName.trim(),
-        lastName: person.lastName.trim(),
-        firstUnknown: false,
-        lastUnknown: !person.lastName.trim(),
-        isChild: person.isChild || false
-      }));
-
-      const notes = visitorForm.notes.trim();
-
-      let response;
-
-      if (isEditingVisitor && editingVisitorData) {
-        // Edit existing visitor family - use proper update APIs instead of updateVisitor
-        const familyName = visitorForm.familyName.trim() || generateFamilyName(convertToUtilityFormat(people)) || 'Visitor Family';
-        
-        // Update the visitor family in People system (only if family name is provided)
-        if (familyName) {
-          await familiesAPI.update(editingVisitorData.familyId, {
-            familyName,
-            familyType: visitorForm.personType
-          });
-        } else {
-          // Just update the family type if no name change
-          await familiesAPI.update(editingVisitorData.familyId, {
-            familyType: visitorForm.personType
-          });
-        }
-
-        // Update ALL family members to have the same people_type (fix for mixed visitor types)
-        const personType = visitorForm.personType === 'local_visitor' ? 'local_visitor' : 'traveller_visitor';
-        
-        // Get all individuals to find family members
-        const allIndividualsResponse = await individualsAPI.getAll();
-        const allIndividuals = allIndividualsResponse.data.people || [];
-        
-        // Find all family members and update their people_type to match the family type
-        // Use Number() to ensure consistent comparison (WebSocket may return BigInt IDs)
-        const editFamilyId = Number(editingVisitorData.familyId);
-        const familyMembers = allIndividuals.filter((ind: any) => Number(ind.familyId) === editFamilyId);
-        
-        // Update each existing family member's people_type, names, and isChild
-        const updatePromises = familyMembers.map(async (member: any, index: number) => {
-          const formPerson = people[index];
-          return individualsAPI.update(member.id, {
-            firstName: formPerson ? formPerson.firstName : member.firstName,
-            lastName: formPerson ? formPerson.lastName : member.lastName,
-            familyId: editingVisitorData.familyId,
-            peopleType: personType,
-            isChild: formPerson ? formPerson.isChild : Boolean(member.isChild)
-          });
-        });
-        
-        await Promise.all(updatePromises);
-        
-        // Create new individuals for any additional people added to the form
-        const newPeopleCount = people.length - familyMembers.length;
-        let createdIndividuals: any[] = [];
-        
-        if (newPeopleCount > 0) {
-          const newPeople = people.slice(familyMembers.length);
-          const createPromises = newPeople.map(async (person) => {
-            return individualsAPI.create({
-              firstName: person.firstName,
-              lastName: person.lastName,
-              familyId: editingVisitorData.familyId,
-              peopleType: personType,
-              isChild: person.isChild
-            });
-          });
-          
-          const createResults = await Promise.all(createPromises);
-          createdIndividuals = createResults.map(r => r.data);
-          
-          // Add the new individuals to the current service attendance
-          if (selectedGathering && selectedDate) {
-            const addToServicePromises = createdIndividuals.map(async (individual) => {
-              return attendanceAPI.addIndividualToService(
-                selectedGathering.id,
-                selectedDate,
-                individual.id
-              );
-            });
-            await Promise.all(addToServicePromises);
-          }
-        }
-        
-        const totalMembers = familyMembers.length + createdIndividuals.length;
-        response = { data: { message: 'Visitor family updated successfully', individuals: [...familyMembers, ...createdIndividuals].map((m: any) => ({ id: m.id, firstName: m.firstName, lastName: m.lastName })) } };
-        
-        if (newPeopleCount > 0) {
-          showSuccess(`Visitor family updated: ${newPeopleCount} new member${newPeopleCount !== 1 ? 's' : ''} added (${totalMembers} total)`);
-        } else {
-          showSuccess(`Visitor family updated successfully (${totalMembers} member${totalMembers !== 1 ? 's' : ''})`);
-        }
-      } else {
-        // Create new visitor family in People system and add to service
-        const familyName = visitorForm.familyName.trim() || generateFamilyName(convertToUtilityFormat(people)) || 'Visitor Family';
-        
-        // Create visitor family in People system
-        const familyResponse = await familiesAPI.createVisitorFamily({
-          familyName,
-          peopleType: visitorForm.personType,
-          notes: notes ? notes : undefined,
-          people
-        });
-        
-        // Add the family to the current service
-        response = await attendanceAPI.addVisitorFamilyToService(
-          selectedGathering.id, 
-          selectedDate, 
-          familyResponse.data.familyId
-        );
-
-        // Show success toast
-        if (response.data.individuals && response.data.individuals.length > 0) {
-          const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
-          showSuccess(`Added as visitor family: ${names}`);
-        } else {
-          showSuccess('Added successfully');
-        }
-      }
-
-      // Reload attendance data and related visitor data to ensure immediate visibility
-      setAttendanceRefreshTrigger(prev => prev + 1);
-      
-      // Also refresh recent visitors and all church people to ensure new visitors appear immediately
-      if (selectedGathering) {
-        try {
-          // Refresh recent visitors for this gathering
-          const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-          setRecentVisitors(recentResponse.data.visitors || []);
-          setAllRecentVisitorsPool(recentResponse.data.visitors || []);
-          
-          // Refresh all church people to include the newly added visitor
-          const allPeopleResponse = await attendanceAPI.getAllPeople(selectedGathering.id);
-          setAllChurchVisitors(allPeopleResponse.data.visitors || []);
-
-          logger.log('✅ Refreshed all visitor data after visitor operation');
-        } catch (refreshErr) {
-          logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
-          // Don't throw error since the main operation succeeded
-        }
-      }
-      
-      // Reset form and close modal
-      setVisitorForm({
-        personType: 'local_visitor',
-        notes: '',
-        persons: [{
-          firstName: '',
-          lastName: '',
-          fillLastNameFromAbove: false,
-          isChild: false
-        }],
-        autoFillSurname: false,
-        familyName: ''
-      });
-      setIsEditingVisitor(false);
-      setEditingVisitorData(null);
-      setShowAddVisitorModal(false);
-      setError('');
-    } catch (err: any) {
-      console.error('Failed to save visitor:', err);
-      setError(err.response?.data?.error || 'Failed to save visitor');
-    } finally {
-      setIsSubmittingVisitor(false);
-    }
-  };
 
   // Group attendees by family and filter based on search term (memoized)
   const groupedAttendees = useMemo(() => {
@@ -2378,69 +2028,6 @@ const AttendancePage: React.FC = () => {
     };
   }, [attendanceList, presentById, allVisitors, visitorAttendance]);
 
-  // Memoized family name computation for visitor form
-  const computedVisitorFamilyName = useMemo(() => {
-    const validMembers = visitorForm.persons.filter(member => 
-      member.firstName.trim()
-    );
-    
-    if (validMembers.length === 0) return '';
-    
-    return generateFamilyName(validMembers.map(person => ({
-      firstName: person.firstName.trim(),
-      lastName: person.lastName.trim(),
-      lastUnknown: !person.lastName.trim(),
-      isChild: person.isChild || false
-    })));
-  }, [visitorForm.persons]);
-
-  // Helper function to get the appropriate modal title
-  const getAddModalTitle = () => {
-    if (isEditingVisitor) {
-      const totalPeople = visitorForm.persons.length;
-      if (totalPeople === 1) {
-        return 'Edit Visitor';
-      } else {
-        return `Edit Visitors (${totalPeople})`;
-      }
-    } else {
-      const totalPeople = visitorForm.persons.length;
-      if (totalPeople === 1) {
-        return 'Add Visitor';
-      } else {
-        return `Add Visitors (${totalPeople})`;
-      }
-    }
-  };
-
-  // Helper function to get the appropriate button text
-  const getAddButtonText = () => {
-    if (isEditingVisitor) {
-      return 'Save Changes';
-    } else {
-      const totalPeople = visitorForm.persons.length;
-      if (totalPeople === 1) {
-        return 'Add Visitor';
-      } else {
-        return 'Add Visitors';
-      }
-    }
-  };
-
-  // Helper function to check if a visitor should be highlighted
-  const shouldHighlightVisitor = (visitor: any, memberIndex?: number) => {
-    if (!isEditingVisitor || !editingVisitorData) return false;
-    
-    // If we're editing a specific member, highlight that member
-    if (editingVisitorData.selectedMemberIndex !== undefined && memberIndex !== undefined) {
-      return memberIndex === editingVisitorData.selectedMemberIndex;
-    }
-    
-    // Otherwise, highlight if this visitor matches the one being edited
-    return visitor.id === editingVisitorData.visitorId;
-  };
-
-  // Helper function to generate family name from people array
   // Helper function to convert AttendancePage person format to utility format
   const convertToUtilityFormat = (people: Array<{
     firstName: string;
@@ -2474,38 +2061,16 @@ const AttendancePage: React.FC = () => {
 
   // Helper functions for responsive grid layout
   const getPersonDisplayName = (person: any, familyName?: string) => {
-    // For visitors with .name property
     if (person.name) {
-      const parts = person.name.trim().split(' ');
-      const firstName = parts[0];
-      const lastName = parts.slice(1).join(' ');
-      
-      if (familyName) {
-        // Check if family name has no surname (no comma means first names only)
-        const hasSurnameInFamilyName = familyName.includes(',');
-        
-        if (!hasSurnameInFamilyName) {
-          // Family has no surname - show only first name
-          return firstName;
-        }
-        
-        // Family has surname - extract and compare
-        const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
-        
-        // Only hide surname if it matches the family surname and is not empty/unknown
-        if (lastName && lastName.toLowerCase() !== 'unknown' && lastName.trim() && familySurname === lastName.toLowerCase()) {
-          return firstName;
-        }
+      const name = person.name.trim().replace(/\s+Unknown$/i, '');
+      if (person.firstName !== undefined) {
+        const familySurname = familyName?.includes(',') ? familyName.split(',')[0].trim() : '';
+        const surname = person.lastName?.trim();
+        if (!surname || surname === 'Unknown' || surname.toLowerCase() === familySurname.toLowerCase()) return person.firstName;
       }
-      
-      // If no family name or surname doesn't match, check if person has no surname
-      if (!lastName || lastName.toLowerCase() === 'unknown' || !lastName.trim()) {
-        return firstName;
-      }
-      
-      return person.name;
+      return name;
     }
-    
+
     // For regular attendees with firstName/lastName
     if (familyName) {
       // Check if family name has no surname (no comma means first names only)
@@ -2547,6 +2112,26 @@ const AttendancePage: React.FC = () => {
     sendAttendanceChange,
     setError,
   });
+
+  // Cache a successful fetch after React has merged any attendance marks received in flight.
+  useEffect(() => {
+    const loaded = loadedRosterRef.current;
+    if (!loaded?.needsCache || loaded.gatheringId !== selectedGathering?.id || loaded.date !== selectedDate) return;
+    loaded.needsCache = false;
+    try {
+      localStorage.setItem('attendance_cached_data', JSON.stringify({
+        gatheringId: loaded.gatheringId,
+        date: loaded.date,
+        attendanceList: attendanceList.map(person => ({ ...person, present: presentById[person.id] ?? person.present })),
+        visitors: allVisitors.map(person => ({ ...person, present: Boolean(person.id && visitorAttendance[person.id]) })),
+        medicalNotesIndicator,
+        timestamp: Date.now(),
+        hasPendingChanges: pendingChanges.some(change => change.gatheringId === loaded.gatheringId && change.date === loaded.date),
+      }));
+    } catch (err) {
+      logger.warn('Unable to cache attendance data', err);
+    }
+  }, [selectedGathering?.id, selectedDate, attendanceList, presentById, allVisitors, visitorAttendance, medicalNotesIndicator, pendingChanges]);
 
   return (
     <div className="space-y-4 pb-32">
@@ -3163,8 +2748,8 @@ const AttendancePage: React.FC = () => {
                   className={groupByFamily && group.familyName ? "border border-gray-200 dark:border-gray-700 rounded-lg p-4" : ""}
                 >
                   {groupByFamily && group.familyName && (
-                    <div className="flex justify-between items-center mb-3">
-                      <div className="flex items-center space-x-3">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                           {(() => {
                             // Convert surname to uppercase: "SURNAME, firstname and firstname"
@@ -3184,19 +2769,13 @@ const AttendancePage: React.FC = () => {
                             {group.members[0].visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
                           </span>
                         )}
-                                                                                        {(user?.role === 'admin' || user?.role === 'coordinator') && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        handleEditVisitor(group.members[0]);
-                                      }}
-                                      className="p-1 text-blue-400 hover:text-blue-600 transition-colors"
-                                      title="Edit visitor details"
-                                    >
-                                      <PencilIcon className="h-4 w-4" />
-                                    </button>
-                                )}
+                        {group.members.some(isEditableVisitor) && (
+                          <button type="button" disabled={isAttendanceLocked}
+                            onClick={() => setVisitorEditor(group.members.find(isEditableVisitor).id)}
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-sm text-primary-700 hover:underline disabled:opacity-50 dark:text-primary-300">
+                            <PencilIcon className="size-4" /> Edit details
+                          </button>
+                        )}
 
                       </div>
                       <div className="flex items-center space-x-3">
@@ -3224,83 +2803,68 @@ const AttendancePage: React.FC = () => {
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-3 gap-y-6">
                     {group.members.map((person: any, index: number) => {
-                      const parts = person.name.trim().split(' ');
-                      const firstName = parts[0];
-                      const lastName = parts.slice(1).join(' ');
-                      const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
                       const isPresent = person.id ? visitorAttendance[person.id] || false : false;
                       const displayName = getPersonDisplayName(person, group.familyName);
                       const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(resolveBadgePerson(person)) : null;
 
-                      const isHighlighted = shouldHighlightVisitor(person, index);
-
                       return (
-                        <label
-                          key={person.id || `visitor_${index}`}
-                          className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white dark:bg-gray-800 ${
-                            isPresent
-                              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                              : isHighlighted
-                              ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 shadow-md'
-                              : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={Boolean(isPresent)}
-                            onChange={() => person.id && toggleVisitorAttendance(person.id)}
-                            className="sr-only"
-                            disabled={isAttendanceLocked}
-                          />
-                          <div className={`shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                            isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-500'
-                          }`}>
-                            {isPresent && (
-                              <CheckIcon className="h-3 w-3 text-white" />
-                            )}
-                          </div>
-                          <div className="ml-3 flex-1 min-w-0">
-                            <span className="block truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>{displayName}</span>
-                            {/* Show visitor type and edit for groups without header */}
-                            {(!groupByFamily || !group.familyName) && (
-                              <div className="flex items-center space-x-2 mt-1">
-                                {person.visitorType !== 'regular' && (
-                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                    person.visitorType === 'potential_regular'
-                                      ? 'bg-green-100 text-green-800'
-                                      : 'bg-gray-100 text-gray-800'
-                                  }`}>
-                                    {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
-                                  </span>
-                                )}
-                                {(user?.role === 'admin' || user?.role === 'coordinator') && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        handleEditVisitor(person, index);
-                                      }}
-                                      className="p-0.5 text-blue-400 hover:text-blue-600 transition-colors"
-                                      title="Edit visitor details"
-                                    >
-                                      <PencilIcon className="h-3 w-3" />
-                                    </button>
-                                )}
+                        <div key={person.id || `visitor_${index}`} className="flex items-center gap-1">
+                          <label
+                            className={`relative flex min-w-0 flex-1 items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white dark:bg-gray-800 ${
+                              isPresent
+                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(isPresent)}
+                              onChange={() => person.id && toggleVisitorAttendance(person.id)}
+                              className="sr-only"
+                              disabled={isAttendanceLocked}
+                            />
+                            <div className={`shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                              isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-500'
+                            }`}>
+                              {isPresent && (
+                                <CheckIcon className="h-3 w-3 text-white" />
+                              )}
+                            </div>
+                            <div className="ml-3 flex-1 min-w-0">
+                              <span className="block truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={displayName}>{displayName}</span>
+                              {/* Show visitor type on tiles without a family header */}
+                              {(!groupByFamily || !group.familyName) && (
+                                <div className="flex items-center space-x-2 mt-1">
+                                  {person.visitorType !== 'regular' && (
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                      person.visitorType === 'potential_regular'
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-gray-100 text-gray-800'
+                                    }`}>
+                                      {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                                    </span>
+                                  )}
 
-                              </div>
-                            )}
-                          </div>
+                                </div>
+                              )}
+                            </div>
 
-                          <PersonTileBadges
-                            displayName={displayName}
-                            badgeInfo={badgeInfo}
-                            hasMedicalNotes={person.hasMedicalNotes}
-                            medicalNotesIndicator={medicalNotesIndicator}
-                          />
-                          {showBackgroundCheckStatus && !person.isChild && (
-                            <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
+                            <PersonTileBadges
+                              displayName={displayName}
+                              badgeInfo={badgeInfo}
+                              hasMedicalNotes={person.hasMedicalNotes}
+                              medicalNotesIndicator={medicalNotesIndicator}
+                            />
+                            {showBackgroundCheckStatus && !person.isChild && (
+                              <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
+                            )}
+                          </label>
+                          {(!groupByFamily || !group.familyName) && isEditableVisitor(person) && (
+                            <button type="button" disabled={isAttendanceLocked} onClick={() => setVisitorEditor(person.id)}
+                              aria-label={`Edit details for ${displayName}`}
+                              className="rounded px-1 py-2 text-xs text-primary-700 hover:underline disabled:opacity-50 dark:text-primary-300">Edit details</button>
                           )}
-                        </label>
+                        </div>
                       );
                     })}
                   </div>
@@ -3431,7 +2995,9 @@ const AttendancePage: React.FC = () => {
       {/* Floating Add Visitor Button - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && (
         <button
-          onClick={handleAddVisitor}
+          aria-label="Add visitors"
+          title="Add visitors"
+          onClick={() => setVisitorEditor('add')}
           disabled={isAttendanceLocked}
           className={`fixed bottom-6 right-6 w-14 h-14 ${isAttendanceLocked ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700'} text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50`}
         >
@@ -3439,248 +3005,18 @@ const AttendancePage: React.FC = () => {
         </button>
       )}
 
-            {/* Add Visitor Modal - Only for Standard Gatherings */}
-      {selectedGathering?.attendanceType === 'standard' && showAddVisitorModal && createPortal(
-        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]">
-          <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                  {getAddModalTitle()}
-                </h3>
-                <button
-                  disabled={isSubmittingVisitor}
-                  onClick={() => {
-                    setShowAddVisitorModal(false);
-                    setIsEditingVisitor(false);
-                    setEditingVisitorData(null);
-                    setError('');
-                  }}
-                  className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-              
-              <form onSubmit={(e) => { e.preventDefault(); handleSubmitVisitor(); }} className="space-y-4">
-                {/* Person Type Selection */}
-                {(user?.role === 'admin' || user?.role === 'coordinator') && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Person Type
-                    </label>
-                    <div className="flex space-x-4">
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          name="personType"
-                          value="local_visitor"
-                          checked={visitorForm.personType === 'local_visitor'}
-                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'local_visitor' | 'traveller_visitor' })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
-                        />
-                        <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Local Visitor</span>
-                      </label>
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          name="personType"
-                          value="traveller_visitor"
-                          checked={visitorForm.personType === 'traveller_visitor'}
-                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'local_visitor' | 'traveller_visitor' })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
-                        />
-                        <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Traveller Visitor</span>
-                      </label>
-                    </div>
-                  </div>
-                )}
-
-                {/* Persons List */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Family Members (up to 10)
-                    </label>
-                  </div>
-                  {visitorForm.persons.map((person, index) => (
-                    <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200 dark:border-gray-700' : ''}`}>
-                      <div>
-                        <label htmlFor={`personFirstName-${index}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          First Name {index + 1}
-                        </label>
-                        <input
-                          id={`personFirstName-${index}`}
-                          type="text"
-                          value={person.firstName}
-                          onChange={(e) => updatePerson(index, { firstName: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="First name"
-                          required
-                        />
-                        {/* Child checkbox - directly below first name */}
-                        <div className="flex items-center mt-1">
-                          <input
-                            id={`inlineVisitorIsChild-${index}`}
-                            type="checkbox"
-                            checked={person.isChild || false}
-                            onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                          />
-                          <label htmlFor={`inlineVisitorIsChild-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
-                            Child
-                          </label>
-                        </div>
-                      </div>
-                      <div className="relative">
-                        <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Last Name {index + 1}
-                        </label>
-                        <input
-                          id={`personLastName-${index}`}
-                          type="text"
-                          value={person.lastName}
-                          onChange={(e) => updatePerson(index, { lastName: e.target.value })}
-                          disabled={index > 0 && person.fillLastNameFromAbove}
-                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 dark:disabled:bg-gray-600"
-                          placeholder="Last name (optional)"
-                        />
-                        {/* For person 2+: Fill from above checkbox */}
-                        {index > 0 && (
-                          <div className="flex items-center mt-1">
-                            <input
-                              id={`personFillLastName-${index}`}
-                              type="checkbox"
-                              checked={person.fillLastNameFromAbove}
-                              onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                            />
-                            <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
-                              Fill from above
-                            </label>
-                          </div>
-                        )}
-                        {index > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => removePerson(index)}
-                            className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-700"
-                          >
-                            Remove
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Add Another Person button */}
-                          {visitorForm.persons.length < 10 && (
-                  <div>
-                            <button
-                              type="button"
-                              onClick={addPerson}
-                              className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 dark:text-primary-300 bg-primary-100 dark:bg-primary-900/30 hover:bg-primary-200 dark:hover:bg-primary-900/50"
-                            >
-                              <PlusIcon className="h-4 w-4 mr-2" />
-                              Add Another Person
-                            </button>
-                        </div>
-                      )}
-
-                {/* Notes field - only for visitors */}
-                {(visitorForm.personType === 'local_visitor' || visitorForm.personType === 'traveller_visitor') && (
-                  <div>
-                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Notes
-                    </label>
-                    <textarea
-                      id="notes"
-                      value={visitorForm.notes}
-                      onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      placeholder="Any additional notes (optional)"
-                      rows={3}
-                    />
-                  </div>
-                )}
-
-                {/* Family Name Display/Edit */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Family Name
-                  </label>
-                  {isEditingVisitor ? (
-                    <>
-                      <input
-                        type="text"
-                        value={visitorForm.familyName}
-                        onChange={(e) => setVisitorForm({ ...visitorForm, familyName: e.target.value })}
-                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                        placeholder="Family name"
-                      />
-                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                        Edit the family name if needed, or leave as is.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <div className="mt-1 p-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-900 dark:text-gray-100 font-medium">
-                            {computedVisitorFamilyName || 'Enter family member names above'}
-                          </span>
-                          {computedVisitorFamilyName && (
-                            <span className="text-xs text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded">
-                              Auto-generated
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                        Family name is automatically generated from the member names above.
-                      </p>
-                    </>
-                  )}
-                </div>
-                
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    disabled={isSubmittingVisitor}
-                    onClick={() => {
-                      setShowAddVisitorModal(false);
-                      setIsEditingVisitor(false);
-                      setEditingVisitorData(null);
-                      setError('');
-                    }}
-                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmittingVisitor}
-                    className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isSubmittingVisitor ? (
-                      <span className="flex items-center">
-                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Saving...
-                      </span>
-                    ) : (
-                      getAddButtonText()
-                    )}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>,
-        document.body
+      {selectedGathering?.attendanceType === 'standard' && visitorEditor !== null && !isAttendanceLocked && (
+        <AddVisitorModal
+          gatheringId={selectedGathering.id} date={selectedDate}
+          visitorId={typeof visitorEditor === 'number' ? visitorEditor : undefined}
+          canSetType={user?.role === 'admin' || user?.role === 'coordinator'}
+          onClose={() => setVisitorEditor(null)}
+          onSaved={message => {
+            setVisitorEditor(null);
+            setVisitorDetailsRefresh(value => value + 1);
+            showSuccess(message);
+          }}
+        />
       )}
 
       {/* Reorder Modal */}

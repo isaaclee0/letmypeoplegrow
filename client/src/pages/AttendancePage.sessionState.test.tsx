@@ -1,6 +1,6 @@
 import React from 'react';
 import { AxiosHeaders, type AxiosResponse } from 'axios';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attendanceAPI, authAPI, gatheringsAPI, settingsAPI } from '../services/api';
@@ -17,13 +17,15 @@ const auth = vi.hoisted(() => ({
 }));
 
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => auth }));
-vi.mock('../contexts/WebSocketContext', () => ({
-  useWebSocket: () => ({
-    isConnected: false,
-    isOfflineMode: false,
-    onReconnect: () => () => {},
-  }),
+const live = vi.hoisted(() => ({
+  isConnected: false,
+  isOfflineMode: false,
+  onReconnect: () => () => {},
+  onAttendanceUpdate: vi.fn((_callback: (event: any) => void) => () => {}),
+  onVisitorUpdate: vi.fn((_callback: (event: any) => void) => () => {}),
+  sendAttendanceUpdate: vi.fn().mockResolvedValue({}),
 }));
+vi.mock('../contexts/WebSocketContext', () => ({ useWebSocket: () => live }));
 
 vi.mock('../services/userPreferences', () => ({
   userPreferences: {
@@ -62,8 +64,49 @@ describe('REST attendance writes', () => {
 
 describe('Attendance setup handoff', () => {
   afterEach(() => {
+    live.isConnected = false;
     vi.restoreAllMocks();
     localStorage.clear();
+  });
+
+  it('keeps a newer visitor mark when a details refresh returns older attendance', async () => {
+    live.isConnected = true;
+    const date = '2027-03-03';
+    vi.spyOn(authAPI, 'getServerTime').mockResolvedValue(response({ serverTime: Date.now() }));
+    vi.spyOn(settingsAPI, 'getBadgeDefaults').mockResolvedValue(response({ settings: {} }));
+    vi.spyOn(gatheringsAPI, 'getAll').mockResolvedValue(response({ gatherings: [
+      { id: 22, name: 'Holiday club', attendanceType: 'standard', isActive: true, customSchedule: { type: 'one_off', startDate: date } },
+    ] }));
+    vi.spyOn(attendanceAPI, 'getSessionDates').mockResolvedValue(response({ dates: [] }));
+    vi.spyOn(attendanceAPI, 'record').mockResolvedValue(response({ message: 'Saved' }));
+    const visitor = { id: 5, name: 'Judy', firstName: 'Judy', lastName: '', present: false, visitorType: 'potential_regular' };
+    const roster = (...people: (typeof visitor)[]) => response({ attendanceList: [], visitors: people, recentVisitors: people });
+    const getFull = vi.spyOn(attendanceAPI, 'getFull').mockResolvedValue(roster(visitor));
+    render(<MemoryRouter initialEntries={['/app/attendance?gathering=22']}><ToastContainer><AttendancePage /></ToastContainer></MemoryRouter>);
+    const checkbox = await screen.findByRole('checkbox', { name: /Judy/ });
+    expect(checkbox).not.toBeChecked();
+    let finishRefresh!: () => void;
+    const refreshed = new Promise<ReturnType<typeof roster>>(resolve => {
+      finishRefresh = () => resolve(roster(
+        { ...visitor, name: 'Judith Smith', firstName: 'Judith', lastName: 'Smith' },
+        { ...visitor, id: 6, name: 'John', firstName: 'John', present: true },
+      ));
+    });
+    getFull.mockReturnValue(refreshed);
+    const calls = getFull.mock.calls.length;
+    act(() => live.onVisitorUpdate.mock.calls.at(-1)![0]({ type: 'visitor_details_changed', gatheringId: 22, date }));
+    await waitFor(() => expect(getFull.mock.calls.length).toBeGreaterThan(calls));
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    act(() => live.onAttendanceUpdate.mock.calls.at(-1)![0]({ gatheringId: 22, date, records: [{ individualId: 6, present: false }] }));
+    await act(async () => { finishRefresh(); await refreshed; });
+    expect(await screen.findByRole('checkbox', { name: /Judith/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /John/ })).not.toBeChecked();
+    const cached = JSON.parse(localStorage.getItem('attendance_cached_data')!);
+    expect(cached.visitors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 5, lastName: 'Smith', present: true }),
+      expect.objectContaining({ id: 6, present: false }),
+    ]));
   });
 
   it('opens the requested assigned gathering on its custom date despite a saved last-viewed gathering', async () => {

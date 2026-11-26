@@ -18,6 +18,8 @@ const {
   setSessionState,
 } = require('../services/attendanceSessionState');
 
+const { readVisitorDetails, saveVisitorDetails } = require('../services/attendanceVisitorDetails');
+
 const router = express.Router();
 
 function classifyChurchDate(date, timeZone, now = new Date()) {
@@ -874,6 +876,17 @@ const getVisitorConfig = async (churchId) => {
   }
 };
 
+async function getVisitorWindowDates(gatheringTypeId, churchId, date, visitorConfig) {
+  const maxLimit = Math.max(visitorConfig.localVisitorServiceLimit, visitorConfig.travellerVisitorServiceLimit);
+  const sessions = await getLastNServiceDates(gatheringTypeId, churchId, maxLimit, date);
+  const allDates = sessions.map(row => row.session_date);
+  return {
+    allDates,
+    localDates: new Set(allDates.slice(0, visitorConfig.localVisitorServiceLimit)),
+    travellerDates: new Set(allDates.slice(0, visitorConfig.travellerVisitorServiceLimit)),
+  };
+}
+
 /**
  * Get recent visitors: visitors who were marked present in the last N sessions.
  * Local visitors use localVisitorServiceLimit, traveller visitors use travellerVisitorServiceLimit.
@@ -881,15 +894,8 @@ const getVisitorConfig = async (churchId) => {
  * This is the single source of truth — used by both the /full endpoint and the standalone recent visitors endpoint.
  */
 const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig, includeBackgroundCheck = false) => {
-  const maxLimit = Math.max(visitorConfig.localVisitorServiceLimit, visitorConfig.travellerVisitorServiceLimit);
-  const recentSessionDates = await getLastNServiceDates(gatheringTypeId, churchId, maxLimit, date);
-
-  if (recentSessionDates.length === 0) return { visitors: [], recentlyPresentIds: new Set() };
-
-  const localDates = new Set(recentSessionDates.slice(0, visitorConfig.localVisitorServiceLimit).map(r => r.session_date));
-  const travellerDates = new Set(recentSessionDates.slice(0, visitorConfig.travellerVisitorServiceLimit).map(r => r.session_date));
-
-  const allDates = recentSessionDates.map(r => r.session_date);
+  const { allDates, localDates, travellerDates } = await getVisitorWindowDates(gatheringTypeId, churchId, date, visitorConfig);
+  if (!allDates.length) return { visitors: [], recentlyPresentIds: new Set() };
   const placeholders = allDates.map(() => '?').join(',');
 
   const rows = await Database.query(`
@@ -901,7 +907,7 @@ const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig,
     FROM attendance_records ar
     JOIN attendance_sessions s ON ar.session_id = s.id
     JOIN individuals i ON ar.individual_id = i.id
-    JOIN families f ON i.family_id = f.id
+    LEFT JOIN families f ON i.family_id = f.id AND f.church_id = i.church_id
     WHERE s.gathering_type_id = ?
       AND s.church_id = ?
       AND s.session_date IN (${placeholders})
@@ -922,10 +928,13 @@ const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig,
     recentlyPresentIds.add(v.id);
     visitors.push({
       id: v.id,
-      name: `${v.first_name} ${v.last_name}`,
+      name: `${v.first_name} ${v.last_name}`.trim(),
+      firstName: v.first_name,
+      lastName: v.last_name,
+      currentPeopleType: v.people_type,
       isChild: Boolean(v.is_child),
       visitorType: isLocal ? 'potential_regular' : 'temporary_other',
-      visitorFamilyGroup: v.family_id.toString(),
+      visitorFamilyGroup: v.family_id?.toString(),
       notes: v.family_notes,
       lastAttended: v.last_present_date,
       familyId: v.family_id,
@@ -1247,6 +1256,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           i.first_name,
           i.last_name,
           i.is_child,
+          i.people_type as current_people_type,
           i.last_attendance_date,
           i.created_at as individual_created_at,
           i.pco_background_check_cleared
@@ -1259,10 +1269,11 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           f.last_attended,
           COALESCE(ar.present, 0) as present
         FROM individuals i
-        JOIN families f ON i.family_id = f.id
-        JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
+        LEFT JOIN families f ON i.family_id = f.id AND f.church_id = i.church_id
+        LEFT JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
         WHERE i.is_active = 1
+          AND (gl.id IS NOT NULL OR ar.id IS NOT NULL)
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1288,6 +1299,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         familyGroups[familyId].members.push({
           id: individual.id,
           name: `${individual.first_name} ${individual.last_name}`,
+          currentPeopleType: individual.current_people_type,
           firstName: individual.first_name,
           lastName: individual.last_name,
           isChild: Boolean(individual.is_child),
@@ -1303,7 +1315,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
 
       const allVisitors = Object.values(familyGroups).flatMap(family =>
         family.members.map(member => {
-          const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const visitorTypeFromFamily = (family.familyType ?? member.peopleType) === 'local_visitor' ? 'potential_regular' : 'temporary_other';
           const notesFromFamily = family.familyNotes || '';
           const isTraveller = (member.peopleType === 'traveller_visitor') || (family.familyType === 'traveller_visitor');
           const lastDate = member.lastAttendanceDate ? String(member.lastAttendanceDate).split('T')[0] : null;
@@ -1311,11 +1323,14 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
 
           return {
             id: member.id,
-            name: member.name,
+            name: member.name.trim(),
+            firstName: member.firstName,
+            lastName: member.lastName,
+            currentPeopleType: member.currentPeopleType,
             isChild: member.isChild,
             visitorType: visitorTypeFromFamily,
             visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
-            visitorFamilyGroup: family.familyId.toString(),
+            visitorFamilyGroup: family.familyId?.toString(),
             notes: notesFromFamily || member.notes,
             lastAttended: family.lastAttended,
             familyId: family.familyId,
@@ -1614,7 +1629,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           i.is_active
         FROM attendance_records ar
         JOIN individuals i ON ar.individual_id = i.id
-        JOIN families f ON i.family_id = f.id
+        LEFT JOIN families f ON i.family_id = f.id AND f.church_id = i.church_id
         WHERE ar.session_id = ?
           AND ar.church_id = ?
           AND COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
@@ -1651,7 +1666,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
       const allSnapshotVisitors = Object.values(familyGroups).flatMap(family =>
         family.members.map(member => {
-          const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const visitorTypeFromFamily = (family.familyType ?? member.peopleType) === 'local_visitor' ? 'potential_regular' : 'temporary_other';
           const notesFromFamily = family.familyNotes || '';
           const isTraveller = (member.peopleType === 'traveller_visitor') || (family.familyType === 'traveller_visitor');
           const lastDate = member.lastAttendanceDate ? String(member.lastAttendanceDate).split('T')[0] : null;
@@ -1662,7 +1677,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             isChild: member.isChild,
             visitorType: visitorTypeFromFamily,
             visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
-            visitorFamilyGroup: family.familyId.toString(),
+            visitorFamilyGroup: family.familyId?.toString(),
             notes: notesFromFamily || member.notes,
             lastAttended: family.lastAttended,
             familyId: family.familyId,
@@ -1722,7 +1737,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           f.last_attended,
           COALESCE(ar.present, 0) as present
         FROM individuals i
-        JOIN families f ON i.family_id = f.id
+        LEFT JOIN families f ON i.family_id = f.id AND f.church_id = i.church_id
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
         WHERE i.is_active = 1
@@ -1765,7 +1780,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       // Convert to flat list for backward compatibility
       const allVisitors = Object.values(familyGroups).flatMap(family =>
         family.members.map(member => {
-          const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const visitorTypeFromFamily = (family.familyType ?? member.peopleType) === 'local_visitor' ? 'potential_regular' : 'temporary_other';
           const notesFromFamily = family.familyNotes || '';
           const isTraveller = (member.peopleType === 'traveller_visitor') || (family.familyType === 'traveller_visitor');
           const lastDate = member.lastAttendanceDate ? String(member.lastAttendanceDate).split('T')[0] : null;
@@ -1777,7 +1792,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             isChild: member.isChild,
             visitorType: visitorTypeFromFamily,
             visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
-            visitorFamilyGroup: family.familyId.toString(),
+            visitorFamilyGroup: family.familyId?.toString(),
             notes: notesFromFamily || member.notes,
             lastAttended: family.lastAttended,
             familyId: family.familyId,
@@ -1811,7 +1826,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             ar.present
           FROM attendance_records ar
           JOIN individuals i ON ar.individual_id = i.id
-          JOIN families f ON i.family_id = f.id
+          LEFT JOIN families f ON i.family_id = f.id AND f.church_id = i.church_id
           WHERE ar.session_id = ?
             AND ar.church_id = ?
             AND COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
@@ -1846,7 +1861,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             notes: null
           });
 
-          const visitorTypeFromFamily = individual.family_type === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const visitorTypeFromFamily = (individual.family_type ?? individual.people_type) === 'local_visitor' ? 'potential_regular' : 'temporary_other';
           const isTraveller = (individual.people_type === 'traveller_visitor') || (individual.family_type === 'traveller_visitor');
           const lastDate = individual.last_attendance_date ? String(individual.last_attendance_date).split('T')[0] : null;
           const isInfrequent = isTraveller && lastDate && lastDate < thresholdDateStr;
@@ -1856,7 +1871,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             isChild: Boolean(individual.is_child),
             visitorType: visitorTypeFromFamily,
             visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
-            visitorFamilyGroup: familyId.toString(),
+            visitorFamilyGroup: familyId?.toString(),
             notes: individual.family_notes || null,
             lastAttended: individual.last_attended,
             familyId: familyId,
@@ -2655,128 +2670,50 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
   }
 });
 
-// Update visitor
-router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess, async (req, res) => {
-  try {
-    const { gatheringTypeId, date, visitorId } = req.params;
-    const { people, visitorType, familyName, notes } = req.body;
-
-    if (!people || people.length === 0) {
-      return res.status(400).json({ error: 'Visitor information is required' });
-    }
-
-    await Database.transaction(async (conn) => {
-      const { id: sessionId } = await ensureAndFinalizeStandardSession(conn, req, gatheringTypeId, date);
-
-      // Treat visitorId as individual_id; update or replace the individuals and gathering list
-      // Remove the old individual's attendance and gathering list assignment for this session
-      await conn.query(
-        'DELETE FROM attendance_records WHERE session_id = ? AND individual_id = ? AND church_id = ?',
-        [sessionId, visitorId, req.user.church_id]
-      );
-      await conn.query(
-        'DELETE FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?',
-        [gatheringTypeId, visitorId, req.user.church_id]
-      );
-
-      // Optionally create a new family if multiple people or familyName provided
-      let familyId = null;
-      let familyLastName = null;
-      if (people.length > 1 || familyName) {
-        let finalFamilyName = familyName;
-        if (!finalFamilyName) {
-          const mainPerson = people.find(p => !p.isChild) || people[0];
-          familyLastName = (mainPerson.lastName || 'Unknown').toUpperCase();
-          
-          // If surnames are unknown, name family by first names only (limited to 2 names)
-          if (familyLastName === 'UNKNOWN' || !mainPerson.lastName || mainPerson.lastUnknown) {
-            const firstNames = people.slice(0, 2).map(p => p.firstName || 'Unknown').filter(name => name !== 'Unknown');
-            if (firstNames.length === 1) {
-              finalFamilyName = firstNames[0];
-            } else if (firstNames.length > 1) {
-              finalFamilyName = firstNames.join(' and ');
-            } else {
-              finalFamilyName = 'Visitor Family';
-            }
-          } else {
-            finalFamilyName = `${familyLastName}, ${people.slice(0, 2).map(p => p.firstName || 'Unknown').join(' & ')}`;
-          }
-        }
-        // Determine family_type based on visitorType (regular attendees use 'regular')
-        const familyType = visitorType === 'potential_regular' ? 'local_visitor' : (visitorType === 'temporary_other' ? 'traveller_visitor' : 'regular');
-        const familyResult = await conn.query(
-          'INSERT INTO families (family_name, family_type, created_by, church_id) VALUES (?, ?, ?, ?)',
-          [finalFamilyName, familyType, req.user.id, req.user.church_id]
-        );
-        familyId = Number(familyResult.insertId);
-      }
-
-      const createdIndividuals = [];
-      let childCount = 0;
-      for (const person of people) {
-        let { firstName, lastName, firstUnknown, lastUnknown, isChild } = person;
-        if (firstUnknown || !firstName?.trim()) {
-          firstName = isChild ? `Child ${++childCount}` : 'Unknown';
-        } else {
-          firstName = firstName.trim();
-        }
-        if (lastUnknown || !lastName?.trim()) {
-          lastName = familyId && familyLastName ? familyLastName : 'Unknown';
-        } else {
-          lastName = lastName.trim();
-        }
-
-        // Create or reuse individual as a visitor type
-        const individualResult = await conn.query(
-          'INSERT INTO individuals (first_name, last_name, family_id, is_child, people_type, created_by, church_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [firstName, lastName, familyId, isChild ? true : false, visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor', req.user.id, req.user.church_id]
-        );
-        const individualId = Number(individualResult.insertId);
-
-        // Add to gathering list so they appear for future services
-        await conn.query(
-          'INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id) VALUES (?, ?, ?, ?)',
-          [gatheringTypeId, individualId, req.user.id, req.user.church_id]
-        );
-
-        createdIndividuals.push({ id: individualId, firstName, lastName });
-      }
-
-      const updatedVisitors = createdIndividuals.map(ind => ({
-        name: `${ind.firstName} ${ind.lastName}`,
-        visitorType: visitorType || 'temporary_other',
-        lastAttended: date
-      }));
-
-      res.json({ message: 'Visitor updated successfully', individuals: createdIndividuals, visitors: updatedVisitors });
-    });
-
-    // Broadcast WebSocket update for visitor changes
-    try {
-      const updatedVisitors = createdIndividuals.map(ind => ({
-        name: `${ind.firstName} ${ind.lastName}`,
-        visitorType: visitorType || 'temporary_other',
-        lastAttended: date
-      }));
-
-      websocketBroadcast.broadcastVisitorFamilyUpdated(
-        gatheringTypeId,
-        date,
-        req.user.church_id,
-        { name: familyName },
-        updatedVisitors
-      );
-      logger.debugLog('Broadcasted visitor update via WebSocket');
-    } catch (broadcastError) {
-      console.error('Error broadcasting visitor update:', broadcastError);
-      // Don't fail the visitor save if broadcast fails
-    }
-  } catch (error) {
-    console.error('Update visitor error:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ error: 'Failed to update visitor.', details: error.message });
+// The attendance editor only changes current visitors in the selected gathering.
+async function visitorDetails(req, res) {
+  const { date } = req.params;
+  const gatheringTypeId = Number(req.params.gatheringTypeId);
+  const visitorId = req.params.visitorId === undefined ? undefined : Number(req.params.visitorId);
+  if (!isValidDateOnly(date) || (visitorId !== undefined && (!Number.isSafeInteger(visitorId) || visitorId < 1))) {
+    return res.status(400).json({ error: 'Invalid date or visitor.' });
   }
-});
+  const churchId = req.user.church_id;
+  try {
+    if (req.user.role === 'attendance_taker') {
+      const today = getChurchDate(new Date(), await loadChurchTimeZone(churchId));
+      if (date <= addDateOnly(today, { days: -14 })) {
+        return res.status(403).json({ error: 'Attendance editing is locked for this date.' });
+      }
+    }
+    const context = { churchId, gatheringTypeId, sessionDate: date, visitorId, actorId: req.user.id, role: req.user.role };
+    const reading = req.method === 'GET';
+    const details = await Database.transaction(async conn => {
+      const [gathering] = await conn.query('SELECT attendance_type FROM gathering_types WHERE id = ? AND church_id = ?', [gatheringTypeId, churchId]);
+      if (gathering?.attendance_type !== 'standard') throw Object.assign(new Error('A standard gathering is required.'), { status: 400 });
+      if (visitorId) context.recentDates = await getVisitorWindowDates(gatheringTypeId, churchId, date, await getVisitorConfig(churchId));
+      return reading ? readVisitorDetails(conn, context) : saveVisitorDetails(conn, context, req.body || {});
+    });
+    if (!reading) {
+      // Send an invalidation only. Each viewer reloads through the gathering access check.
+      websocketBroadcast.broadcastToChurch(churchId, 'visitor_update', {
+        type: 'visitor_details_changed', gatheringId: gatheringTypeId, date, timestamp: new Date().toISOString(),
+      });
+    }
+    return res.status(req.method === 'POST' ? 201 : 200).json(details);
+  } catch (err) {
+    const mapped = sessionStateErrorResponse(err);
+    if (mapped) return res.status(mapped.status).json(mapped);
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    logger.error('Visitor details failed', { error: err.message });
+    return res.status(500).json({ error: 'Unable to load or save visitor details.' });
+  }
+}
+
+const visitorAccess = [requireRole(['admin', 'coordinator', 'attendance_taker']), requireGatheringAccess];
+router.get('/:gatheringTypeId/:date/visitors/:visitorId', disableCache, ...visitorAccess, visitorDetails);
+router.put('/:gatheringTypeId/:date/visitors/:visitorId', ...visitorAccess, auditLog('UPDATE_VISITOR_DETAILS'), visitorDetails);
+router.post('/:gatheringTypeId/:date/visitor-details', ...visitorAccess, auditLog('ADD_VISITOR'), visitorDetails);
 
 // Add regular attendee to a gathering from attendance page
 router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, auditLog('ADD_REGULAR_ATTENDEE'), async (req, res) => {
