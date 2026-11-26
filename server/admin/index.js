@@ -82,6 +82,8 @@ app.get('/api/referrals', (req, res) => {
   res.json({ referrals: organisationReferrals.listForPlatform() });
 });
 
+app.use('/api/registration-approval', require('./registrationApproval'));
+
 // List all churches
 app.get('/api/churches', async (req, res) => {
   try {

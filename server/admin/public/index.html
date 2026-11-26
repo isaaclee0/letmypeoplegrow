@@ -108,6 +108,33 @@
       text-decoration: underline;
     }
 
+    .approval-setting { gap: 1.5rem; border-bottom: 0; }
+    .approval-setting label { cursor: pointer; }
+    .approval-setting p { margin-top: 0.35rem; color: #94a3b8; font-size: 0.875rem; }
+    .approval-controls { display: flex; align-items: center; gap: 0.6rem; font-size: 0.875rem; }
+    .approval-switch {
+      appearance: none;
+      width: 2.75rem;
+      height: 1.5rem;
+      flex-shrink: 0;
+      border: 1px solid #94a3b8;
+      border-radius: 1rem;
+      background: #475569;
+      cursor: pointer;
+    }
+    .approval-switch::before {
+      content: '';
+      display: block;
+      width: 1rem;
+      height: 1rem;
+      margin: 0.1875rem;
+      border-radius: 50%;
+      background: white;
+    }
+    .approval-switch:checked { background: #15803d; }
+    .approval-switch:checked::before { transform: translateX(1.25rem); }
+    .approval-switch:disabled { opacity: 0.6; cursor: wait; }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -508,6 +535,20 @@
     <!-- Churches View -->
     <div id="view-churches" style="display: none;">
       <div class="section">
+        <div class="section-header approval-setting">
+          <div>
+            <h2><label for="auto-approval">Automatically approve new organisations</label></h2>
+            <p id="approval-help">Applies to future signups. When off, only organisations with a valid referral are approved automatically.</p>
+          </div>
+          <div class="approval-controls">
+            <span id="approval-status" role="status">Loading…</span>
+            <input id="auto-approval" class="approval-switch" type="checkbox" role="switch"
+              aria-describedby="approval-help" onchange="updateRegistrationApproval(this.checked)" disabled hidden>
+            <button class="action-btn" id="approval-retry" onclick="updateRegistrationApproval()" hidden>Retry</button>
+          </div>
+        </div>
+      </div>
+      <div class="section">
         <div class="section-header">
           <h2>Organisation Referrals</h2>
           <button class="action-btn" onclick="loadReferrals()" title="Refresh referrals">↻</button>
@@ -689,10 +730,40 @@
     let searchTimeout = null;
 
     // Fetch helpers
-    async function fetchJSON(url) {
-      const res = await fetch(url);
+    async function fetchJSON(url, options) {
+      const res = await fetch(url, options);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
+    }
+
+    let approvalRequestPending = false;
+    async function updateRegistrationApproval(enabled) {
+      if (approvalRequestPending) return;
+      approvalRequestPending = true;
+      const control = document.getElementById('auto-approval');
+      const status = document.getElementById('approval-status');
+      const retry = document.getElementById('approval-retry');
+      const saving = typeof enabled === 'boolean';
+      control.disabled = true;
+      retry.hidden = true;
+      status.textContent = saving ? 'Saving…' : 'Loading…';
+      try {
+        const setting = await fetchJSON('/api/registration-approval', saving ? {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        } : { cache: 'no-store' });
+        control.checked = setting.enabled;
+        control.hidden = false;
+        control.disabled = false;
+        status.textContent = setting.enabled ? 'On' : 'Off';
+      } catch {
+        control.hidden = true;
+        status.textContent = saving ? 'Couldn’t confirm the change.' : 'Couldn’t load the setting.';
+        retry.hidden = false;
+      } finally {
+        approvalRequestPending = false;
+      }
     }
 
     function formatDate(dateStr) {
@@ -1006,6 +1077,7 @@
       document.getElementById(`view-${view}`).style.display = 'block';
       
       // Load data if needed
+      if (view === 'churches') updateRegistrationApproval();
       if (view === 'users') loadAllUsers(1);
       if (view === 'audit') loadAuditLog();
       if (view === 'backups') {

@@ -835,8 +835,7 @@ router.post('/register',
       // Serialize lookup and reservation in the registry; publish the login
       // lookup only after the new database has its settings, user and code.
       const registry = Database.getRegistryDb();
-      let preApproved = false;
-      const churchId = registry.transaction(() => {
+      const registration = registry.transaction(() => {
         if (Database.lookupChurchByEmail(email)) return null;
 
         const newChurchId = reserveNewChurchId(churchName);
@@ -860,11 +859,14 @@ router.post('/register',
           `).run(email, code, expiresAt, newChurchId);
           Database.registerUserLookup(userId, email, null, newChurchId);
         })();
-        preApproved = organisationReferrals.redeem(email, newChurchId);
-        return newChurchId;
+        const referred = organisationReferrals.redeem(email, newChurchId);
+        if (!referred && Database.getRegistrationAutoApproval()) {
+          Database.approveChurch(newChurchId, true);
+        }
+        return { churchId: newChurchId, approved: Database.isChurchApproved(newChurchId) };
       }).immediate();
 
-      if (!churchId) {
+      if (!registration) {
         return res.status(409).json({ error: 'A user with this email address already exists.' });
       }
 
@@ -874,13 +876,11 @@ router.post('/register',
         try { await sendOTCEmail(email, code); }
         catch (error) { console.error('Failed to send welcome email:', error); }
 
-        // Referred organisations are already approved in the internal admin panel.
-        if (preApproved) return;
-        // Notify app admin that a new church needs approval
+        if (registration.approved) return;
         try {
           await sendNewChurchApprovalEmail(
             churchName,
-            churchId,
+            registration.churchId,
             `${firstName} ${lastName}`,
             email
           );

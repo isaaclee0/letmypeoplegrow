@@ -1263,6 +1263,20 @@ class Database {
     return row ? !!row.is_approved : false;
   }
 
+  static getRegistrationAutoApproval() {
+    const row = registryDb.prepare(
+      "SELECT setting_value FROM platform_settings WHERE setting_key = 'auto_approve_new_organisations'"
+    ).get();
+    return row?.setting_value === '1';
+  }
+
+  static setRegistrationAutoApproval(enabled) {
+    registryDb.prepare(`
+      INSERT INTO platform_settings (setting_key, setting_value) VALUES ('auto_approve_new_organisations', ?)
+      ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = datetime('now')
+    `).run(enabled === true ? '1' : '0');
+  }
+
   static getChurchName(churchId) {
     if (!registryDb) return null;
     const row = registryDb.prepare('SELECT church_name FROM churches WHERE church_id = ?').get(churchId);

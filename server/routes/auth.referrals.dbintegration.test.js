@@ -22,13 +22,14 @@ async function withApp(run) {
   const app = express();
   app.use(express.json());
   app.use('/api/auth', authRouter);
+  app.use('/api/registration-approval', require('../admin/registrationApproval'));
   const server = http.createServer(app);
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
   });
   const request = async (path, { token, body, method = body ? 'POST' : 'GET' } = {}) => {
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/auth${path}`, {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
       method,
       headers: { 'content-type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
       ...(body && { body: JSON.stringify(body) }),
@@ -37,7 +38,12 @@ async function withApp(run) {
     await new Promise(resolve => setImmediate(resolve));
     return result;
   };
-  try { await run(request); }
+  try {
+    await run(
+      (path, options) => request('/api/auth' + path, options),
+      options => request('/api/registration-approval', options)
+    );
+  }
   finally { await new Promise(resolve => server.close(resolve)); }
 }
 
@@ -108,6 +114,45 @@ test('invalid addresses and existing accounts cannot be referred; repeated sends
     assert.equal((await request('/referrals', { token, body: { email: 'EXISTING@example.com' } })).status, 409);
     assert.equal((await request('/referrals', { token, body: { email: 'new@example.com' } })).status, 201);
     assert.equal((await request('/referrals', { token, body: { email: 'new@example.com' } })).status, 429);
+  }));
+});
+
+test('automatic approval follows the platform setting at signup and preserves referral credit and login verification', async t => {
+  t.mock.method(email, 'sendReferralEmail', async () => {});
+  await withTestChurchDb(churchId => withApp(async (request, approvalSetting) => {
+    const token = await admin(churchId);
+    const setApproval = enabled => approvalSetting({ method: 'PUT', body: { enabled } });
+    const approved = address => Database.isChurchApproved(Database.lookupChurchByEmail(address).church_id);
+    approvalNotices = 0;
+    assert.deepEqual(await approvalSetting(), { status: 200, body: { enabled: false } });
+    assert.equal((await setApproval('false')).status, 400);
+    await register(request, 'before@example.com');
+    assert.equal(approved('before@example.com'), false);
+
+    assert.equal((await setApproval(true)).status, 200);
+    assert.equal((await approvalSetting()).body.enabled, true);
+    const contact = 'automatic@example.com';
+    assert.equal((await register(request, contact)).status, 201);
+    assert.equal(approved(contact), true);
+    assert.equal(approved('before@example.com'), false);
+    assert.equal((await request('/me')).status, 401);
+    const targetId = Database.lookupChurchByEmail(contact).church_id;
+    const [{ code }] = await Database.queryForChurch(targetId,
+      'SELECT code FROM otc_codes WHERE contact_identifier = ? AND church_id = ?', [contact, targetId]);
+    const login = await request('/verify-code', { body: { contact, code } });
+    assert.equal(login.body.user.isChurchApproved, true);
+
+    assert.equal((await request('/referrals', { token, body: { email: 'invited@example.com' } })).status, 201);
+    assert.equal((await register(request, 'invited@example.com')).status, 201);
+    assert.equal((await request('/referrals', { token })).body.referrals[0].status, 'registered');
+    assert.equal(approvalNotices, process.env.NODE_ENV === 'development' ? 0 : 1);
+
+    assert.equal((await setApproval(false)).status, 200);
+    assert.equal((await approvalSetting()).body.enabled, false);
+    await register(request, 'after@example.com');
+    assert.equal(approved('after@example.com'), false);
+    assert.equal(approved(contact), true);
+    assert.equal(approvalNotices, process.env.NODE_ENV === 'development' ? 0 : 2);
   }));
 });
 
