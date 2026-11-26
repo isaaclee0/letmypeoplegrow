@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS people_sync_local_households (
   family_id INTEGER,
   group_id TEXT NOT NULL,
   source_fingerprint TEXT,
+  selected_external_family_id TEXT,
   created_by INTEGER,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),

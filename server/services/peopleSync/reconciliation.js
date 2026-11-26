@@ -156,6 +156,10 @@ function addReviewedFamilyActions(context) {
     const listed = new Set(roster);
     return (family.providerMemberIds || []).every(id => !input.householdVetoIds?.has(id) && listed.has(id)) &&
       roster.every(id => {
+        // Overlapping memberships are expected. They can corroborate a
+        // no-op for other residents, never a move, new ownership or rename.
+        if (allowUnknownOutsideScope && input.confirmedMultiple?.has(id) &&
+            personFor(id)?.householdIds?.includes(String(family.id))) return true;
         if (rosterOwners.get(id)?.size !== 1 || input.householdVetoIds?.has(id)) return false;
         const ids = personFor(id)?.householdIds;
         // Included relatives often omit Person.households. That unknown is
@@ -347,7 +351,7 @@ function addReviewedFamilyActions(context) {
   }
 
   if (input.automaticLinks) for (const [id, individualId] of established) {
-    if (!populationIds.has(id) || !unchangedIdentity(id) || input.savedHouseholdExternalIds?.has(id)) continue;
+    if (!populationIds.has(id) || !unchangedIdentity(id) || localHouseholdExternalIds.has(id) || input.savedHouseholdExternalIds?.has(id)) continue;
     const person = personFor(id);
     const ids = person?.householdIds;
     const reason = Array.isArray(ids) && ids.length > 1 ? 'multiple_provider_households'
@@ -360,6 +364,20 @@ function addReviewedFamilyActions(context) {
         memberExternalIds: [id], candidateFamilyIds: familyId == null ? [] : [familyId], unresolvedExternalPersonIds: [id],
       });
     }
+  }
+
+  for (const placement of input.rememberedPlacements || []) {
+    const { externalPersonId, individualId, fromFamilyId, externalFamilyId, familyId } = placement;
+    if (!populationIds.has(externalPersonId) || !unchangedIdentity(externalPersonId)) continue;
+    const destination = { kind: 'existing', familyId, familyName: localFamilies.get(familyId).familyName };
+    const move = { externalPersonId, individualId, fromFamilyId };
+    plan.familyConflicts.push({
+      id: actionId('familyConflicts', 'remembered', externalPersonId, externalFamilyId),
+      externalFamilyId, externalFamilyName: destination.familyName, memberExternalIds: [externalPersonId],
+      candidateFamilyIds: [familyId], unresolvedExternalPersonIds: [], reason: 'remembered_household_choice',
+      resolution: { kind: 'household', destination, moves: [move] }, automatic: true,
+      familyOwnership: [ownership(familyId)],
+    });
   }
 
   if (input.provider === 'planning_center') for (const action of plan.addPeople) {

@@ -18,11 +18,11 @@ function stale() {
 function fromRows(rows) {
   return canonicalPreferences(rows.map((row) => ({
     externalPersonId: row.external_person_id, individualId: row.individual_id,
-    familyId: row.family_id, groupId: row.group_id, sourceFingerprint: row.source_fingerprint,
+    familyId: row.family_id, groupId: row.group_id, sourceFingerprint: row.source_fingerprint, selectedExternalFamilyId: row.selected_external_family_id,
   })));
 }
 
-const SELECT_PREFERENCES = `SELECT external_person_id, individual_id, family_id, group_id, source_fingerprint
+const SELECT_PREFERENCES = `SELECT external_person_id, individual_id, family_id, group_id, source_fingerprint, selected_external_family_id
   FROM people_sync_local_households WHERE church_id = ? AND provider = ? ORDER BY external_person_id`;
 
 async function listHouseholdPreferences(churchId, provider) {
@@ -46,6 +46,7 @@ async function persistHouseholdPreferencesWithConnection(conn, { churchId, provi
     if (!change || typeof change.externalPersonId !== 'string' || !change.externalPersonId.trim() ||
         !Number.isSafeInteger(change.individualId) || change.individualId <= 0 ||
         typeof change.groupId !== 'string' || !change.groupId.trim() || change.groupId.length > 200 ||
+        (change.selectedExternalFamilyId != null && (typeof change.selectedExternalFamilyId !== 'string' || !change.selectedExternalFamilyId.trim())) ||
         (change.sourceFingerprint != null && !/^[a-f0-9]{64}$/.test(change.sourceFingerprint)) ||
         (!change.forget && change.familyId !== null && (!Number.isSafeInteger(change.familyId) || change.familyId <= 0)) ||
         seen.has(change.externalPersonId)) throw new Error('Invalid local household preference change');
@@ -67,13 +68,14 @@ async function persistHouseholdPreferencesWithConnection(conn, { churchId, provi
         WHERE church_id = ? AND provider = ? AND external_person_id = ? AND individual_id = ?`, [churchId, provider, change.externalPersonId, change.individualId]);
     } else {
       await conn.query(`INSERT INTO people_sync_local_households
-        (church_id, provider, external_person_id, individual_id, family_id, group_id, source_fingerprint, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (church_id, provider, external_person_id, individual_id, family_id, group_id, source_fingerprint, selected_external_family_id, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(church_id, provider, external_person_id) DO UPDATE SET
           individual_id = excluded.individual_id, family_id = excluded.family_id,
           group_id = excluded.group_id, source_fingerprint = excluded.source_fingerprint,
+          selected_external_family_id = excluded.selected_external_family_id,
           created_by = excluded.created_by, updated_at = datetime('now')`,
-      [churchId, provider, change.externalPersonId, change.individualId, change.familyId, change.groupId, change.sourceFingerprint || null, createdBy]);
+      [churchId, provider, change.externalPersonId, change.individualId, change.familyId, change.groupId, change.sourceFingerprint || null, change.selectedExternalFamilyId || null, createdBy]);
     }
   }
 }

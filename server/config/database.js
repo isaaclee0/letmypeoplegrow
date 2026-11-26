@@ -321,6 +321,9 @@ function ensureCompatibleUpdatedAtTriggers(db) {
 function ensureProviderNeutralSyncSchema(db) {
   db.exec(PROVIDER_NEUTRAL_SYNC_SCHEMA);
   const localHouseholdColumns = db.prepare('PRAGMA table_info(people_sync_local_households)').all();
+  if (!localHouseholdColumns.some((column) => column.name === 'selected_external_family_id')) {
+    db.exec('ALTER TABLE people_sync_local_households ADD COLUMN selected_external_family_id TEXT');
+  }
   if (!localHouseholdColumns.some((column) => column.name === 'source_fingerprint')) {
     db.exec('ALTER TABLE people_sync_local_households ADD COLUMN source_fingerprint TEXT');
   }

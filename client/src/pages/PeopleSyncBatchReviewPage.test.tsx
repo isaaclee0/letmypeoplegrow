@@ -593,6 +593,7 @@ describe('PeopleSyncBatchReviewPage', () => {
     vi.mocked(integrationsAPI.previewPlanningCenterSyncHouseholdChoices).mockImplementation(async (body) => ({ data: { success: true, ...householdReview({ token: 'name-only', saved: true, edits: body.householdChoices }) } }) as never);
     renderRoute('/app/settings/integrations/planning-center/review?layout=decisions');
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /Manage saved household choices/ }));
     await user.click(await screen.findByRole('button', { name: /Edit family name/ }));
     const name = screen.getByLabelText('LMPG family display name (optional)');
     await user.clear(name); await user.type(name, 'Smiths of Hobart');
@@ -609,6 +610,7 @@ describe('PeopleSyncBatchReviewPage', () => {
     vi.mocked(integrationsAPI.previewPlanningCenterSyncHouseholdChoices).mockImplementation(async (body) => ({ data: { success: true, ...householdReview({ token: `forget-${Object.keys(body.householdChoices).length}`, saved: true, edits: body.householdChoices }) } }) as never);
     renderRoute('/app/settings/integrations/planning-center/review?layout=decisions');
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /Manage saved household choices/ }));
     await user.click(await screen.findByRole('button', { name: 'Forget saved choice' }));
     await user.click(screen.getByRole('button', { name: 'Preview household choices' }));
     expect(await screen.findByRole('button', { name: 'Apply 1 change' })).toBeEnabled();

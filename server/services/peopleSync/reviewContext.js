@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { desiredPeopleType } = require('./plan');
 const { canonicalLinkCorrections } = require('./linkCorrections');
-const { buildSinglePersonFamilyName, hasConfirmedNoHousehold } = require('./familyName');
+const { creationHouseholdId, buildSinglePersonFamilyName, hasConfirmedNoHousehold } = require('./familyName');
 
 const DECISION_CONTRACT_VERSION = 2;
 
@@ -124,13 +124,13 @@ function heldExternalIds(holds) {
   return new Set((holds || []).map((hold) => externalId(hold?.externalPersonId)).filter(Boolean));
 }
 
-function createPerson(externalPerson, qualifyingBatches, plannedPeopleType) {
+function createPerson(provider, externalPerson, qualifyingBatches, plannedPeopleType) {
   if (!externalPerson) return null;
   return {
     firstName: text(externalPerson.firstName),
     lastName: text(externalPerson.lastName),
     isChild: typeof externalPerson.child === 'boolean' ? externalPerson.child : null,
-    externalFamilyId: externalPerson.familyId === undefined ? null : externalPerson.familyId,
+    externalFamilyId: creationHouseholdId(provider, externalPerson),
     peopleType: plannedPeopleType || desiredPeopleType(externalPerson, qualifyingBatches),
   };
 }
@@ -183,6 +183,7 @@ function buildReviewContext(input = {}) {
       ...(heldGatherings.length ? { gatheringAssignments: heldGatherings } : {}),
       canCreate: true,
       createPerson: createPerson(
+        input.plan.provider,
         externalPeople.get(id),
         qualifyingBatches,
         plannedAddition?.peopleType || input.createPeopleType,

@@ -1,4 +1,4 @@
-const { buildFamilyName } = require('./familyName');
+const { buildFamilyName, creationHouseholdId } = require('./familyName');
 const { addReviewedFamilyActions, addReviewedGatheringRemovals } = require('./reconciliation');
 
 const BUCKETS = [
@@ -319,7 +319,8 @@ function addUnmatchedActions(context) {
       id: actionId('addPeople', externalPersonId), externalPersonId,
       firstName: externalPerson.firstName, lastName: externalPerson.lastName,
       isChild: typeof externalPerson.child === 'boolean' ? externalPerson.child : null,
-      familyId: externalPerson.familyId ?? null, peopleType: desired,
+      familyId: creationHouseholdId(input.provider, externalPerson), peopleType: desired,
+      ...(input.provider === 'planning_center' && externalPerson.householdIds?.length > 1 ? { needsHouseholdChoice: true } : {}),
       reason: 'eligible_unmatched_external', reviewRequired: true,
     });
   }
@@ -368,7 +369,7 @@ function addFamilyActions(context) {
   for (const family of externalFamilies) {
     // Local household arrangements own these people's family placement. Keep
     // provider evidence intact and exclude them only from family planning.
-    const memberExternalIds = family.memberExternalIds.filter((id) => !localHouseholdExternalIds.has(id));
+    const memberExternalIds = family.memberExternalIds.filter((id) => !localHouseholdExternalIds.has(id) && !addPeopleByExternal.get(id)?.needsHouseholdChoice);
     if (!memberExternalIds.some((id) => populationIds.has(id))) continue;
 
     const linkedFamilyIds = [...(linkedFamilyIdsByExternal.get(family.id) || [])].sort((a, b) => a - b);

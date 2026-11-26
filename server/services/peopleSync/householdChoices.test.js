@@ -27,26 +27,31 @@ function fixture({ names = ['Reed', 'Reed extended'], solo = false } = {}) {
 }
 const groupFor = (input) => projectHouseholdChoices(input).householdChoiceContext.groups[0];
 function baselineFingerprint(externalPersonId) {
-  const input = fixture();
-  const group = groupFor(input);
-  const projected = projectHouseholdChoices(input, { [group.id]: { destination: { kind: 'keep' } } });
-  return projected.householdChoiceContext.decisions[0].people.find((person) => person.externalPersonId === externalPersonId).sourceFingerprint;
+  return projectHouseholdChoices(fixture()).householdChoiceContext.groups
+    .flatMap(group => group.people).find(person => person.externalPersonId === externalPersonId).sourceFingerprint;
 }
 const preference = (externalPersonId, individualId, familyId, groupId = 'remembered-card', sourceFingerprint = baselineFingerprint(externalPersonId)) => ({ externalPersonId, individualId, familyId, groupId, sourceFingerprint });
 const edit = (kind, extra = {}) => ({ destination: { kind, ...extra } });
+
+function legacyFixture() {
+  const input = fixture();
+  input.householdPreferences = [preference('ada', 1, 10), preference('ben', 2, 11)];
+  return input;
+}
 
 for (const shape of [
   { label: 'larger and smaller households' },
   { label: 'differently named households', names: ['Reed', 'Hill'] },
   { label: 'identically named households', names: ['Reed', 'Reed'] },
   { label: 'one source member and extended relatives', solo: true },
-]) test(`LMPG choices group linked source people for ${shape.label}`, () => {
+]) test(`Each linked person can choose separately for ${shape.label}`, () => {
   const input = fixture(shape);
   const original = structuredClone(input);
   const projected = projectHouseholdChoices(input);
-  const group = projected.householdChoiceContext.groups[0];
+  const group = projected.householdChoiceContext.groups.find(g => g.people[0].externalPersonId === 'ada');
+  assert.equal(projected.householdChoiceContext.groups.length, shape.solo ? 1 : 2);
   assert.equal(projected.householdChoiceContext.version, 2);
-  assert.equal(group.people.length, shape.solo ? 1 : 2);
+  assert.equal(group.people.length, 1);
   assert.deepEqual(group.selectedDestination, { kind: 'keep' });
   assert.equal(group.people[0].currentFamilyId, 10);
   assert.equal(group.people[0].currentFamilyName, 'Current Ada');
@@ -69,7 +74,7 @@ test('group IDs follow participant identities rather than provider household ide
 });
 
 test('keep records each source participant current local family without moving or renaming', () => {
-  const input = fixture();
+  const input = legacyFixture();
   const group = groupFor(input);
   const projected = projectHouseholdChoices(input, { [group.id]: edit('keep') });
   assert.deepEqual(projected.householdChoiceContext.decisions, [{
@@ -80,7 +85,7 @@ test('keep records each source participant current local family without moving o
 });
 
 test('existing destinations use any church family without claiming its provider ownership', () => {
-  const input = fixture();
+  const input = legacyFixture();
   const id = groupFor(input).id;
   const projected = projectHouseholdChoices(input, { [id]: edit('existing', { familyId: 40 }) });
   const decision = projected.householdChoiceContext.decisions[0];
@@ -94,7 +99,7 @@ test('existing destinations use any church family without claiming its provider 
 });
 
 test('create requires and previews a local name without a provider household target', () => {
-  const input = fixture();
+  const input = legacyFixture();
   const id = groupFor(input).id;
   const projected = projectHouseholdChoices(input, { [id]: { ...edit('create'), displayName: ' Shared family ' } });
   assert.deepEqual(projected.householdChoiceContext.decisions[0].destination, { kind: 'create' });
@@ -119,16 +124,17 @@ test('new local household names prefer an agreed PCO name and never inherit an U
 });
 
 test('keep can rename only one shared nonnull family and retains its original name', () => {
-  const input = fixture();
+  const input = legacyFixture();
   let id = groupFor(input).id;
   assert.throws(() => projectHouseholdChoices(input, { [id]: { ...edit('keep'), displayName: 'Rename' } }), { code: 'SYNC_HOUSEHOLD_CHOICES_INVALID' });
-  input.individuals[1].familyId = 10;
+  input.individuals[1].familyId = input.householdPreferences[1].familyId = 10;
   id = groupFor(input).id;
   const projected = projectHouseholdChoices(input, { [id]: { ...edit('keep'), displayName: 'Renamed current' } });
   assert.equal(projected.householdChoiceContext.decisions[0].resolvedName, 'Renamed current');
   assert.equal(projected.householdChoiceContext.decisions[0].fromName, 'Current Ada');
   assert.equal(projectHouseholdChoices(input, { [id]: edit('keep') }).householdChoiceContext.decisions[0].fromName, 'Current Ada');
   input.individuals[0].familyId = input.individuals[1].familyId = null;
+  for (const saved of input.householdPreferences) saved.familyId = null;
   assert.throws(() => projectHouseholdChoices(input, { [id]: { ...edit('keep'), displayName: 'Rename' } }), { code: 'SYNC_HOUSEHOLD_CHOICES_INVALID' });
 });
 
@@ -139,6 +145,7 @@ test('changed PCO memberships reopen saved arrangements and release provider hou
     if (change === 'removed-membership') {
       input.snapshot.people[0].householdIds = ['small'];
       input.snapshot.people[0].familyId = 'small';
+      input.snapshot.families[1].householdMemberExternalIds = ['ben', 'relative'];
     } else input.snapshot.families[0].householdMemberExternalIds.push('new-spouse');
     const projected = projectHouseholdChoices(input);
     const group = projected.householdChoiceContext.groups[0];
@@ -297,7 +304,7 @@ test('different cards cannot explicitly rename the same existing family inconsis
 });
 
 test('decoration attaches v2 review context without changing provider actions or evidence', () => {
-  const input = fixture();
+  const input = legacyFixture();
   const projected = projectHouseholdChoices(input, { [groupFor(input).id]: { ...edit('create'), displayName: 'LMPG only' } });
   const plan = { addFamilies: [{ externalFamilyId: 'small', familyName: 'PCO name' }], familyConflicts: [{ externalFamilyId: 'large', reason: 'unknown_household_membership' }] };
   const original = structuredClone(plan);
@@ -307,4 +314,32 @@ test('decoration attaches v2 review context without changing provider actions or
   assert.deepEqual(decorated.familyConflicts, original.familyConflicts);
   assert.deepEqual(plan, original);
   assert.deepEqual(canonicalPreferences([preference('ben', 2, 11), preference('ada', 1, 10)]), [preference('ada', 1, 10), preference('ben', 2, 11)]);
+});
+
+test('matches current local families using either form of the PCO ID, leaving conflicting ownership for review', () => {
+  const input = fixture({ names: ['Reed', 'Reed'] });
+  input.families[0].planningCenterId = 'large';
+  input.familyLinks.push({ externalFamilyId: 'small', familyId: 11 });
+  assert.deepEqual(projectHouseholdChoices(input).householdChoiceContext.groups, []);
+  input.familyLinks.push({ externalFamilyId: 'small', familyId: 10 });
+  const groups = projectHouseholdChoices(input).householdChoiceContext.groups;
+  assert.equal(groups.length, 2);
+  assert.ok(groups.every(group => group.sourceHouseholds.every(h => h.ownershipConflict)));
+  assert.throws(() => projectHouseholdChoices(input, { [groups[0].id]: { destination: { kind: 'household', externalFamilyId: 'large' } } }));
+});
+
+test('contradictory inverse memberships cannot add an extra PCO household to the available choices', () => {
+  const input = fixture({ solo: true });
+  input.snapshot.families.push({ id: 'unexpected', name: 'Unconfirmed', householdMemberExternalIds: ['ada'] });
+  const group = groupFor(input);
+  assert.ok(group.invalidReason);
+  assert.throws(() => projectHouseholdChoices(input, { [group.id]: { destination: { kind: 'household', externalFamilyId: 'unexpected' } } }));
+});
+
+test('inactive linked people outside all lists do not prompt for an attendance family', () => {
+  const input = fixture({ solo: true });
+  input.eligibleByBatch = new Map([[7, new Set(['child'])]]);
+  const [ada] = input.snapshot.people.splice(0, 1);
+  input.linkedPeople = [{ ...ada, state: 'archived' }];
+  assert.deepEqual(projectHouseholdChoices(input).householdChoiceContext.groups, []);
 });

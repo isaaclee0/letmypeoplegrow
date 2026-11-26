@@ -97,6 +97,8 @@ describe('HouseholdChoiceEditor', () => {
   it('keeps saved choices editable, forgettable, and resettable without a write', async () => {
     const user = userEvent.setup(); const onChange = vi.fn();
     render(<Editor card={group({ saved: true, selectedDestination: { kind: 'existing', familyId: 10 } })} onChange={onChange} />);
+    expect(screen.queryByRole('combobox')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /Manage saved household choices/ }));
     expect(screen.getByRole('combobox')).toHaveValue('existing:10');
     await user.click(screen.getByRole('button', { name: 'Forget saved choice' }));
     expect(onChange).toHaveBeenLastCalledWith({ 'shared-households': { destination: { kind: 'forget' } } });
@@ -131,7 +133,7 @@ describe('HouseholdChoiceEditor', () => {
     expect(screen.getByRole('button', { name: /Edit family name/ })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Remember this household' }));
     expect(onChange).toHaveBeenLastCalledWith({ 'shared-households': { destination: { kind: 'keep' } } });
-    expect(screen.getByText(/remembers your choices until Planning Center household membership changes/)).toBeInTheDocument();
+    expect(screen.getByText(/Applying the preview saves your choices in LMPG/)).toBeInTheDocument();
   });
 
   it('compares destination kind, family, and explicit name edits and retains unrelated warnings', () => {
@@ -144,4 +146,18 @@ describe('HouseholdChoiceEditor', () => {
     ] } as PeopleSyncPlan;
     expect(withoutCoveredHouseholdWarnings(source).familyConflicts.map((entry) => entry.id)).toEqual(['other', 'blocked']);
   });
+});
+
+it('asks for one person and distinguishes same-name Planning Center households by their members', async () => {
+  const onChange = vi.fn();
+  const card = group({ membershipChoice: true, people: group().people.slice(0, 1) });
+  render(<Editor card={card} onChange={onChange} />);
+  const select = screen.getByRole('combobox', { name: /attendance family for Alex Smith/i });
+  expect(select).toHaveValue('');
+  await userEvent.selectOptions(select, screen.getByRole('option', { name: /PCO Smith household.*Casey Smith/ }));
+  expect(onChange).toHaveBeenLastCalledWith({ 'shared-households': { destination: { kind: 'household', externalFamilyId: 'h2' } } });
+  expect(householdChoiceEditsMatch(
+    { a: { destination: { kind: 'household', externalFamilyId: 'h1' } } },
+    { a: { destination: { kind: 'household', externalFamilyId: 'h2' } } },
+  )).toBe(false);
 });

@@ -330,7 +330,7 @@ function mergeAppliedCounts(applyResult, plan) {
   return {
     ...applyResult,
     ambiguousPeople: plan.ambiguousPeople.length,
-    familyConflicts: Math.max(0, plan.familyConflicts.length - (applyResult.familyConflicts || 0)),
+    familyConflicts: Math.max(0, plan.familyConflicts.length - (applyResult.familyConflicts || 0)) + pendingHouseholdChoices(plan),
     unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
     renameFamily: plan.renameFamily.length,
     skipped: plan.skipped.length,
@@ -341,19 +341,24 @@ function pendingGatheringRemovals(plan) {
   return (plan.removeFromGathering || []).filter((action) => action.reviewRequired && !action.automatic).length;
 }
 
+function pendingHouseholdChoices(plan) {
+  return (plan.householdChoices?.groups || []).filter(group => group.membershipChoice && !plan.householdChoices.edits[group.id]).length +
+    (plan.addPeople || []).filter(person => person.needsHouseholdChoice).length;
+}
+
 function heldCountsFromPlan(plan) {
   return {
     ...(pendingGatheringRemovals(plan) ? { gatheringRemovals: pendingGatheringRemovals(plan) } : {}),
     archive: plan.archive.filter(action => !action.automatic).length,
     ambiguousPeople: plan.ambiguousPeople.length,
-    familyConflicts: plan.familyConflicts.filter(action => !action.automatic).length,
+    familyConflicts: plan.familyConflicts.filter(action => !action.automatic).length + pendingHouseholdChoices(plan),
     renameFamily: plan.renameFamily.filter(action => !action.automatic).length,
     unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
   };
 }
 
 function hasHeldItems(plan) {
-  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].some(action => !action.automatic)) || pendingGatheringRemovals(plan) > 0;
+  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].some(action => !action.automatic)) || pendingGatheringRemovals(plan) > 0 || pendingHouseholdChoices(plan) > 0;
 }
 
 function stripRawFields(action) {
@@ -1185,7 +1190,9 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     gatheringMemberships: acquired.gatheringMemberships,
     reconciliationKeeps: acquired.reconciliationKeeps || [],
     localHouseholdExternalIds: acquired.localHouseholdExternalIds || new Set(),
-    savedHouseholdExternalIds: new Set((acquired.householdPreferences || []).map(p => p.externalPersonId)),
+    savedHouseholdExternalIds: acquired.protectedPreferences,
+    confirmedMultiple: acquired.confirmedMultiple,
+    rememberedPlacements: acquired.rememberedPlacements,
   });
   appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
 

@@ -9,6 +9,7 @@ export function householdChoiceEditsMatch(left: HouseholdChoiceEdits, right: Hou
     if (!Object.hasOwn(right, id)) return false;
     const a = left[id].destination; const b = right[id].destination;
     return !!a && !!b && a.kind === b.kind && left[id].displayName === right[id].displayName
+      && (a.kind !== 'household' || (b.kind === 'household' && a.externalFamilyId === b.externalFamilyId))
       && (a.kind !== 'existing' || (b.kind === 'existing' && a.familyId === b.familyId));
   });
 }
@@ -41,9 +42,13 @@ const textButtonClass = 'rounded text-xs font-medium text-gray-500 underline-off
 const destinationValue = (destination: HouseholdDestination) => destination.kind === 'existing' ? `existing:${destination.familyId}` : destination.kind;
 
 export default function HouseholdChoiceEditor({ plan, baseGroups, edits, onChange, onPreview, needsPreview, previewing = false, disabled = false, error }: HouseholdChoiceEditorProps) {
+  const [showSaved, setShowSaved] = useState(false);
   const [nameEditor, setNameEditor] = useState<{ groupId: string; previousEdit: HouseholdChoiceEdits[string] | undefined } | null>(null);
   if (plan.version !== 2) return <p role="alert">Household choices have changed. Refresh this review before applying.</p>;
   if (!plan.groups.length) return null;
+  const isResolved = (group: HouseholdChoiceGroup) => group.saved && !group.membershipChoice && !group.invalidReason && !edits[group.id];
+  const savedCount = plan.groups.filter(isResolved).length;
+  const visibleGroups = plan.groups.filter(group => showSaved || !isResolved(group));
   const update = (id: string, value: HouseholdChoiceEdits[string]) => onChange({ ...edits, [id]: value });
   const reset = (id: string) => {
     const next = { ...edits };
@@ -60,12 +65,15 @@ export default function HouseholdChoiceEditor({ plan, baseGroups, edits, onChang
   const missingCreateName = Object.values(edits).some((edit) => edit.destination.kind === 'create' && !edit.displayName?.trim());
   const localName = (id: number | null) => id === null ? 'No family' : plan.localFamilies.find((family) => family.id === id)?.familyName;
   return <section aria-label="LMPG household choices" className="space-y-3">
-    <div>
+    {visibleGroups.length > 0 && <div>
       <h3 className="text-lg font-semibold text-gray-950 dark:text-white">Choose a household for LMPG</h3>
-      <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Keep the current arrangement, choose an existing LMPG family, or create one for everyone on a card.</p>
-    </div>
-    <fieldset disabled={disabled || previewing} className="space-y-3">
-      {plan.groups.map((group) => {
+      <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">LMPG keeps a person’s current family when it matches one of their Planning Center households. Choose an attendance family for anyone who still needs one.</p>
+    </div>}
+    {savedCount > 0 && <button type="button" aria-expanded={showSaved} className={textButtonClass} onClick={() => setShowSaved(open => !open)}>
+      {showSaved ? 'Hide saved household choices' : 'Manage saved household choices'} ({savedCount})
+    </button>}
+    {visibleGroups.length > 0 && <fieldset disabled={disabled || previewing} className="space-y-3">
+      {visibleGroups.map((group) => {
         const base = baseGroups.find((entry) => entry.id === group.id) || group;
         const edit = edits[group.id];
         const requiresForget = !!base.invalidReason && !base.sourceChanged;
@@ -85,6 +93,28 @@ export default function HouseholdChoiceEditor({ plan, baseGroups, edits, onChang
         const canRename = !!targetFamily && !requiresForget && !forgetting;
         const unavailable = destination.kind === 'existing' && !targetFamily;
         const decision = plan.decisions.find((entry) => entry.groupId === group.id);
+        if (group.membershipChoice) {
+          const selected = edit?.destination.kind === 'household' ? edit.destination.externalFamilyId : '';
+          const target = group.sourceHouseholds.find(household => household.externalFamilyId === selected);
+          return <div key={group.id} role="group" aria-label={`Household choice for ${title}`} className="space-y-2 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+            <label htmlFor={`household-${group.id}`} className="block font-semibold">Attendance family for {title}</label>
+            <p className="text-sm text-gray-600 dark:text-gray-300">Current LMPG family · {group.people[0].currentFamilyName || 'Unassigned'}</p>
+            <select id={`household-${group.id}`} className={inputClass} value={selected} disabled={!!base.invalidReason}
+              onChange={event => event.target.value
+                ? update(group.id, { destination: { kind: 'household', externalFamilyId: event.target.value } })
+                : reset(group.id)}>
+              <option value="">Choose a Planning Center household…</option>
+              {group.sourceHouseholds.map(household => <option key={household.externalFamilyId} value={household.externalFamilyId} disabled={household.ownershipConflict}>
+                {household.name} — {household.members.map(member => nameOf(member) || member.externalPersonId).join(', ')} (PCO #{household.externalFamilyId})
+              </option>)}
+            </select>
+            {base.invalidReason && <p role="alert" className="text-sm text-amber-700 dark:text-amber-300">{base.invalidReason}</p>}
+            {base.saved && base.invalidReason && <button type="button" className={textButtonClass} onClick={() => update(group.id, { destination: { kind: 'forget' } })}>Forget saved choice</button>}
+            {target && <p className="text-sm">{target.localFamilyId
+              ? `On apply, ${title} will use ${localName(target.localFamilyId)} on the attendance roll.`
+              : `On apply, LMPG will create a family for ${target.name} if needed and place ${title} there.`}</p>}
+          </div>;
+        }
         return <div key={group.id} role="group" aria-label={`Household choice for ${title}`} className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 className="font-semibold text-gray-950 dark:text-white">{title}</h4>
@@ -183,8 +213,8 @@ export default function HouseholdChoiceEditor({ plan, baseGroups, edits, onChang
         {needsPreview ? <p role="status" className="text-sm text-amber-800 dark:text-amber-200">Preview your household choices before applying.</p>
           : Object.keys(edits).length > 0 && <p role="status" className="text-sm text-gray-600 dark:text-gray-300">Preview ready. These choices are saved only when you apply.</p>}
       </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400">Apply updates the LMPG households shown in your preview and remembers your choices until Planning Center household membership changes.</p>
-    </fieldset>
+      <p className="text-xs text-gray-500 dark:text-gray-400">Applying the preview saves your choices in LMPG. A person keeps their attendance family while it matches one of their Planning Center households.</p>
+    </fieldset>}
     {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">{error}</p>}
   </section>;
 }

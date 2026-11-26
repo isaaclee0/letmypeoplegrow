@@ -522,6 +522,7 @@ export interface PeopleSyncReviewContext {
 // also carries a `presenceProjection` field the sanitizer deliberately
 // drops before it ever reaches a route response.
 export type HouseholdDestination =
+  | { kind: 'household'; externalFamilyId: string }
   | { kind: 'keep' }
   | { kind: 'existing'; familyId: number }
   | { kind: 'create' }
@@ -535,6 +536,7 @@ export interface HouseholdChoiceEdit {
 export type HouseholdChoiceEdits = Record<string, HouseholdChoiceEdit>;
 
 export interface HouseholdChoiceGroup {
+  membershipChoice?: boolean;
   id: string;
   people: Array<PeopleSyncPersonName & {
     externalPersonId: string;
@@ -545,6 +547,8 @@ export interface HouseholdChoiceGroup {
   }>;
   sourceHouseholds: Array<{
     externalFamilyId: string;
+    localFamilyId?: number | null;
+    ownershipConflict?: boolean;
     name: string;
     members: Array<PeopleSyncPersonName & { externalPersonId: string; inSource: boolean }>;
   }>;
@@ -563,6 +567,7 @@ export interface HouseholdLocalFamily {
 }
 
 export interface HouseholdPreference {
+  selectedExternalFamilyId?: string;
   externalPersonId: string;
   individualId: number;
   familyId: number | null;

@@ -1,6 +1,7 @@
 'use strict';
 
 const authority = require('./authority');
+const { upsertFamilyLinkWithConnection } = require('./linkRepository');
 const repository = require('./householdChoiceRepository');
 const { canonicalHouseholdChoices } = require('./householdChoices');
 
@@ -19,6 +20,18 @@ function validateHouseholdChoiceSelections(plan, selections = {}) {
     throw invalid('Local household choices require an authoritative Planning Center review.', 'SYNC_SELECTIONS_INVALID');
   }
   return submitted;
+}
+
+async function linkedHousehold(conn, churchId, externalId) {
+  const rows = await conn.query(`SELECT f.id, f.planning_center_id, l.external_family_id
+    FROM families f LEFT JOIN external_family_links l ON l.church_id = f.church_id
+      AND l.provider = 'planning_center' AND l.family_id = f.id
+    WHERE f.church_id = ? AND (f.planning_center_id = ? OR l.external_family_id = ?)`, [churchId, externalId, externalId]);
+  if (!rows.length) return null;
+  const [row] = rows;
+  if (rows.length !== 1 || (row.planning_center_id && row.planning_center_id !== externalId) ||
+      (row.external_family_id && row.external_family_id !== externalId)) throw invalid('PCO household ownership changed.');
+  return row;
 }
 
 async function assertHouseholdChoicesWithConnection(conn, { churchId, provider, plan, selections, reviewedApply, allowedMutationBuckets, accepted }) {
@@ -53,6 +66,10 @@ async function assertHouseholdChoicesWithConnection(conn, { churchId, provider, 
         !Array.isArray(decision.people) || !decision.people.length) throw invalid('The local household decision changed.');
     groupIds.add(decision.groupId);
     if (decision.destination.kind === 'forget') continue;
+    if (decision.destination.kind === 'household') {
+      const owner = await linkedHousehold(conn, churchId, decision.destination.externalFamilyId);
+      if ((owner?.id ?? null) !== decision.targetFamilyId) throw invalid('The selected Planning Center household changed.');
+    }
     for (const person of decision.people) {
       if (claimed.has(person.individualId) || otherMoves.has(person.individualId) ||
           accepted?.acceptedArchiveIndividualIds?.has(person.individualId)) throw invalid('Local household choices conflict with another selected action.');
@@ -99,13 +116,30 @@ async function persistHouseholdChoicesWithConnection(conn, { churchId, provider,
       continue;
     }
     let familyId = destination.kind === 'existing' ? destination.familyId : null;
+    if (destination.kind === 'household') {
+      const externalId = destination.externalFamilyId;
+      const owner = await linkedHousehold(conn, churchId, externalId);
+      familyId = owner?.id ?? null;
+      if (familyId === null) {
+        const created = await conn.query('INSERT INTO families (church_id, family_name, planning_center_id, created_by) VALUES (?, ?, ?, ?)',
+          [churchId, decision.resolvedName, externalId, userId || null]);
+        familyId = created.insertId;
+        result.addFamilies++;
+      } else if (!owner.planning_center_id) {
+        await conn.query('UPDATE families SET planning_center_id = ? WHERE church_id = ? AND id = ?', [externalId, churchId, familyId]);
+      }
+      if (!owner?.external_family_id) {
+        await upsertFamilyLinkWithConnection(conn, { churchId, provider, externalFamilyId: externalId, familyId, linkSource: 'manual' });
+        result.linkFamilies++;
+      }
+    }
     if (destination.kind === 'create') {
       const inserted = await conn.query('INSERT INTO families (church_id, family_name, created_by) VALUES (?, ?, ?)',
         [churchId, decision.resolvedName, userId || null]);
       familyId = inserted.insertId;
       result.addFamilies++;
     }
-    if (decision.resolvedName && destination.kind !== 'create') {
+    if (decision.resolvedName && destination.kind !== 'create' && destination.kind !== 'household') {
       const renamedId = familyId ?? decision.people[0].fromFamilyId;
       if (renamedFamilies.has(renamedId)) {
         if (renamedFamilies.get(renamedId) !== decision.resolvedName) throw invalid('Local household names conflict across cards.');
@@ -126,7 +160,8 @@ async function persistHouseholdChoicesWithConnection(conn, { churchId, provider,
         result.moveFamily++;
       }
       preferences.push({ externalPersonId: person.externalPersonId, individualId: person.individualId, familyId: targetId, groupId: decision.groupId,
-        sourceFingerprint: person.sourceFingerprint });
+        sourceFingerprint: person.sourceFingerprint,
+        ...(destination.kind === 'household' ? { selectedExternalFamilyId: destination.externalFamilyId } : {}) });
     }
   }
   // A genuine PCO change can supersede an earlier local decision through the

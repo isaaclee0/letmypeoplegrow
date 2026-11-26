@@ -111,7 +111,7 @@ test('combined link-correction and household previews work in null scope and cov
   assert.equal(household.plan.householdChoices.version, 2);
 }));
 
-test('one household decision covers overlapping list members and applies with all gathering changes', async () => withTestChurchDb(async (churchId) => {
+test('one household decision per person covers overlapping lists and applies with all gathering changes', async () => withTestChurchDb(async (churchId) => {
   const state = await fixture(churchId, { linked: true });
   for (const name of ['morning', 'evening']) {
     const entry = state.snapshots.get(name);
@@ -121,12 +121,13 @@ test('one household decision covers overlapping list members and applies with al
       memberExternalIds: ['shared', 'evening-only'], householdMemberExternalIds: ['shared', 'evening-only'] }));
   }
   const base = await orchestrator.buildReview(state.input, state.deps);
-  assert.equal(base.plan.householdChoices.groups.length, 1);
-  const [group] = base.plan.householdChoices.groups;
-  assert.deepEqual(group.people.map(({ externalPersonId }) => externalPersonId).sort(), ['evening-only', 'shared']);
-  const householdChoices = { [group.id]: { destination: { kind: 'create' }, displayName: 'Our local family' } };
+  const groups = base.plan.householdChoices.groups;
+  assert.equal(groups.length, 2);
+  assert.ok(groups.every(group => group.people.length === 1));
+  assert.deepEqual(groups.map(group => group.people[0].externalPersonId).sort(), ['evening-only', 'shared']);
+  const householdChoices = Object.fromEntries(groups.map(group => [group.id, { destination: { kind: 'household', externalFamilyId: 'b' } }]));
   const review = await orchestrator.previewHouseholdChoices({ ...state.input, baseReviewToken: base.reviewToken, householdChoices }, state.deps);
-  assert.equal(review.plan.householdChoices.decisions.length, 1);
+  assert.equal(review.plan.householdChoices.decisions.length, 2);
   await apply(state, review, { selections: { ...selections(review), householdChoices } });
   const families = await Database.query('SELECT family_id FROM individuals WHERE church_id = ? ORDER BY id', [churchId]);
   assert.ok(families[0].family_id);

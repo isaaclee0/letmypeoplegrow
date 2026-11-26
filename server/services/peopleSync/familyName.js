@@ -31,4 +31,9 @@ function hasConfirmedNoHousehold(person, families = []) {
       .some(id => String(id) === String(person.id)));
 }
 
-module.exports = { buildFamilyName, buildSinglePersonFamilyName, hasConfirmedNoHousehold };
+function creationHouseholdId(provider, person) {
+  if (provider === 'planning_center' && person?.householdIds?.length > 1) return null;
+  return person?.familyId ?? null;
+}
+
+module.exports = { creationHouseholdId, buildFamilyName, buildSinglePersonFamilyName, hasConfirmedNoHousehold };

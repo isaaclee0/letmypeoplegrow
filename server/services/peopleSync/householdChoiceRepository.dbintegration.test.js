@@ -63,3 +63,16 @@ test('an existing connection cannot select another church individual or mutate a
     assert.deepEqual(await listHouseholdPreferences(churchId, provider), [pref(individualId)]);
   });
 });
+
+test('opening a pre-upgrade church retains its saved local choices and adds the optional PCO household ID', async () => {
+  await withTestChurchDb(async churchId => {
+    const individualId = await seed(churchId);
+    const oldChoice = pref(individualId);
+    await Database.transactionForChurch(churchId, conn => persistHouseholdPreferencesWithConnection(conn, { churchId, provider, changes: [oldChoice] }));
+    Database.getChurchDb(churchId).exec('ALTER TABLE people_sync_local_households DROP COLUMN selected_external_family_id');
+    Database.closeChurchDb(churchId);
+    assert.deepEqual(await listHouseholdPreferences(churchId, provider), [oldChoice]);
+    const columns = Database.getChurchDb(churchId).prepare('PRAGMA table_info(people_sync_local_households)').all();
+    assert.ok(columns.some(column => column.name === 'selected_external_family_id'));
+  });
+});
