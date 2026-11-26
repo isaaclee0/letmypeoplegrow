@@ -33,6 +33,12 @@ function previewRows(people: VisitorName[]): Row[] {
   });
 }
 
+function sharedAdultSurname(people: VisitorName[]): string {
+  const names = people.filter(person => !person.isChild).map(person => person.lastName.trim()).filter(Boolean);
+  const first = names[0] ?? '';
+  return names.every(name => name.toLowerCase() === first.toLowerCase()) ? first : '';
+}
+
 export default function AddVisitorModal({ gatheringId, date, visitorId, canSetType, onSaved, onClose }: Props) {
   const [details, setDetails] = useState<VisitorDetails | null>(null);
   const [entry, setEntry] = useState('');
@@ -69,7 +75,15 @@ export default function AddVisitorModal({ gatheringId, date, visitorId, canSetTy
   const issue = preview.familySurname && countTotal > MAX_VISITORS ? 'Add up to 10 people at a time.' : preview.issue;
   const parsed = preview.familySurname && !issue ? countedVisitors(counts.adults, counts.children, preview.familySurname) : preview.people;
   const baseRows = details ? details.people.map(person => ({ ...person, key: String(person.id) })) : previewRows(parsed);
-  const rows = [...baseRows, ...additional].filter(p => changes[p.key] !== null).map(p => ({ ...p, ...changes[p.key] }));
+  const enteredRows = [...baseRows, ...additional].filter(p => changes[p.key] !== null).map(p => ({ ...p, ...changes[p.key] }));
+  const adultSurname = sharedAdultSurname(enteredRows);
+  const savedAdultSurname = details && sharedAdultSurname(details.people);
+  const rows = enteredRows.map(person => {
+    if (!adultSurname || !person.isChild || person.locked || person.lastName || changes[person.key]?.lastName !== undefined) return person;
+    // A blank saved alongside a known adult surname may have been intentional.
+    if (person.id && savedAdultSurname && !changes[person.key]?.isChild) return person;
+    return { ...person, lastName: adultSurname };
+  });
   const blankSurnames = rows.filter(person => !person.locked && !person.lastName.trim());
   const surnameSource = rows.find(person => person.key === surnameSourceKey && person.lastName.trim())
     ?? rows.find(person => person.lastName.trim());

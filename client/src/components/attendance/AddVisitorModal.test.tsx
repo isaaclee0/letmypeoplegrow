@@ -24,7 +24,7 @@ it('previews the family, retains a correction while typing, and submits a family
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   expect(save.mock.calls[0][2]).toMatchObject({ notes: 'Asked about kids club', people: [
     { firstName: 'John', lastName: 'Smith' }, { firstName: 'Judy', lastName: 'Smith' },
-    { firstName: 'Lucy', lastName: '', isChild: true }, { firstName: 'Child 2', isChild: true }
+    { firstName: 'Lucy', lastName: 'Smith', isChild: true }, { firstName: 'Child 2', lastName: 'Smith', isChild: true }
   ] });
 });
 
@@ -60,6 +60,8 @@ it('fills blank surnames from the edited person and preserves other surnames', a
   const save = vi.spyOn(attendanceAPI, 'createVisitorDetails').mockResolvedValue({} as never);
   render(<AddVisitorModal gatheringId={7} date="2026-11-26" canSetType={false} onClose={vi.fn()} onSaved={vi.fn()} />);
   fireEvent.change(screen.getByLabelText('Who came?'), { target: { value: 'John Brown + Judy, 2 children' } });
+  expect(screen.getByLabelText('Surname 2')).toHaveValue('');
+  expect(screen.getByLabelText('Surname 3')).toHaveValue('Brown');
   fireEvent.change(screen.getByLabelText('Surname 2'), { target: { value: 'Smith' } });
   expect(screen.getByLabelText('Surname 3')).toHaveValue('');
   fireEvent.click(screen.getByRole('button', { name: 'Fill 2 blank surnames with Smith' }));
@@ -69,6 +71,53 @@ it('fills blank surnames from the edited person and preserves other surnames', a
   fireEvent.click(screen.getByRole('button', { name: 'Add 4 visitors' }));
   await waitFor(() => expect(save).toHaveBeenCalled());
   expect(save.mock.calls[0][2].people.map(p => p.lastName)).toEqual(['Brown', 'Smith', 'Smith', 'Smith']);
+});
+
+it('updates inherited surnames while keeping a named child, a manual override and an explicitly cleared surname', async () => {
+  const save = vi.spyOn(attendanceAPI, 'createVisitorDetails').mockResolvedValue({} as never);
+  render(<AddVisitorModal gatheringId={7} date="2026-11-26" canSetType={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Who came?'), { target: { value: 'John Smith, 4 kids: Mia Brown, Lucy, Sam and Jo' } });
+  const surname = (n: number) => screen.getByLabelText('Surname ' + n);
+  expect(surname(3)).toHaveValue('Smith');
+  fireEvent.change(surname(3), { target: { value: 'Green' } });
+  fireEvent.change(surname(4), { target: { value: '' } });
+  fireEvent.change(surname(1), { target: { value: 'Jones' } });
+  expect(surname(5)).toHaveValue('Jones');
+  fireEvent.click(screen.getByRole('button', { name: 'Add 5 visitors' }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][2].people.map(p => p.lastName)).toEqual(['Jones', 'Brown', 'Green', '', 'Jones']);
+});
+
+it('uses an adult surname added later for an existing unnamed child and a manually added child', async () => {
+  vi.spyOn(attendanceAPI, 'getVisitorDetails').mockResolvedValue({ data: {
+    familyName: 'John', familyEditable: true, notesEditable: true, notes: '', revision: 'r3', peopleType: 'local_visitor',
+    people: [
+      { id: 21, firstName: 'John', lastName: '', isChild: false },
+      { id: 22, firstName: 'Lucy', lastName: '', isChild: true },
+    ],
+  } } as never);
+  render(<AddVisitorModal visitorId={21} gatheringId={7} date="2026-11-26" canSetType={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+  fireEvent.change(await screen.findByLabelText('Surname 1'), { target: { value: 'Smith' } });
+  expect(screen.getByLabelText('Surname 2')).toHaveValue('Smith');
+  fireEvent.click(screen.getByRole('button', { name: 'Add another person' }));
+  fireEvent.change(screen.getByLabelText('Age group 3'), { target: { value: 'child' } });
+  expect(screen.getByLabelText('Surname 3')).toHaveValue('Smith');
+});
+
+it('preserves a saved blank child surname when reopening a family to edit its note', async () => {
+  vi.spyOn(attendanceAPI, 'getVisitorDetails').mockResolvedValue({ data: {
+    familyName: 'Smith, John', familyEditable: true, notesEditable: true, notes: '', revision: 'r4', peopleType: 'local_visitor',
+    people: [
+      { id: 21, firstName: 'John', lastName: 'Smith', isChild: false },
+      { id: 22, firstName: 'Lucy', lastName: '', isChild: true },
+    ],
+  } } as never);
+  const save = vi.spyOn(attendanceAPI, 'updateVisitorDetails').mockResolvedValue({} as never);
+  render(<AddVisitorModal visitorId={21} gatheringId={7} date="2026-11-26" canSetType={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+  fireEvent.change(await screen.findByLabelText('Family note'), { target: { value: 'Back next week' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][3].people[1].lastName).toBe('');
 });
 
 it('skips locked visitors when filling surnames in an existing family', async () => {
