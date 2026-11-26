@@ -500,6 +500,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </button>
                 </div>}
 
+                {import.meta.env.DEV && <button type="button" onClick={() => navigate('/app/dev/households')}
+                  className="mt-3 text-sm font-medium text-primary-700 underline dark:text-primary-300">
+                  Try the household roster preview
+                </button>}
+
                 <div className="mt-4 flex items-center justify-between">
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Synced lists</p>
                   {editingBatch === null && (

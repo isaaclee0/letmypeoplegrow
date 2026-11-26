@@ -33,6 +33,9 @@ import PendingApprovalPage from './pages/PendingApprovalPage';
 const SyncDecisionPrototypePage = import.meta.env.DEV
   ? React.lazy(() => import('./dev/SyncDecisionPrototypePage'))
   : null;
+const HouseholdRosterPreview = import.meta.env.DEV
+  ? React.lazy(() => import('./dev/HouseholdRosterPreview'))
+  : null;
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -228,6 +231,13 @@ function App() {
                       </RoleProtectedRoute>
                     }
                   />
+                  {HouseholdRosterPreview && (
+                    <Route path="dev/households" element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <React.Suspense fallback={<LoadingSpinner />}><HouseholdRosterPreview /></React.Suspense>
+                      </RoleProtectedRoute>
+                    } />
+                  )}
                   {SyncDecisionPrototypePage && (
                     <Route
                       path="dev/sync-review"
