@@ -59,6 +59,12 @@ function formatLastSyncResult(result: PeopleSyncBatch['lastSyncResult']): string
   return counts.length > 0 ? counts.join(' · ') : 'completed';
 }
 
+function focusListEditor(editor: HTMLElement | null) {
+  if (!editor) return;
+  editor.focus({ preventScroll: true });
+  editor.scrollIntoView?.({ block: 'start' });
+}
+
 const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & PeopleSyncPanelProps & { initialAction?: 'disconnect' }> = ({
   status,
   refreshStatus,
@@ -91,6 +97,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [batchNotice, setBatchNotice] = useState<string | null>(null);
   const [syncStats, setSyncStats] = useState<{ totalPeople: number; syncedPeople: number } | null>(null);
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
+  const editingButtonRef = useRef<HTMLButtonElement>(null);
   const [legacyBatchPendingDelete, setLegacyBatchPendingDelete] = useState<PeopleSyncBatch | null>(null);
   const [legacyBatchDeleting, setLegacyBatchDeleting] = useState(false);
   const [legacyBatchDeleteError, setLegacyBatchDeleteError] = useState<string | null>(null);
@@ -302,6 +309,24 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     && !peopleSyncSettings.pendingAuthorityProvider && !batchesLoading && !batchesError
     && enabledBatches.length > 0 && enabledBatches.every((batch) => batch.reviewable && batch.operationalState !== 'prepared');
   const legacyBatches = batches.filter((batch) => batch.legacyProviderBatchId !== null);
+  const editingBatchId = editingBatch === 'new' ? null : editingBatch?.id;
+
+  const batchEditor = editingBatch !== null && (
+    <PlanningCenterBatchEditor
+      batch={editingBatch === 'new' ? null : editingBatch}
+      onSaved={() => {
+        if (peopleSyncSettings.authorityProvider === 'planning_center') {
+          navigate('/app/settings/integrations/planning-center/review');
+        } else {
+          navigate(`/app/settings/integrations/planning-center/authority-review${editingBatch === 'new' ? '?reason=first-batch' : ''}`);
+        }
+      }}
+      onCancel={() => {
+        editingButtonRef.current?.focus();
+        setEditingBatch(null);
+      }}
+    />
+  );
 
   const peopleSourceControl = peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider !== 'planning_center' ? (
     <PeopleSourceControl
@@ -519,21 +544,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 {batchNotice && <p role="status" className="mt-2 text-sm text-green-700 dark:text-green-300">{batchNotice}</p>}
                 {batchesLoading && <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading lists…</p>}
 
-                {editingBatch !== null && (
-                  <div className="mt-3">
-                    <PlanningCenterBatchEditor
-                      batch={editingBatch === 'new' ? null : editingBatch}
-                      onSaved={() => {
-                        if (peopleSyncSettings.authorityProvider === 'planning_center') {
-                          navigate('/app/settings/integrations/planning-center/review');
-                        } else {
-                          navigate(`/app/settings/integrations/planning-center/authority-review${editingBatch === 'new' ? '?reason=first-batch' : ''}`);
-                        }
-                      }}
-                      onCancel={() => setEditingBatch(null)}
-                    />
-                  </div>
-                )}
+                {editingBatch === 'new' && <div className="mt-3">{batchEditor}</div>}
 
                 {!batchesLoading && modernBatches.length === 0 && editingBatch === null && (
                   <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No synced lists yet — add one to start importing people from Planning Center.</p>
@@ -571,11 +582,18 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           )}
                         </div>
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
+                          <button type="button" ref={editingBatchId === batch.id ? editingButtonRef : null}
+                            aria-expanded={editingBatchId === batch.id} onClick={() => setEditingBatch(batch)}
+                            className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
                           {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard source draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>
                       </div>
+                      {editingBatchId === batch.id && (
+                        <section ref={focusListEditor} tabIndex={-1} aria-label={`Edit ${batch.name}`} className="mt-3 scroll-mt-3">
+                          {batchEditor}
+                        </section>
+                      )}
                     </li>
                   ))}
                 </ul>

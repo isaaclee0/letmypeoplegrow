@@ -34,10 +34,11 @@ vi.mock('../../services/api', () => ({
 }));
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
 vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({
-  default: ({ onSaved }: { onSaved: (savedBatch: PeopleSyncBatch) => void }) => (
+  default: ({ onSaved, onCancel }: { onSaved: (savedBatch: PeopleSyncBatch) => void; onCancel: () => void }) => (
     <div>
       Batch editor
       <button type="button" onClick={() => onSaved({ id: 48 } as PeopleSyncBatch)}>Save mocked batch</button>
+      <button type="button" onClick={onCancel}>Cancel</button>
     </div>
   ),
 }));
@@ -329,6 +330,25 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save mocked batch' }));
 
     expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/review');
+  });
+
+  it('opens the editor inside the selected list and returns focus to Edit on cancel', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({ data: { batches: [batch, { ...batch, id: 13, name: 'Youth' }] } });
+    renderPanel();
+    await screen.findByText('Youth');
+    const [members, youth] = screen.getAllByRole('listitem');
+    const youthEdit = within(youth).getByRole('button', { name: 'Edit' });
+
+    await userEvent.click(within(members).getByRole('button', { name: 'Edit' }));
+    expect(within(members).getByText('Batch editor')).toBeInTheDocument();
+    await userEvent.click(youthEdit);
+    const editor = within(youth).getByRole('region', { name: 'Edit Youth' });
+    expect(editor).toHaveFocus();
+    expect(within(members).queryByText('Batch editor')).not.toBeInTheDocument();
+
+    await userEvent.click(within(editor).getByRole('button', { name: 'Cancel' }));
+    expect(youthEdit).toHaveFocus();
+    expect(screen.queryByText('Batch editor')).not.toBeInTheDocument();
   });
 
   it('retains modern batch edit and delete mutations beside dedicated review navigation', async () => {

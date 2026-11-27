@@ -1,11 +1,11 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2026-11-26T07:21:08.285Z
-// App Version: 2.4.0
-// Build Timestamp: 1795677668283
+// Generated on 2026-11-27T20:33:48.471Z
+// App Version: 2.4.1
+// Build Timestamp: 1795811628469
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v2.4.0-1795677668283';
-const APP_VERSION = '2.4.0';
+const CACHE_NAME = 'let-my-people-grow-v2.4.1-1795811628469';
+const APP_VERSION = '2.4.1';
 const urlsToCache = [
   '/',
   '/manifest.json',
