@@ -153,13 +153,11 @@ const sanitizeObject = (obj, path = '') => {
   }
   
   if (typeof obj === 'object') {
-    const sanitized = {};
-    for (const [key, value] of Object.entries(obj)) {
+    return Object.fromEntries(Object.entries(obj).map(([key, value]) => {
       const sanitizedKey = sanitizeString(key);
       const newPath = path ? `${path}.${sanitizedKey}` : sanitizedKey;
-      sanitized[sanitizedKey] = sanitizeObject(value, newPath);
-    }
-    return sanitized;
+      return [sanitizedKey, sanitizeObject(value, newPath)];
+    }));
   }
   
   return obj;
@@ -173,9 +171,14 @@ const sanitizeInput = (req, res, next) => {
       req.body = sanitizeObject(req.body, 'body');
     }
     
-    // Sanitize query parameters
-    if (req.query && typeof req.query === 'object') {
-      req.query = sanitizeObject(req.query, 'query');
+    const query = req.query;
+    if (query && typeof query === 'object') {
+      // Express 5 reparses the query in a getter. Keep the cleaned value for downstream routes.
+      Object.defineProperty(req, 'query', {
+        configurable: true,
+        enumerable: true,
+        value: sanitizeObject(query, 'query'),
+      });
     }
     
     // Sanitize route parameters
@@ -229,42 +232,6 @@ const detectSQLInjection = (req, res, next) => {
       details: 'Your request has been blocked due to potentially malicious content.'
     });
   }
-};
-
-// File upload security middleware
-const secureFileUpload = (allowedTypes = ['text/csv'], maxSize = 5 * 1024 * 1024) => {
-  return (req, res, next) => {
-    if (req.file) {
-      // Check file type
-      if (!allowedTypes.includes(req.file.mimetype)) {
-        return res.status(400).json({
-          error: 'Invalid file type',
-          details: `Only ${allowedTypes.join(', ')} files are allowed`
-        });
-      }
-      
-      // Check file size
-      if (req.file.size > maxSize) {
-        return res.status(400).json({
-          error: 'File too large',
-          details: `Maximum file size is ${Math.round(maxSize / 1024 / 1024)}MB`
-        });
-      }
-      
-      // Check filename for path traversal
-      if (req.file.originalname.includes('..') || req.file.originalname.includes('/') || req.file.originalname.includes('\\')) {
-        return res.status(400).json({
-          error: 'Invalid filename',
-          details: 'Filename contains invalid characters'
-        });
-      }
-      
-      // Sanitize filename
-      req.file.originalname = sanitizeString(req.file.originalname);
-    }
-    
-    next();
-  };
 };
 
 // Rate limiting for security-sensitive endpoints
@@ -373,7 +340,6 @@ const validateInput = (validationRules = {}) => {
 module.exports = {
   sanitizeInput,
   detectSQLInjection,
-  secureFileUpload,
   createSecurityRateLimit,
   validateEmail,
   validatePhoneNumber,
@@ -382,4 +348,4 @@ module.exports = {
   sanitizeObject,
   churchIdGuessingLimiter,
   authAttemptLimiter
-}; 
+};

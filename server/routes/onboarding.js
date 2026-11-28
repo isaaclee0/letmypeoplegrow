@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const uploadCsv = require('../middleware/csvUpload');
 const csv = require('csv-parser');
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +7,7 @@ const { body, validationResult } = require('express-validator');
 
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
-const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
+const { createSecurityRateLimit, sanitizeString } = require('../middleware/security');
 const { getSupportedCountries, supportsMobileNumbers } = require('../utils/phoneNumber');
 const { normalizeTimeZone, timeZoneFromCoordinates, getChurchDate, getZonedParts, addDateOnly, loadChurchTimeZone } = require('../utils/churchTime');
 const {
@@ -188,21 +188,6 @@ const saveOnboardingProgress = async (churchId, userId, currentStep, data = {}, 
     console.error('Save onboarding progress error:', error);
   }
 };
-
-// Configure multer for CSV uploads
-const upload = multer({ 
-  dest: 'uploads/',
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only CSV files are allowed'), false);
-    }
-  },
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  }
-});
 
 // Check onboarding status
 router.get('/status', verifyToken, requireRole(['admin']), async (req, res) => {
@@ -465,8 +450,17 @@ router.post('/upload-csv/:gatheringId',
   verifyToken,
   requireRole(['admin', 'coordinator']),
   createSecurityRateLimit(15 * 60 * 1000, 5), // 5 uploads per 15 minutes
-  upload.single('csvFile'),
-  secureFileUpload(['text/csv'], 5 * 1024 * 1024), // 5MB limit
+  async (req, res, next) => {
+    const gatherings = await Database.query(
+      'SELECT id FROM gathering_types WHERE id = ? AND created_by = ? AND church_id = ?',
+      [req.params.gatheringId, req.user.id, req.user.church_id]
+    );
+    if (!gatherings.length) {
+      return res.status(404).json({ error: 'Gathering not found or access denied' });
+    }
+    next();
+  },
+  uploadCsv,
   auditLog('ONBOARDING_UPLOAD_CSV'),
   async (req, res) => {
     const { gatheringId } = req.params;
@@ -476,16 +470,6 @@ router.post('/upload-csv/:gatheringId',
     }
 
     try {
-      // Verify gathering exists and user has access
-      const gatherings = await Database.query(
-        'SELECT id FROM gathering_types WHERE id = ? AND created_by = ?',
-        [gatheringId, req.user.id]
-      );
-
-      if (gatherings.length === 0) {
-        return res.status(404).json({ error: 'Gathering not found or access denied' });
-      }
-
       const results = [];
       const filePath = req.file.path;
 

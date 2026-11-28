@@ -22,5 +22,5 @@ RUN mkdir -p uploads data/churches
 # Expose port
 EXPOSE 3001
 
-# Start with nodemon for development
+# Start the server in Node's watch mode
 CMD ["npm", "run", "dev"]

@@ -1,6 +1,6 @@
 // Pure helpers for the reports attendance export (CSV / TSV / XLSX).
 // buildExportTable produces { headers, rows }; the to* functions serialize it.
-const ExcelJS = require('exceljs');
+const writeExcelFile = require('write-excel-file/node');
 
 function formatDateHeader(dateString) {
   if (!dateString) return '';
@@ -131,14 +131,12 @@ function toTsv(table) {
     .join('\n');
 }
 
-async function toXlsx(table) {
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet('Attendance');
-  worksheet.addRow(table.headers);
-  worksheet.getRow(1).font = { bold: true };
-  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
-  table.rows.forEach(row => worksheet.addRow(row));
-  return Buffer.from(await workbook.xlsx.writeBuffer());
+function toXlsx(table) {
+  const header = table.headers.map(value => ({ value, fontWeight: 'bold' }));
+  return writeExcelFile([header, ...table.rows], {
+    sheet: 'Attendance',
+    stickyRowsCount: 1,
+  }, { fontFamily: 'Calibri', fontSize: 11 }).toBuffer();
 }
 
 module.exports = { buildExportTable, toCsv, toTsv, toXlsx };

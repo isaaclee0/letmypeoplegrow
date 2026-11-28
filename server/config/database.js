@@ -1291,22 +1291,22 @@ class Database {
     registryDb.prepare('UPDATE churches SET is_approved = ? WHERE church_id = ?').run(approved ? 1 : 0, churchId);
   }
 
-  static migrateRegistry() {
-    if (!registryDb) return;
-    const cols = registryDb.prepare('PRAGMA table_info(churches)').all();
+  static migrateRegistry(db = registryDb) {
+    if (!db) return;
+    const cols = db.prepare('PRAGMA table_info(churches)').all();
     if (!cols.some(c => c.name === 'is_approved')) {
-      registryDb.exec('ALTER TABLE churches ADD COLUMN is_approved INTEGER DEFAULT 0');
+      db.exec('ALTER TABLE churches ADD COLUMN is_approved INTEGER DEFAULT 0');
       // Approve all existing churches so they aren't locked out
-      registryDb.exec('UPDATE churches SET is_approved = 1');
+      db.exec('UPDATE churches SET is_approved = 1');
       console.log('✅ Registry migration: added is_approved column, approved all existing churches');
     }
 
-    const lookupCols = registryDb.prepare('PRAGMA table_info(user_lookup)').all();
+    const lookupCols = db.prepare('PRAGMA table_info(user_lookup)').all();
     if (!lookupCols.some(c => c.name === 'person_id')) {
-      registryDb.exec('ALTER TABLE user_lookup ADD COLUMN person_id TEXT');
+      db.exec('ALTER TABLE user_lookup ADD COLUMN person_id TEXT');
       console.log('✅ Registry migration: added person_id column to user_lookup');
     }
-    registryDb.exec('CREATE INDEX IF NOT EXISTS idx_user_lookup_person ON user_lookup(person_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_user_lookup_person ON user_lookup(person_id)');
   }
 
   static getRegistryDb() {

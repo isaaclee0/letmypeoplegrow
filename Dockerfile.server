@@ -10,8 +10,8 @@ WORKDIR /app
 # Copy package files
 COPY server/package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install the dependency versions recorded in the lockfile.
+RUN npm ci
 
 # Copy only necessary source files
 COPY server/index.js ./
@@ -26,7 +26,6 @@ COPY server/schema ./schema
 COPY server/scripts ./scripts
 COPY server/uploads ./uploads
 COPY server/admin ./admin
-COPY server/package*.json ./
 
 # Runtime configuration and credentials are injected through environment
 # variables or orchestrator-managed secret facilities; never bake .env files.

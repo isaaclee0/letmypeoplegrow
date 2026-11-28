@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const uploadCsv = require('../middleware/csvUpload');
 const csv = require('csv-parser');
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +7,7 @@ const { body, validationResult } = require('express-validator');
 
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog, requireGatheringAccess } = require('../middleware/auth');
-const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
+const { createSecurityRateLimit, sanitizeString } = require('../middleware/security');
 const { getAuthority, getPeopleSyncPolicy, lockedResponse } = require('../services/peopleSync/authority');
 
 // CSV upload creates regular people, so every configured people authority owns
@@ -26,21 +26,6 @@ async function blockImportsWhenAuthority(req, res, next) {
 
 const router = express.Router();
 
-// Configure multer for CSV uploads
-const upload = multer({ 
-  dest: 'uploads/',
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only CSV files are allowed'), false);
-    }
-  },
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  }
-});
-
 // All routes require authentication
 router.use(verifyToken);
 
@@ -50,8 +35,7 @@ router.post('/upload/:gatheringId',
   requireGatheringAccess,
   blockImportsWhenAuthority,
   createSecurityRateLimit(15 * 60 * 1000, 5), // 5 uploads per 15 minutes
-  upload.single('csvFile'),
-  secureFileUpload(['text/csv'], 5 * 1024 * 1024), // 5MB limit
+  uploadCsv,
   auditLog('CSV_UPLOAD'),
   async (req, res) => {
     const { gatheringId } = req.params;

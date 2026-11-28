@@ -1,8 +1,9 @@
 const express = require('express');
+const { pipeline } = require('node:stream/promises');
+const { promisify } = require('node:util');
 const router = express.Router();
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
-const archiver = require('archiver');
 const logger = require('../config/logger');
 const { getChurchDate, loadChurchTimeZone } = require('../utils/churchTime');
 
@@ -84,6 +85,35 @@ function exportFilename(timeZone, now = new Date()) {
   return `church-data-export-${getChurchDate(now, timeZone)}.zip`;
 }
 
+async function streamChurchExport(churchId, destination, { includeEmptyCsv = true } = {}) {
+  const { default: ZipStream } = await import('zip-stream');
+  const archive = new ZipStream({ zlib: { level: 6 } });
+  const addEntry = promisify(archive.entry.bind(archive));
+
+  async function writeTables() {
+    for (const table of EXPORT_TABLES) {
+      if (archive.destroyed) return;
+      let csv;
+      try {
+        const rows = await Database.queryForChurch(churchId, `SELECT * FROM ${table}`);
+        if (!rows.length) continue;
+        csv = rowsToCsv(rows);
+      } catch (err) {
+        logger.warn(`Export: skipped table ${table}`, { error: err.message });
+        continue;
+      }
+      if (csv || includeEmptyCsv) await addEntry(csv, { name: `${table}.csv` });
+    }
+    archive.finalize();
+  }
+
+  try {
+    await Promise.all([pipeline(archive, destination), writeTables()]);
+  } finally {
+    archive.destroy();
+  }
+}
+
 // GET /api/takeout/export - Download ZIP of all church data as CSVs
 router.get('/export', async (req, res) => {
   const churchId = req.user.church_id;
@@ -94,33 +124,11 @@ router.get('/export', async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(timeZone)}"`);
 
-    const archive = archiver('zip', { zlib: { level: 6 } });
-    archive.on('error', (err) => {
-      logger.error('Archive error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to create export archive' });
-      }
-    });
-    archive.pipe(res);
-
-    for (const table of EXPORT_TABLES) {
-      try {
-        const rows = await Database.queryForChurch(churchId, `SELECT * FROM ${table}`);
-        if (rows.length > 0) {
-          const csv = rowsToCsv(rows);
-          archive.append(csv, { name: `${table}.csv` });
-        }
-      } catch (err) {
-        // Table may not exist or be empty - skip
-        logger.warn(`Export: skipped table ${table}`, { error: err.message });
-      }
-    }
-
-    await archive.finalize();
+    await streamChurchExport(churchId, res);
     logger.info('Data export completed', { userId: req.user.id, churchId });
   } catch (error) {
     logger.error('Export error:', error);
-    if (!res.headersSent) {
+    if (!res.headersSent && !res.destroyed) {
       res.status(500).json({ error: 'Failed to export data' });
     }
   }
@@ -191,5 +199,6 @@ router.post('/delete', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.streamChurchExport = streamChurchExport;
 module.exports.rowsToCsv = rowsToCsv;
 module.exports.exportFilename = exportFilename;

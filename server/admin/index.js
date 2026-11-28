@@ -17,11 +17,11 @@ require('dotenv').config({ path: path.join(__dirname, '../.env'), quiet: true })
 // Import database and backup service
 const Database = require('../config/database');
 const BackupService = require('../services/backup');
-const { restoreChurchDatabase } = require('../services/restoreDatabase');
+const { restoreChurchDatabase, restoreRegistryDatabase } = require('../services/restoreDatabase');
 const logger = require('../config/logger');
 const platformAiSettings = require('../services/platformAiSettings');
 const platformAiModelCatalog = require('../services/platformAiModelCatalog');
-const { rowsToCsv } = require('../routes/takeout');
+const { streamChurchExport } = require('../routes/takeout');
 const organisationReferrals = require('../services/organisationReferrals');
 
 const app = express();
@@ -649,54 +649,13 @@ app.get('/api/audit-log', async (req, res) => {
 app.get('/api/churches/:churchId/export', async (req, res) => {
   try {
     const { churchId } = req.params;
-    const archiver = require('archiver');
-
-    const EXPORT_TABLES = [
-      'church_settings', 'users', 'gathering_types', 'user_gathering_assignments',
-      'families', 'individuals', 'gathering_lists', 'attendance_sessions',
-      'attendance_records', 'headcount_records', 'kiosk_checkins',
-      'notification_rules', 'notifications', 'visitor_config', 'audit_log',
-      'ai_chat_conversations', 'ai_chat_messages', 'user_preferences',
-      'integration_connections',
-    ];
-    const REDACT_COLUMNS = [
-      'brevo_api_key',
-      'anthropic_api_key',
-      'openai_api_key',
-      'elvanto_api_key',
-      'planning_center_tokens',
-      'credential_ciphertext',
-      'credential_nonce',
-      'credential_auth_tag',
-      'credential_key_version',
-    ];
-
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${churchId}-export-${new Date().toISOString().split('T')[0]}.zip"`);
 
-    const archive = archiver('zip', { zlib: { level: 6 } });
-    archive.on('error', (err) => {
-      console.error('Archive error:', err);
-      if (!res.headersSent) res.status(500).json({ error: 'Export failed' });
-    });
-    archive.pipe(res);
-
-    for (const table of EXPORT_TABLES) {
-      try {
-        const rows = await Database.queryForChurch(churchId, `SELECT * FROM ${table}`);
-        if (rows.length > 0) {
-          const csv = rowsToCsv(rows, REDACT_COLUMNS);
-          if (csv) archive.append(csv, { name: `${table}.csv` });
-        }
-      } catch (err) {
-        console.warn(`Export: skipped table ${table}:`, err.message);
-      }
-    }
-
-    await archive.finalize();
+    await streamChurchExport(churchId, res, { includeEmptyCsv: false });
   } catch (error) {
     console.error('Export error:', error);
-    if (!res.headersSent) res.status(500).json({ error: error.message });
+    if (!res.headersSent && !res.destroyed) res.status(500).json({ error: error.message });
   }
 });
 
@@ -1005,6 +964,7 @@ function extractChurchId(filename) {
 
 // Restore from a zip file (all churches + registry)
 app.post('/api/local-backups/restore-zip', async (req, res) => {
+  let tmpDir;
   try {
     const { filename } = req.body;
     if (!filename) return res.status(400).json({ error: 'filename is required' });
@@ -1016,13 +976,11 @@ app.post('/api/local-backups/restore-zip', async (req, res) => {
     }
 
     const AdmZip = require('adm-zip');
-    const BetterSqlite3 = require('better-sqlite3');
     const zip = new AdmZip(zipPath);
     const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     const churchesDir = path.join(dataDir, 'churches');
-    const tmpDir = path.join(dataDir, '.restore-tmp');
-    fs.mkdirSync(tmpDir, { recursive: true });
     fs.mkdirSync(churchesDir, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(dataDir, '.restore-zip-'));
 
     const results = { churches: [], registry: false, errors: [] };
 
@@ -1033,13 +991,8 @@ app.post('/api/local-backups/restore-zip', async (req, res) => {
     const registryTmp = path.join(tmpDir, 'registry.sqlite');
     if (fs.existsSync(registryTmp)) {
       try {
-        // Checkpoint WAL if present
-        checkpointAndCopy(registryTmp, path.join(dataDir, 'registry.sqlite'));
+        await restoreRegistryDatabase(registryTmp, path.join(dataDir, 'registry.sqlite'));
         results.registry = true;
-        // Re-initialize registry
-        Database.closeAll();
-        Database.initialize();
-        Database.migrateRegistry();
       } catch (err) {
         results.errors.push({ target: 'registry', error: err.message });
       }
@@ -1070,9 +1023,6 @@ app.post('/api/local-backups/restore-zip', async (req, res) => {
       }
     }
 
-    // Clean up temp dir
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-
     res.json({
       success: true,
       message: `Restored ${results.churches.length} church(es)${results.registry ? ' + registry' : ''}. OAuth connections were excluded; reconnect them in Settings.`,
@@ -1081,6 +1031,8 @@ app.post('/api/local-backups/restore-zip', async (req, res) => {
   } catch (error) {
     console.error('Local restore zip error:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -1142,13 +1094,7 @@ app.post('/api/local-backups/restore-registry', async (req, res) => {
     const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     const destPath = path.join(dataDir, 'registry.sqlite');
 
-    // Close all connections and reinitialize
-    Database.closeAll();
-
-    checkpointAndCopy(srcPath, destPath);
-
-    Database.initialize();
-    Database.migrateRegistry();
+    await restoreRegistryDatabase(srcPath, destPath);
 
     res.json({
       success: true,
@@ -1159,34 +1105,6 @@ app.post('/api/local-backups/restore-registry', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-/**
- * Checkpoint WAL into the main sqlite file, then copy the clean file to dest.
- * Also removes any existing WAL/SHM at the destination.
- */
-function checkpointAndCopy(srcPath, destPath) {
-  const BetterSqlite3 = require('better-sqlite3');
-
-  // If source has a WAL file, checkpoint it first to merge data into the main file
-  const srcWal = srcPath + '-wal';
-  if (fs.existsSync(srcWal) && fs.statSync(srcWal).size > 0) {
-    const tmpDb = new BetterSqlite3(srcPath);
-    try {
-      tmpDb.pragma('wal_checkpoint(TRUNCATE)');
-    } finally {
-      tmpDb.close();
-    }
-  }
-
-  // Remove destination WAL/SHM files
-  for (const suffix of ['-wal', '-shm']) {
-    const f = destPath + suffix;
-    if (fs.existsSync(f)) fs.unlinkSync(f);
-  }
-
-  // Copy the checkpointed sqlite file
-  fs.copyFileSync(srcPath, destPath);
-}
 
 // ============================================
 // Platform AI Settings (model picker for the weekly review insight

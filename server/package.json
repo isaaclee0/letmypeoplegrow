@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "node --watch --watch-preserve-output index.js",
     "admin": "node admin/index.js",
     "init-db": "node scripts/initDatabase.js",
     "schema:baseline": "node scripts/recordBaselineSchema.js",
@@ -15,34 +15,32 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1019.0",
     "@getbrevo/brevo": "^5.0.3",
-    "adm-zip": "^0.5.16",
-    "archiver": "^7.0.1",
+    "adm-zip": "^0.6.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.8.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.6",
     "csv-parser": "^3.0.0",
     "dotenv": "^17.3.1",
-    "exceljs": "^4.4.0",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.3.1",
+    "express-rate-limit": "^8.5.1",
     "express-validator": "^7.3.1",
     "helmet": "^8.1.0",
     "isomorphic-dompurify": "^3.7.1",
     "jsonwebtoken": "^9.0.3",
     "libphonenumber-js": "^1.12.40",
     "moment": "^2.30.1",
-    "multer": "^2.1.1",
+    "multer": "^2.5.0",
     "node-cron": "^4.2.1",
-    "nodemailer": "^8.0.4",
-    "socket.io": "^4.8.3",
+    "socket.io": "^4.8.4",
     "tz-lookup": "^6.1.25",
     "validator": "^13.15.26",
     "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0"
+    "winston-daily-rotate-file": "^5.0.0",
+    "write-excel-file": "^4.1.1",
+    "zip-stream": "^7.0.5"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.4"
   }
 }

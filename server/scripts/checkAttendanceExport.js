@@ -1,6 +1,7 @@
 // Assertion checks for utils/attendanceExport.js.
 // Run inside the server container: node scripts/checkAttendanceExport.js
 const assert = require('assert');
+const AdmZip = require('adm-zip');
 const { buildExportTable, toCsv, toTsv, toXlsx } = require('../utils/attendanceExport');
 
 const sessions = [
@@ -84,9 +85,13 @@ assert.deepStrictEqual(weeklyTable.rows[0].slice(5), [
   3, 0, 'TRUE', 'FALSE', 'TRUE', 'FALSE', 'TRUE', 'FALSE',
 ]);
 
-// XLSX: produces a non-empty buffer with the xlsx magic bytes (PK zip header)
+// Inspect the workbook itself so a valid ZIP with a missing sheet or header pane fails.
 toXlsx(table).then(buffer => {
-  assert.ok(Buffer.isBuffer(buffer) && buffer.length > 0);
-  assert.strictEqual(buffer.slice(0, 2).toString(), 'PK');
+  assert.ok(Buffer.isBuffer(buffer));
+  const xlsx = new AdmZip(buffer);
+  assert.match(xlsx.readAsText('xl/workbook.xml'), /<sheet\b[^>]*\bname="Attendance"/);
+  const sheet = xlsx.readAsText('xl/worksheets/sheet1.xml');
+  assert.match(sheet, /<pane\b[^>]*\bstate="frozen"/);
+  assert.match(sheet, /<pane\b[^>]*\bySplit="1"/);
   console.log('ALL CHECKS PASSED');
 }).catch(err => { console.error(err); process.exit(1); });

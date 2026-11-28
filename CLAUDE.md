@@ -43,7 +43,7 @@ npm run preview    # Preview production build
 **Server:**
 ```bash
 cd server
-npm run dev        # Start with nodemon (auto-reload)
+npm run dev        # Start with Node's built-in watch mode
 npm start          # Start production server
 npm run admin      # Start admin panel (port 7777)
 ```
